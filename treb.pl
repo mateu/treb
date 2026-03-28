@@ -623,11 +623,24 @@ sub _do_raid {
   }
 
   # Clean up AI output
+  # Strip full internal reasoning blocks before any lighter tag cleanup.
+  $answer =~ s/<think\b[^>]*>.*?<\/think>\s*//gsi;
+  $answer =~ s/<thinking\b[^>]*>.*?<\/thinking>\s*//gsi;
+  $answer =~ s/^\s*(?:Thought|Reasoning|Chain[ -]?of[ -]?Thought|Internal Reasoning)\s*:\s*.*?(?=^\S|\z)//gims;
+
   $answer =~ s/^<\s*\@?\s*(\w+)\s*>:?\s*/$1: /mg;     # line start <@nick> → Nick:
   $answer =~ s/<\s*\@?\s*(\w+)\s*>/$1/g;               # mid-text <nick> → Nick
   $answer =~ s/<\/?\w+>//g;                            # strip remaining XML tags
   # Strip lines where the AI narrates its tool usage
   $answer =~ s/^\*?\s*(save_note|recall_notes|update_note|delete_note|recall_history|stay_silent|set_alarm|whois|send_private_message)\b[^\n]*\n?//mg;
+  $answer =~ s/^\s+//;
+  $answer =~ s/\s+$//;
+
+  if ($answer !~ /\S/) {
+    $self->info("Answer empty after cleanup; staying silent");
+    $self->_schedule_pending_buffers;
+    return;
+  }
 
   # Check for lines too long
   my @lines = grep { length } map { s/^\s+//r =~ s/\s+$//r } split(/\n/, $answer);

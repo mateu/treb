@@ -6,3 +6,5 @@
 __pycache__/
 local/
 .carton/
+treb.env
+treb.sqlite
