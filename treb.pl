@@ -642,6 +642,12 @@ sub _do_raid {
     return;
   }
 
+  if ($answer =~ /^\s*[(*]?\s*silently\s+watching\s+from\s+the\s+rafters\.?\s*[)*]?\s*$/i) {
+    $self->info("Suppressing stock fake-silence output");
+    $self->_schedule_pending_buffers;
+    return;
+  }
+
   # Check for lines too long
   my @lines = grep { length } map { s/^\s+//r =~ s/\s+$//r } split(/\n/, $answer);
   my $too_long = grep { length($_) > $MAX_LINE } @lines;
