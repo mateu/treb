@@ -29,3 +29,16 @@ Notes:
 - Set `BRAVE_API_KEY` in `treb.env` to enable search.
 - Search is command-only; it does not trigger from ordinary conversation.
 
+
+## URL summary
+
+Treb supports explicit URL summarization in channel via:
+
+- `:sum <url>`
+
+Notes:
+
+- Only `http://` and `https://` URLs are accepted.
+- URL summary is command-only; Treb will not summarize pasted links automatically.
+- The summarizer fetches a single page, extracts readable text, and asks the LLM for a short factual summary.
+
