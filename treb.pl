@@ -117,6 +117,7 @@ package MemoryStore {
 package BertBot;
 use Moses;
 use namespace::autoclean;
+use JSON::PP ();
 use IO::Async::Loop::POE;
 use Future::AsyncAwait;
 use Net::Async::MCP;
@@ -408,6 +409,115 @@ before 'START' => sub {
   POE::Kernel->delay( _idle_check => $IDLE_PING );
 };
 
+sub _format_search_results {
+  my ($self, $query, $data, $limit) = @_;
+  $limit //= 3;
+  $limit = 1 if $limit < 1;
+  $limit = 5 if $limit > 5;
+  my $results = $data->{web}{results};
+  return "No useful web results found for: $query" unless ref($results) eq 'ARRAY' && @$results;
+
+  my @lines;
+  my $i = 0;
+  for my $r (@$results) {
+    next unless ref($r) eq 'HASH';
+    my $title = $r->{title} // '(untitled)';
+    my $url   = $r->{url} // '';
+    my $desc  = $r->{description} // '';
+
+    for ($title, $url, $desc) {
+      next unless defined $_;
+      s/&#x27;|&#39;/'/g;
+      s/&quot;/"/g;
+      s/&amp;/&/g;
+      s/&lt;/</g;
+      s/&gt;/>/g;
+      s/â|â€”|â€“/ - /g;
+      s/â¦|â€¦/.../g;
+      s/Â·|·/ - /g;
+    }
+
+    $title =~ s/\s+/ /g; $title =~ s/^\s+|\s+$//g;
+    $url   =~ s/\s+/ /g; $url   =~ s/^\s+|\s+$//g;
+    $desc  =~ s/<[^>]+>//g;
+    $desc  =~ s/\s+/ /g; $desc  =~ s/^\s+|\s+$//g;
+    $desc = substr($desc, 0, 180) . '...' if length($desc) > 180;
+    push @lines, sprintf('%d. %s - %s', ++$i, $title, $url || '(no url)');
+    push @lines, "   $desc" if length $desc;
+    last if $i >= $limit;
+  }
+
+  return @lines ? join("\n", @lines) : "No useful web results found for: $query";
+}
+
+sub _search_web {
+  my ($self, $query, $limit) = @_;
+  $limit //= 3;
+  $limit = 1 if $limit < 1;
+  $limit = 5 if $limit > 5;
+  $query //= '';
+  $query =~ s/^\s+|\s+$//g;
+  return 'Search query is empty.' unless length $query;
+
+  my $api_key = $ENV{BRAVE_API_KEY} // '';
+  return "Web search isn't configured right now." unless length $api_key;
+
+  my @cmd = (
+    'curl', '-fsS',
+    '-H', "X-Subscription-Token: $api_key",
+    '--get',
+    '--data-urlencode', "q=$query",
+    '--data-urlencode', "count=$limit",
+    'https://api.search.brave.com/res/v1/web/search',
+  );
+
+  my $raw = eval {
+    local $ENV{LC_ALL} = 'C';
+    open my $fh, '-|', @cmd or die "curl failed: $!";
+    local $/;
+    my $out = <$fh>;
+    close $fh;
+    $out;
+  };
+  return 'Web search failed right now.' if $@ || !defined $raw || $raw !~ /\S/;
+
+  my $data = eval { JSON::PP::decode_json($raw) };
+  return 'Web search failed right now.' if $@ || ref($data) ne 'HASH';
+
+  return $self->_format_search_results($query, $data, $limit);
+}
+
+sub _is_non_substantive_output {
+  my ($self, $text) = @_;
+  return 1 unless defined $text;
+
+  my $t = $text;
+  $t =~ s/^\s+|\s+$//g;
+  return 1 unless length $t;
+
+  my $lc = lc $t;
+  return 0 if $t =~ m{https?://};
+  return 0 if $t =~ /[:;]/;
+  return 0 if length($t) > 180;
+
+  # Pure stage directions / emotes
+  return 1 if $t =~ /^\s*[\[(].*[\])]\s*$/s;
+  return 1 if $t =~ /^\s*\*[^*]+\*\s*$/s;
+
+  # Silence-performance / ambient narration
+  return 1 if $lc =~ /\b(?:quietly|silently|silent|quiet|watch(?:es|ing)?|observ(?:es|ing)?|listen(?:s|ing)?|lurk(?:s|ing)?|wait(?:s|ing)?|hover(?:s|ing)?)\b/
+              && $lc =~ /\b(?:rafter|attic|tuning|watching|observing|listening|silence)\b/;
+
+  # Generic low-information acknowledgements
+  return 1 if $lc =~ /^(?:ok(?:ay)?|noted|understood|got it|right|sure|fair enough|all right)[.! ]*$/;
+  return 1 if $lc =~ /^\.{1,3}$/;
+
+  # Short atmospheric lines with no obvious payload
+  return 1 if length($t) < 80 && $lc =~ /\b(?:quietly|silently|rafters?|attic|observe|watch|listen|lurk|wait)\b/;
+
+  return 0;
+}
+
 sub _send_to_channel {
   my ($self, $channel, $text) = @_;
   my @chunks;
@@ -642,8 +752,8 @@ sub _do_raid {
     return;
   }
 
-  if ($answer =~ /^\s*[(*]?\s*silently\s+watching\s+from\s+the\s+rafters\.?\s*[)*]?\s*$/i) {
-    $self->info("Suppressing stock fake-silence output");
+  if ($self->_is_non_substantive_output($answer)) {
+    $self->info("Suppressing non-substantive output");
     $self->_schedule_pending_buffers;
     return;
   }
@@ -711,6 +821,25 @@ event irc_public => sub {
   my $channel = ref $channels ? $channels->[0] : $channels;
   $self->info("$channel <$nick> $msg");
   $self->_last_activity(time());
+
+  if ($msg =~ /^(?::search\s+|search:\s+)(.+)/i) {
+    my $arg = $1;
+    my ($count, $query) = (3, $arg);
+    if ($arg =~ /^\s*(\d+)\s+(.+)\s*$/) {
+      $count = $1;
+      $query = $2;
+    }
+    $count = 1 if $count < 1;
+    $count = 5 if $count > 5;
+    my $result = $self->_search_web($query, $count);
+    $self->_send_to_channel($channel, $result) if defined($result) && $result =~ /\S/;
+    return;
+  }
+
+  my $bot_nick = $self->get_nickname;
+  my $nick_re = quotemeta($bot_nick);
+  return unless $msg =~ /^\s*$nick_re(?:\b|\s*[:,])/i;
+
   $self->_buffer_message($channel, $nick, $msg);
 };
 
