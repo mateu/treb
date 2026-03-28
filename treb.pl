@@ -118,6 +118,7 @@ package BertBot;
 use Moses;
 use namespace::autoclean;
 use JSON::PP ();
+use URI::Escape ();
 use IO::Async::Loop::POE;
 use Future::AsyncAwait;
 use Net::Async::MCP;
@@ -408,6 +409,139 @@ before 'START' => sub {
   $self->_setup_raider->get;
   POE::Kernel->delay( _idle_check => $IDLE_PING );
 };
+
+
+sub _metacpan_get_json {
+  my ($self, $url) = @_;
+  return undef unless defined $url && length $url;
+
+  my @cmd = (
+    'curl', '-fsS',
+    '--connect-timeout', '10',
+    '--max-time', '20',
+    '-A', 'treb-metacpan/1.0',
+    $url,
+  );
+
+  my $raw = eval {
+    local $ENV{LC_ALL} = 'C';
+    open my $fh, '-|', @cmd or die "curl failed: $!";
+    local $/;
+    my $body = <$fh>;
+    close $fh;
+    $body;
+  };
+
+  return undef if $@ || !defined $raw || $raw !~ /\S/;
+  my $data = eval { JSON::PP::decode_json($raw) };
+  return undef if $@ || ref($data) ne 'HASH';
+  return $data;
+}
+
+sub _format_cpan_module_result {
+  my ($self, $query, $data) = @_;
+  return "MetaCPAN module not found: $query" unless ref($data) eq 'HASH';
+
+  my $name = $data->{documentation}
+    || (ref($data->{module}) eq 'ARRAY' && @{$data->{module}} ? $data->{module}[0]{name} : undef)
+    || $data->{name}
+    || $query;
+  my $dist = $data->{distribution} || '?';
+  my $author = $data->{author} || '?';
+  my $abstract = $data->{abstract} || 'No abstract available.';
+  $abstract =~ s/\s+/ /g;
+  $abstract =~ s/^\s+|\s+$//g;
+  my $doc_url = 'https://metacpan.org/pod/' . URI::Escape::uri_escape_utf8($name);
+  return "$name - $abstract Dist: $dist. Author: $author. Docs: $doc_url";
+}
+
+sub _format_cpan_author_result {
+  my ($self, $query, $data) = @_;
+  return "MetaCPAN author not found: $query" unless ref($data) eq 'HASH';
+
+  my $pauseid = $data->{pauseid} || $query;
+  my $name = $data->{name} || 'Unknown author';
+  $name =~ s/\s+/ /g;
+  $name =~ s/^\s+|\s+$//g;
+  return "$pauseid - $name - https://metacpan.org/author/" . URI::Escape::uri_escape_utf8($pauseid);
+}
+
+sub _format_cpan_recent_results {
+  my ($self, $data, $limit) = @_;
+  $limit //= 3;
+  $limit = 1 if $limit < 1;
+  $limit = 7 if $limit > 7;
+
+  return 'No MetaCPAN recent releases found.' unless ref($data) eq 'HASH';
+  my $hits = $data->{hits} && $data->{hits}{hits};
+  return 'No MetaCPAN recent releases found.' unless ref($hits) eq 'ARRAY' && @$hits;
+
+  my @out;
+  my %seen;
+  my $i = 0;
+  for my $hit (@$hits) {
+    next unless ref($hit) eq 'HASH';
+    my $src = $hit->{_source} || {};
+    my $dist = $src->{distribution} || $src->{name} || 'unknown';
+    next if $seen{$dist}++;
+    my $author = $src->{author} || '?';
+    my $date = $src->{date} || '?';
+    my $version = defined $src->{version} && length $src->{version} ? ' ' . $src->{version} : '';
+    my $url = 'https://metacpan.org/release/' . URI::Escape::uri_escape_utf8($dist);
+    push @out, sprintf('%d. %s%s (%s, %s) %s', ++$i, $dist, $version, $author, $date, $url);
+    last if @out >= $limit;
+  }
+  return 'No MetaCPAN recent releases found.' unless @out;
+  return "MetaCPAN recent:\n" . join("\n", @out);
+}
+
+sub _cpan_lookup {
+  my ($self, $mode, $query) = @_;
+  $mode //= '';
+  $query //= '';
+  $mode =~ s/^\s+|\s+$//g;
+  $query =~ s/^\s+|\s+$//g;
+  return 'Usage: :cpan module <name> | :cpan author <query> | :cpan recent [count]' unless length($mode) && length($query);
+
+  if (lc($mode) eq 'module') {
+    my $url = 'https://fastapi.metacpan.org/v1/module/' . URI::Escape::uri_escape_utf8($query);
+    my $data = $self->_metacpan_get_json($url);
+    return $self->_format_cpan_module_result($query, $data);
+  }
+
+  if (lc($mode) eq 'author') {
+    my $exact = uc $query;
+    if ($exact =~ /^[A-Z0-9-]+$/) {
+      my $exact_url = 'https://fastapi.metacpan.org/v1/author/' . URI::Escape::uri_escape_utf8($exact);
+      my $exact_data = $self->_metacpan_get_json($exact_url);
+      return $self->_format_cpan_author_result($query, $exact_data) if $exact_data;
+    }
+    my $url = 'https://fastapi.metacpan.org/v1/author/_search?q=' . URI::Escape::uri_escape_utf8($query) . '&size=1';
+    my $data = $self->_metacpan_get_json($url);
+    if (ref($data) eq 'HASH' && ref($data->{hits}{hits}) eq 'ARRAY' && @{$data->{hits}{hits}}) {
+      my $src = $data->{hits}{hits}[0]{_source} || {};
+      return $self->_format_cpan_author_result($query, $src);
+    }
+    return "MetaCPAN author not found: $query";
+  }
+
+  if (lc($mode) eq 'recent') {
+    my $limit = 3;
+    if ($query =~ /^\s*(\d+)\s*$/) {
+      $limit = $1;
+    }
+    $limit = 1 if $limit < 1;
+    $limit = 7 if $limit > 7;
+    my $fetch = $limit * 3;
+    $fetch = 9 if $fetch < 9;
+    $fetch = 30 if $fetch > 30;
+    my $url = 'https://fastapi.metacpan.org/v1/release/_search?q=status:latest&size=' . $fetch . '&sort=date:desc';
+    my $data = $self->_metacpan_get_json($url);
+    return $self->_format_cpan_recent_results($data, $limit);
+  }
+
+  return 'Usage: :cpan module <name> | :cpan author <query> | :cpan recent [count]';
+}
 
 sub _format_search_results {
   my ($self, $query, $data, $limit) = @_;
@@ -915,6 +1049,20 @@ event irc_public => sub {
   if ($msg =~ /^:sum\s+(https?:\/\/\S+)/i) {
     my $url = $1;
     my $result = $self->_summarize_url($url);
+    $self->_send_to_channel($channel, $result) if defined($result) && $result =~ /\S/;
+    return;
+  }
+
+  if ($msg =~ /^:cpan\s+recent(?:\s+(\d+))?\s*$/i) {
+    my $count = defined $1 ? $1 : 3;
+    my $result = $self->_cpan_lookup('recent', $count);
+    $self->_send_to_channel($channel, $result) if defined($result) && $result =~ /\S/;
+    return;
+  }
+
+  if ($msg =~ /^:cpan\s+(module|author)\s+(.+)/i) {
+    my ($mode, $query) = ($1, $2);
+    my $result = $self->_cpan_lookup($mode, $query);
     $self->_send_to_channel($channel, $result) if defined($result) && $result =~ /\S/;
     return;
   }
