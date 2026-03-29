@@ -195,6 +195,58 @@ sub _mcp_tool_logging_enabled {
   return 1;
 }
 
+sub _env_flag_enabled {
+  my ($self, $name, $default) = @_;
+  my $raw = $ENV{$name};
+  return $default if !defined $raw || $raw eq '';
+  return 1 if $raw =~ /^(?:1|true|on|yes)$/i;
+  return 0 if $raw =~ /^(?:0|false|off|no)$/i;
+  return $default;
+}
+
+sub _store_system_rows_enabled {
+  my ($self) = @_;
+  return $self->_env_flag_enabled('STORE_SYSTEM_ROWS', 0);
+}
+
+sub _store_non_substantive_rows_enabled {
+  my ($self) = @_;
+  return $self->_env_flag_enabled('STORE_NON_SUBSTANTIVE_ROWS', 0);
+}
+
+sub _store_empty_response_rows_enabled {
+  my ($self) = @_;
+  return $self->_env_flag_enabled('STORE_EMPTY_RESPONSE_ROWS', 0);
+}
+
+
+sub _db_stats_text {
+  my ($self) = @_;
+  my $dbh = $self->memory->_dbh;
+  my ($conv_count) = $dbh->selectrow_array('SELECT COUNT(*) FROM conversations');
+  my ($note_count) = $dbh->selectrow_array('SELECT COUNT(*) FROM notes');
+  my ($channel_count) = $dbh->selectrow_array('SELECT COUNT(DISTINCT channel) FROM conversations');
+  my ($latest) = $dbh->selectrow_array('SELECT MAX(created_at) FROM conversations');
+  my ($system_rows) = $dbh->selectrow_array(q{SELECT COUNT(*) FROM conversations WHERE nick = 'system'});
+  $conv_count ||= 0;
+  $note_count ||= 0;
+  $channel_count ||= 0;
+  $system_rows ||= 0;
+  $latest ||= 'n/a';
+  return sprintf('DB: %s | conversations: %d | notes: %d | channels: %d | system rows: %d | latest: %s',
+    $self->memory->db_file, $conv_count, $note_count, $channel_count, $system_rows, $latest);
+}
+
+
+sub _notes_text {
+  my ($self, $nick) = @_;
+  $nick //= '';
+  $nick =~ s/^\s+|\s+$//g;
+  return 'Usage: :notes <nick>' unless length $nick;
+  my $notes = $self->memory->recall_notes($nick, '', 10);
+  return $notes && $notes =~ /\S/ ? $notes : "No notes for $nick.";
+}
+
 sub _build_mcp_server {
   my ($self) = @_;
   my $server = MCP::Server->new(name => 'bert-tools', version => '1.0');
@@ -1242,8 +1294,26 @@ sub _do_raid {
     } || $answer;
   }
 
-  # Store conversations
+  # Store conversations (subject to configurable storage hygiene)
+  my $answer_is_empty_artifact = ($answer =~ /^\(Empty response:/s) ? 1 : 0;
+  my $answer_is_non_substantive = $self->_is_non_substantive_output($answer) ? 1 : 0;
+  my $store_system_rows = $self->_store_system_rows_enabled;
+  my $store_non_substantive_rows = $self->_store_non_substantive_rows_enabled;
+  my $store_empty_response_rows = $self->_store_empty_response_rows_enabled;
+
   for my $m (@$messages) {
+    if ($m->{nick} eq 'system' && !$store_system_rows) {
+      $self->info('Skipping storage for system row');
+      next;
+    }
+    if ($answer_is_empty_artifact && !$store_empty_response_rows) {
+      $self->info('Skipping storage for empty-response artifact');
+      next;
+    }
+    if ($answer_is_non_substantive && !$store_non_substantive_rows) {
+      $self->info('Skipping storage for non-substantive response');
+      next;
+    }
     $self->memory->store_conversation(
       nick => $m->{nick}, message => $m->{msg},
       response => $answer, channel => $m->{channel},
@@ -1303,6 +1373,19 @@ event irc_public => sub {
     $self->_send_to_channel($channel, $line);
     return;
   }
+  if ($msg =~ /^(?::dbstats\s*|dbstats:\s*)$/i) {
+    my $line = $self->_db_stats_text;
+    $self->_send_to_channel($channel, $line);
+    return;
+  }
+
+  if ($msg =~ /^(?::notes\s+|notes:\s*)(\S+)\s*$/i) {
+    my $nick = $1;
+    my $line = $self->_notes_text($nick);
+    $self->_send_to_channel($channel, $line) if defined($line) && $line =~ /\S/;
+    return;
+  }
+
 
   if ($msg =~ /^(?::time\s+in\s+|time:\s*)([A-Za-z_]+\/[A-Za-z0-9_+\-]+(?:\/[A-Za-z0-9_+\-]+)*)\s*$/i) {
     my $zone = $1;
