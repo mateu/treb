@@ -291,6 +291,29 @@ sub _build_mcp_server {
   );
 
   $server->tool(
+    name         => 'cpan_module',
+    description  => 'Look up compact CPAN module metadata for a module name, like the :cpan module command.',
+    input_schema => {
+      type       => 'object',
+      properties => {
+        name => { type => 'string', description => 'CPAN module name, e.g. Moo or Bracket' },
+      },
+      required => ['name'],
+    },
+    code => sub {
+      my ($tool, $args) = @_;
+      my $name = $args->{name} // '';
+      $name =~ s/^\s+|\s+$//g;
+      return $tool->text_result('Module name is required.') unless length $name;
+      my $line = $self->_cpan_lookup('module', $name);
+      if ($self->_mcp_tool_logging_enabled) {
+        $self->info("MCP cpan_module called => $name");
+      }
+      return $tool->text_result($line);
+    },
+  );
+
+  $server->tool(
     name         => 'current_time',
     description  => 'Get the current local date and time in America/Denver. Use this when you need exact time awareness instead of guessing.',
     input_schema => {
