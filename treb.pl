@@ -122,6 +122,8 @@ use Moses;
 use namespace::autoclean;
 use JSON::PP ();
 use URI::Escape ();
+use HTML::Entities ();
+use Encode ();
 use IO::Async::Loop::POE;
 use Future::AsyncAwait;
 use Net::Async::MCP;
@@ -613,6 +615,41 @@ sub _metacpan_get_text {
   return $raw;
 }
 
+sub _repair_mojibake_text {
+  my ($self, $text) = @_;
+  return $text unless defined $text && length $text;
+  return $text unless $text =~ /(?:â.|Â.|â€”|â€“|â€¦|Ã.|\x{fffd})/;
+
+  my $fixed = eval {
+    my $bytes = Encode::encode('latin1', $text, Encode::FB_CROAK);
+    Encode::decode('UTF-8', $bytes, Encode::FB_CROAK);
+  };
+  return defined $fixed ? $fixed : $text;
+}
+
+sub _clean_text_for_irc {
+  my ($self, $text) = @_;
+  return '' unless defined $text;
+
+  $text = HTML::Entities::decode_entities($text);
+  $text = $self->_repair_mojibake_text($text);
+
+  $text =~ s/\r//g;
+  $text =~ s/\x{00A0}/ /g;
+  $text =~ s/[\x{2018}\x{2019}]/'/g;
+  $text =~ s/[\x{201C}\x{201D}]/"/g;
+  $text =~ s/[\x{2013}\x{2014}]/ - /g;
+  $text =~ s/\x{2026}/.../g;
+  $text =~ s/[\x{00B7}\x{2022}]/ - /g;
+  $text =~ s/\n[ ]+/\n/g;
+  $text =~ s/[ \t]+/ /g;
+  $text =~ s/ *\n */\n/g;
+  $text =~ s/\n{3,}/\n\n/g;
+  $text =~ s/^\s+|\s+$//g;
+
+  return $text;
+}
+
 sub _extract_pod_section {
   my ($self, $pod, $section_name) = @_;
   return undef unless defined($pod) && $pod =~ /\S/;
@@ -660,10 +697,7 @@ sub _extract_pod_section {
   $text =~ s/E<quot>/"/g;
   $text =~ s/E<apos>/'/g;
   $text =~ s/E<[^>]+>//g;
-  $text =~ s/\r//g;
-  $text =~ s/[ \t]+/ /g;
-  $text =~ s/\n[ ]+/\n/g;
-  $text =~ s/\n{3,}/\n\n/g;
+  $text = $self->_clean_text_for_irc($text);
   my @paras = grep { /\S/ } split /\n\n+/, $text;
   @paras = map {
     my $p = $_;
@@ -688,9 +722,7 @@ sub _format_cpan_module_result {
     || $query;
   my $dist = $data->{distribution} || '?';
   my $author = $data->{author} || '?';
-  my $abstract = $data->{abstract} || 'No abstract available.';
-  $abstract =~ s/\s+/ /g;
-  $abstract =~ s/^\s+|\s+$//g;
+  my $abstract = $self->_clean_text_for_irc($data->{abstract} || 'No abstract available.');
   my $doc_url = 'https://metacpan.org/pod/' . URI::Escape::uri_escape_utf8($name);
   return "$name - $abstract Dist: $dist. Author: $author. Docs: $doc_url";
 }
@@ -709,9 +741,7 @@ sub _format_cpan_describe_result {
   my $desc = $self->_extract_pod_section($pod, 'DESCRIPTION');
   return $desc if defined $desc && $desc =~ /\S/;
 
-  $desc = $data->{description} || $data->{abstract} || 'No description available.';
-  $desc =~ s/\s+/ /g;
-  $desc =~ s/^\s+|\s+$//g;
+  $desc = $self->_clean_text_for_irc($data->{description} || $data->{abstract} || 'No description available.');
   return $desc;
 }
 
@@ -720,9 +750,7 @@ sub _format_cpan_author_result {
   return "MetaCPAN author not found: $query" unless ref($data) eq 'HASH';
 
   my $pauseid = $data->{pauseid} || $query;
-  my $name = $data->{name} || 'Unknown author';
-  $name =~ s/\s+/ /g;
-  $name =~ s/^\s+|\s+$//g;
+  my $name = $self->_clean_text_for_irc($data->{name} || 'Unknown author');
   return "$pauseid - $name - https://metacpan.org/author/" . URI::Escape::uri_escape_utf8($pauseid);
 }
 
@@ -881,10 +909,8 @@ sub _summarize_metacpan_pod {
   $name_text = $data->{abstract} unless defined $name_text && $name_text =~ /\S/;
   $desc = $data->{description} || $data->{abstract} || 'No description available.' unless defined $desc && $desc =~ /\S/;
 
-  $name_text =~ s/\s+/ /g if defined $name_text;
-  $name_text =~ s/^\s+|\s+$//g if defined $name_text;
-  $desc =~ s/\s+/ /g;
-  $desc =~ s/^\s+|\s+$//g;
+  $name_text = $self->_clean_text_for_irc($name_text) if defined $name_text;
+  $desc = $self->_clean_text_for_irc($desc);
   $desc = substr($desc, 0, 420) . '...' if length($desc) > 420;
   my $doc_url = 'https://metacpan.org/pod/' . URI::Escape::uri_escape_utf8($doc);
 

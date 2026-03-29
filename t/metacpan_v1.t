@@ -71,4 +71,17 @@ subtest 'describe formatter returns DESCRIPTION section text directly' => sub {
     unlike($out, qr/is a CPAN module by/, 'no synthetic wrapper prose');
 };
 
+subtest 'mojibake cleanup for module output' => sub {
+    my $bot = bless {}, 'BertBot';
+    my $line = $bot->_format_cpan_module_result('MCP::Server', {
+        documentation => 'MCP::Server',
+        distribution  => 'MCP',
+        author        => 'SRI',
+        abstract      => 'An implementation â€” part of the MCP distribution',
+    });
+    unlike($line, qr/implementation\s+â/, 'broken implementation mojibake removed');
+    like($line, qr/MCP::Server\s+-\s+An implementation/, 'line still shaped as compact module summary');
+    done_testing;
+};
+
 done_testing;
