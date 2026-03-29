@@ -1215,7 +1215,6 @@ event irc_public => sub {
   my ( $self, $nickstr, $channels, $msg ) = @_[ OBJECT, ARG0, ARG1, ARG2 ];
   my ( $nick ) = split /!/, $nickstr;
   return if $nick eq $self->get_nickname;
-  return if $self->_is_filtered_bot_nick($nick);
   my $channel = ref $channels ? $channels->[0] : $channels;
   $self->info("$channel <$nick> $msg");
   $self->_last_activity(time());
@@ -1262,6 +1261,8 @@ event irc_public => sub {
     $self->_send_to_channel($channel, $result) if defined($result) && $result =~ /\S/;
     return;
   }
+
+  return if $self->_is_filtered_bot_nick($nick);
 
   my $bot_nick = $self->get_nickname;
   my $nick_re = quotemeta($bot_nick);
