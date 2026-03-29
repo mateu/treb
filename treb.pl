@@ -30,6 +30,9 @@ my $MAX_LINE = $ENV{MAX_LINE_LENGTH} || 400;
 my $BUFFER_DELAY = $ENV{BUFFER_DELAY} || 1.5;
 my $LINE_DELAY = $ENV{LINE_DELAY} || 3;
 my $IDLE_PING = $ENV{IDLE_PING} || 1800;
+my $NON_SUBSTANTIVE_ALLOW_PCT = exists $ENV{NON_SUBSTANTIVE_ALLOW_PCT} ? 0 + $ENV{NON_SUBSTANTIVE_ALLOW_PCT} : 0;
+$NON_SUBSTANTIVE_ALLOW_PCT = 0 if $NON_SUBSTANTIVE_ALLOW_PCT < 0;
+$NON_SUBSTANTIVE_ALLOW_PCT = 100 if $NON_SUBSTANTIVE_ALLOW_PCT > 100;
 
 # --- Conversation memory (SQLite) ---
 
@@ -1144,9 +1147,13 @@ sub _do_raid {
   }
 
   if ($self->_is_non_substantive_output($answer)) {
-    $self->info("Suppressing non-substantive output");
-    $self->_schedule_pending_buffers;
-    return;
+    if ($NON_SUBSTANTIVE_ALLOW_PCT > 0 && int(rand(100)) < $NON_SUBSTANTIVE_ALLOW_PCT) {
+      $self->info("Allowing non-substantive output due to NON_SUBSTANTIVE_ALLOW_PCT=$NON_SUBSTANTIVE_ALLOW_PCT");
+    } else {
+      $self->info("Suppressing non-substantive output");
+      $self->_schedule_pending_buffers;
+      return;
+    }
   }
 
   # Check for lines too long
@@ -1258,7 +1265,7 @@ event irc_public => sub {
 
   my $bot_nick = $self->get_nickname;
   my $nick_re = quotemeta($bot_nick);
-  return unless $msg =~ /^\s*$nick_re(?:\b|\s*[:,])/i;
+  return unless $msg =~ /(?:^|\W)$nick_re(?:\W|$)/i;
 
   $self->_buffer_message($channel, $nick, $msg);
 };

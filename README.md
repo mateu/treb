@@ -54,6 +54,7 @@ Notes:
 - Result count is capped at 5.
 - Set `BRAVE_API_KEY` in `treb.env` to enable search.
 - Search is command-only; it does not trigger from ordinary conversation.
+- Optional: `NON_SUBSTANTIVE_ALLOW_PCT=33` allows some otherwise-suppressed non-substantive replies through; default is `0` (strict).
 
 
 ## URL summary
