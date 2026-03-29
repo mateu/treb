@@ -438,6 +438,96 @@ sub _metacpan_get_json {
   return $data;
 }
 
+sub _metacpan_get_text {
+  my ($self, $url) = @_;
+  return undef unless defined $url && length $url;
+
+  my @cmd = (
+    'curl', '-fsS',
+    '--connect-timeout', '10',
+    '--max-time', '20',
+    '-A', 'treb-metacpan/1.0',
+    $url,
+  );
+
+  my $raw = eval {
+    local $ENV{LC_ALL} = 'C';
+    open my $fh, '-|', @cmd or die "curl failed: $!";
+    local $/;
+    my $body = <$fh>;
+    close $fh;
+    $body;
+  };
+
+  return undef if $@ || !defined $raw || $raw !~ /\S/;
+  return $raw;
+}
+
+sub _extract_pod_section {
+  my ($self, $pod, $section_name) = @_;
+  return undef unless defined($pod) && $pod =~ /\S/;
+  return undef unless defined($section_name) && $section_name =~ /\S/;
+
+  my @lines = split /\n/, $pod;
+  my $want = lc $section_name;
+  my $in = 0;
+  my @buf;
+
+  for my $line (@lines) {
+    if (!$in) {
+      if ($line =~ /^=head1\s+(.+)\s*$/) {
+        my $name = lc $1;
+        $name =~ s/^\s+|\s+$//g;
+        $in = 1 if $name eq $want;
+      }
+      next;
+    }
+
+    last if $line =~ /^=head\d+\s+/;
+    push @buf, $line;
+  }
+
+  my $text = join("\n", @buf);
+  return undef unless $text =~ /\S/;
+
+  $text =~ s/^=over\b.*?$//mg;
+  $text =~ s/^=back\b.*?$//mg;
+  $text =~ s/^=item\b\s*//mg;
+  $text =~ s/L<([^>|]+)\|([^>]+)>/$2/g;
+  $text =~ s/L<([^>]+)>/$1/g;
+  $text =~ s/C<([^>]+)>/$1/g;
+  $text =~ s/B<([^>]+)>/$1/g;
+  $text =~ s/I<([^>]+)>/$1/g;
+  $text =~ s/F<([^>]+)>/$1/g;
+  $text =~ s/S<([^>]+)>/$1/g;
+  $text =~ s/E<mdash>/--/g;
+  $text =~ s/E<ndash>/-/g;
+  $text =~ s/E<lt>/</g;
+  $text =~ s/E<gt>/>/g;
+  $text =~ s/E<sol>/\//g;
+  $text =~ s/E<verbar>/|/g;
+  $text =~ s/E<amp>/&/g;
+  $text =~ s/E<quot>/"/g;
+  $text =~ s/E<apos>/'/g;
+  $text =~ s/E<[^>]+>//g;
+  $text =~ s/\r//g;
+  $text =~ s/[ \t]+/ /g;
+  $text =~ s/\n[ ]+/\n/g;
+  $text =~ s/\n{3,}/\n\n/g;
+  my @paras = grep { /\S/ } split /\n\n+/, $text;
+  @paras = map {
+    my $p = $_;
+    $p =~ s/\n+/ /g;
+    $p =~ s/[ ]{2,}/ /g;
+    $p =~ s/^\s+|\s+$//g;
+    $p;
+  } @paras;
+  $text = join("\n\n", grep { defined && /\S/ } @paras);
+  $text =~ s/^\s+|\s+$//g;
+  return undef unless $text =~ /\S/;
+  return $text;
+}
+
 sub _format_cpan_module_result {
   my ($self, $query, $data) = @_;
   return "MetaCPAN module not found: $query" unless ref($data) eq 'HASH';
@@ -453,6 +543,26 @@ sub _format_cpan_module_result {
   $abstract =~ s/^\s+|\s+$//g;
   my $doc_url = 'https://metacpan.org/pod/' . URI::Escape::uri_escape_utf8($name);
   return "$name - $abstract Dist: $dist. Author: $author. Docs: $doc_url";
+}
+
+sub _format_cpan_describe_result {
+  my ($self, $query, $data) = @_;
+  return "MetaCPAN module not found: $query" unless ref($data) eq 'HASH';
+
+  my $name = $data->{documentation}
+    || (ref($data->{module}) eq 'ARRAY' && @{$data->{module}} ? $data->{module}[0]{name} : undef)
+    || $data->{name}
+    || $query;
+
+  my $pod_url = 'https://fastapi.metacpan.org/v1/pod/' . URI::Escape::uri_escape_utf8($name) . '?content-type=text/x-pod';
+  my $pod = $self->_metacpan_get_text($pod_url);
+  my $desc = $self->_extract_pod_section($pod, 'DESCRIPTION');
+  return $desc if defined $desc && $desc =~ /\S/;
+
+  $desc = $data->{description} || $data->{abstract} || 'No description available.';
+  $desc =~ s/\s+/ /g;
+  $desc =~ s/^\s+|\s+$//g;
+  return $desc;
 }
 
 sub _format_cpan_author_result {
@@ -501,12 +611,18 @@ sub _cpan_lookup {
   $query //= '';
   $mode =~ s/^\s+|\s+$//g;
   $query =~ s/^\s+|\s+$//g;
-  return 'Usage: :cpan module <name> | :cpan author <query> | :cpan recent [count]' unless length($mode) && length($query);
+  return 'Usage: :cpan <name> | :cpan module <name> | :cpan describe <name> | :cpan author <query> | :cpan recent [count]' unless length($mode) && length($query);
 
   if (lc($mode) eq 'module') {
     my $url = 'https://fastapi.metacpan.org/v1/module/' . URI::Escape::uri_escape_utf8($query);
     my $data = $self->_metacpan_get_json($url);
     return $self->_format_cpan_module_result($query, $data);
+  }
+
+  if (lc($mode) eq 'describe') {
+    my $url = 'https://fastapi.metacpan.org/v1/module/' . URI::Escape::uri_escape_utf8($query);
+    my $data = $self->_metacpan_get_json($url);
+    return $self->_format_cpan_describe_result($query, $data);
   }
 
   if (lc($mode) eq 'author') {
@@ -540,7 +656,7 @@ sub _cpan_lookup {
     return $self->_format_cpan_recent_results($data, $limit);
   }
 
-  return 'Usage: :cpan module <name> | :cpan author <query> | :cpan recent [count]';
+  return 'Usage: :cpan <name> | :cpan module <name> | :cpan describe <name> | :cpan author <query> | :cpan recent [count]';
 }
 
 sub _format_search_results {
@@ -584,12 +700,63 @@ sub _format_search_results {
   return @lines ? join("\n", @lines) : "No useful web results found for: $query";
 }
 
+sub _summarize_special_url {
+  my ($self, $url) = @_;
+
+  if ($url =~ m{^https?://metacpan\.org/pod/([^/?#]+)}i) {
+    my $module = URI::Escape::uri_unescape($1);
+    return $self->_summarize_metacpan_pod($module);
+  }
+
+  return;
+}
+
+sub _summarize_metacpan_pod {
+  my ($self, $module) = @_;
+  return 'MetaCPAN module URL is missing a module name.' unless defined($module) && $module =~ /\S/;
+
+  my $url = 'https://fastapi.metacpan.org/v1/module/' . URI::Escape::uri_escape_utf8($module);
+  my $data = $self->_metacpan_get_json($url);
+  return "MetaCPAN module summary failed for: $module" unless ref($data) eq 'HASH';
+
+  my $doc = $data->{documentation}
+    || (ref($data->{module}) eq 'ARRAY' && @{$data->{module}} ? $data->{module}[0]{name} : undef)
+    || $data->{name}
+    || $module;
+  my $pod_url = 'https://fastapi.metacpan.org/v1/pod/' . URI::Escape::uri_escape_utf8($doc) . '?content-type=text/x-pod';
+  my $pod = $self->_metacpan_get_text($pod_url);
+  my $name_text = $self->_extract_pod_section($pod, 'NAME');
+  my $desc = $self->_extract_pod_section($pod, 'DESCRIPTION');
+
+  $name_text = $data->{abstract} unless defined $name_text && $name_text =~ /\S/;
+  $desc = $data->{description} || $data->{abstract} || 'No description available.' unless defined $desc && $desc =~ /\S/;
+
+  $name_text =~ s/\s+/ /g if defined $name_text;
+  $name_text =~ s/^\s+|\s+$//g if defined $name_text;
+  $desc =~ s/\s+/ /g;
+  $desc =~ s/^\s+|\s+$//g;
+  $desc = substr($desc, 0, 420) . '...' if length($desc) > 420;
+  my $doc_url = 'https://metacpan.org/pod/' . URI::Escape::uri_escape_utf8($doc);
+
+  if (defined $name_text && length $name_text) {
+    return "$name_text
+$desc
+Docs: $doc_url";
+  }
+  return "$doc
+$desc
+Docs: $doc_url";
+}
+
 sub _summarize_url {
   my ($self, $url) = @_;
   $url //= '';
   $url =~ s/^\s+|\s+$//g;
   return 'URL is empty.' unless length $url;
   return 'Please provide an http:// or https:// URL.' unless $url =~ m{^https?://}i;
+
+  my $special = $self->_summarize_special_url($url);
+  return $special if defined $special;
 
   my @cmd = (
     'curl', '-fsSL',
@@ -1060,9 +1227,17 @@ event irc_public => sub {
     return;
   }
 
-  if ($msg =~ /^:cpan\s+(module|author)\s+(.+)/i) {
+  if ($msg =~ /^:cpan\s+(module|author|describe)\s+(.+)/i) {
     my ($mode, $query) = ($1, $2);
     my $result = $self->_cpan_lookup($mode, $query);
+    $self->_send_to_channel($channel, $result) if defined($result) && $result =~ /\S/;
+    return;
+  }
+
+  if ($msg =~ /^:cpan\s+(.+)/i) {
+    my $query = $1;
+    $query =~ s/^\s+|\s+$//g;
+    my $result = $self->_cpan_lookup('module', $query);
     $self->_send_to_channel($channel, $result) if defined($result) && $result =~ /\S/;
     return;
   }
