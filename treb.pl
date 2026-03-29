@@ -161,9 +161,10 @@ has _rate_limit_wait => (
   default => 0,
 );
 
-sub _current_local_time_text {
-  my ($self) = @_;
-  local $ENV{TZ} = 'America/Denver';
+sub _time_text_for_zone {
+  my ($self, $zone) = @_;
+  $zone ||= 'America/Denver';
+  local $ENV{TZ} = $zone;
   my @lt = localtime(time());
   my @days = qw(Sunday Monday Tuesday Wednesday Thursday Friday Saturday);
   my @months = qw(January February March April May June July August September October November December);
@@ -176,9 +177,14 @@ sub _current_local_time_text {
   my $ampm = $hour24 >= 12 ? 'PM' : 'AM';
   my $hour12 = $hour24 % 12;
   $hour12 = 12 if $hour12 == 0;
-  my $tz = POSIX::strftime('%Z', localtime(time())) || 'America/Denver';
-  return sprintf('%s, %s %d, %d, %d:%02d %s %s (America/Denver)',
-    $wday, $month, $mday, $year, $hour12, $min, $ampm, $tz);
+  my $tz = POSIX::strftime('%Z', localtime(time())) || $zone;
+  return sprintf('%s, %s %d, %d, %d:%02d %s %s (%s)',
+    $wday, $month, $mday, $year, $hour12, $min, $ampm, $tz, $zone);
+}
+
+sub _current_local_time_text {
+  my ($self) = @_;
+  return $self->_time_text_for_zone('America/Denver');
 }
 
 sub _mcp_tool_logging_enabled {
@@ -244,6 +250,27 @@ sub _build_mcp_server {
       my $line = 'Current local time: ' . $self->_current_local_time_text . '.';
       if ($self->_mcp_tool_logging_enabled) {
         $self->info("MCP current_time called => $line");
+      }
+      return $tool->text_result($line);
+    },
+  );
+
+  $server->tool(
+    name         => 'time_in',
+    description  => 'Get the current date and time in a specific IANA timezone, for example Europe/London or America/New_York.',
+    input_schema => {
+      type       => 'object',
+      properties => {
+        zone => { type => 'string', description => 'IANA timezone name like Europe/London' },
+      },
+      required => ['zone'],
+    },
+    code => sub {
+      my ($tool, $args) = @_;
+      my $zone = $args->{zone};
+      my $line = 'Current time in ' . $zone . ': ' . $self->_time_text_for_zone($zone) . '.';
+      if ($self->_mcp_tool_logging_enabled) {
+        $self->info("MCP time_in called for $zone => $line");
       }
       return $tool->text_result($line);
     },
@@ -1273,6 +1300,13 @@ event irc_public => sub {
 
   if ($msg =~ /^(?::time\s*|time:\s*)$/i) {
     my $line = 'Current local time: ' . $self->_current_local_time_text . '.';
+    $self->_send_to_channel($channel, $line);
+    return;
+  }
+
+  if ($msg =~ /^(?::time\s+in\s+|time:\s*)([A-Za-z_]+\/[A-Za-z0-9_+\-]+(?:\/[A-Za-z0-9_+\-]+)*)\s*$/i) {
+    my $zone = $1;
+    my $line = 'Current time in ' . $zone . ': ' . $self->_time_text_for_zone($zone) . '.';
     $self->_send_to_channel($channel, $line);
     return;
   }
