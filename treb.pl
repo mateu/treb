@@ -181,6 +181,14 @@ sub _current_local_time_text {
     $wday, $month, $mday, $year, $hour12, $min, $ampm, $tz);
 }
 
+sub _mcp_tool_logging_enabled {
+  my ($self) = @_;
+  my $raw = $ENV{MCP_TOOL_LOGGING};
+  return 1 if !defined $raw || $raw eq '';
+  return 0 if $raw =~ /^(?:0|false|off|no)$/i;
+  return 1;
+}
+
 sub _build_mcp_server {
   my ($self) = @_;
   my $server = MCP::Server->new(name => 'bert-tools', version => '1.0');
@@ -233,7 +241,11 @@ sub _build_mcp_server {
     },
     code => sub {
       my ($tool, $args) = @_;
-      return $tool->text_result('Current local time: ' . $self->_current_local_time_text . '.');
+      my $line = 'Current local time: ' . $self->_current_local_time_text . '.';
+      if ($self->_mcp_tool_logging_enabled) {
+        $self->info("MCP current_time called => $line");
+      }
+      return $tool->text_result($line);
     },
   );
 
