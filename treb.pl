@@ -36,6 +36,8 @@ $NON_SUBSTANTIVE_ALLOW_PCT = 100 if $NON_SUBSTANTIVE_ALLOW_PCT > 100;
 my $BERT_REPLY_ALLOW_PCT = exists $ENV{BERT_REPLY_ALLOW_PCT} ? 0 + $ENV{BERT_REPLY_ALLOW_PCT} : 50;
 $BERT_REPLY_ALLOW_PCT = 0 if $BERT_REPLY_ALLOW_PCT < 0;
 $BERT_REPLY_ALLOW_PCT = 100 if $BERT_REPLY_ALLOW_PCT > 100;
+my $BERT_REPLY_MAX_TURNS = exists $ENV{BERT_REPLY_MAX_TURNS} ? 0 + $ENV{BERT_REPLY_MAX_TURNS} : 1;
+$BERT_REPLY_MAX_TURNS = 0 if $BERT_REPLY_MAX_TURNS < 0;
 
 # --- Conversation memory (SQLite) ---
 
@@ -1142,7 +1144,7 @@ sub _default_channel {
   return ref $channels ? $channels->[0] : $channels;
 }
 
-has _bert_reply_lock => (
+has _bert_reply_turn_count => (
   is => 'rw', traits => ['NoGetopt'],
   default => sub { 0 },
 );
@@ -1396,8 +1398,9 @@ sub _do_raid {
   $self->_send_to_channel($channel, $answer);
 
   if ($consumed_bert_reply) {
-    $self->_bert_reply_lock(1);
-    $self->info('Bert conversational reply consumed; lock set');
+    my $next = $self->_bert_reply_turn_count + 1;
+    $self->_bert_reply_turn_count($next);
+    $self->info("Bert conversational reply consumed; turn count=$next");
   }
 
   # Process any messages that arrived while we were thinking
@@ -1439,9 +1442,9 @@ event irc_public => sub {
   $self->info("$channel <$nick> $msg");
   $self->_last_activity(time());
 
-  if ($self->_is_human_nick($nick) && $self->_bert_reply_lock) {
-    $self->_bert_reply_lock(0);
-    $self->info("Reset bert conversational lock by human nick=$nick");
+  if ($self->_is_human_nick($nick) && $self->_bert_reply_turn_count) {
+    $self->_bert_reply_turn_count(0);
+    $self->info("Reset bert conversational turn count by human nick=$nick");
   }
 
   if ($msg =~ /^(?::sum\s+|sum:\s*)(https?:\/\/\S+)/i) {
@@ -1521,8 +1524,8 @@ event irc_public => sub {
 
   if ($speaker_is_filtered_bot) {
     return unless $direct_address;
-    if ($self->_bert_reply_lock) {
-      $self->info('Suppressing Bert conversational message: lock set');
+    if ($BERT_REPLY_MAX_TURNS > 0 && $self->_bert_reply_turn_count >= $BERT_REPLY_MAX_TURNS) {
+      $self->info("Suppressing Bert conversational message: turn cap reached BERT_REPLY_MAX_TURNS=$BERT_REPLY_MAX_TURNS");
       return;
     }
     if ($BERT_REPLY_ALLOW_PCT < 100 && int(rand(100)) >= $BERT_REPLY_ALLOW_PCT) {
