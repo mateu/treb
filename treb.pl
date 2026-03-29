@@ -161,6 +161,26 @@ has _rate_limit_wait => (
   default => 0,
 );
 
+sub _current_local_time_text {
+  my ($self) = @_;
+  local $ENV{TZ} = 'America/Denver';
+  my @lt = localtime(time());
+  my @days = qw(Sunday Monday Tuesday Wednesday Thursday Friday Saturday);
+  my @months = qw(January February March April May June July August September October November December);
+  my $wday = $days[$lt[6]];
+  my $month = $months[$lt[4]];
+  my $mday = $lt[3];
+  my $year = $lt[5] + 1900;
+  my $hour24 = $lt[2];
+  my $min = $lt[1];
+  my $ampm = $hour24 >= 12 ? 'PM' : 'AM';
+  my $hour12 = $hour24 % 12;
+  $hour12 = 12 if $hour12 == 0;
+  my $tz = POSIX::strftime('%Z', localtime(time())) || 'America/Denver';
+  return sprintf('%s, %s %d, %d, %d:%02d %s %s (America/Denver)',
+    $wday, $month, $mday, $year, $hour12, $min, $ampm, $tz);
+}
+
 sub _build_mcp_server {
   my ($self) = @_;
   my $server = MCP::Server->new(name => 'bert-tools', version => '1.0');
@@ -201,6 +221,19 @@ sub _build_mcp_server {
       my $channel = $self->_default_channel;
       POE::Kernel->delay_add( _alarm_fired => $delay, $channel, $reason );
       return $tool->text_result("Alarm set for ${delay}s: $reason");
+    },
+  );
+
+  $server->tool(
+    name         => 'current_time',
+    description  => 'Get the current local date and time in America/Denver. Use this when you need exact time awareness instead of guessing.',
+    input_schema => {
+      type       => 'object',
+      properties => {},
+    },
+    code => sub {
+      my ($tool, $args) = @_;
+      return $tool->text_result('Current local time: ' . $self->_current_local_time_text . '.');
     },
   );
 
@@ -1223,6 +1256,12 @@ event irc_public => sub {
     my $url = $1;
     my $result = $self->_summarize_url($url);
     $self->_send_to_channel($channel, $result) if defined($result) && $result =~ /\S/;
+    return;
+  }
+
+  if ($msg =~ /^(?::time\s*|time:\s*)$/i) {
+    my $line = 'Current local time: ' . $self->_current_local_time_text . '.';
+    $self->_send_to_channel($channel, $line);
     return;
   }
 
