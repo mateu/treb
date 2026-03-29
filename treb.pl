@@ -33,6 +33,9 @@ my $IDLE_PING = $ENV{IDLE_PING} || 1800;
 my $NON_SUBSTANTIVE_ALLOW_PCT = exists $ENV{NON_SUBSTANTIVE_ALLOW_PCT} ? 0 + $ENV{NON_SUBSTANTIVE_ALLOW_PCT} : 0;
 $NON_SUBSTANTIVE_ALLOW_PCT = 0 if $NON_SUBSTANTIVE_ALLOW_PCT < 0;
 $NON_SUBSTANTIVE_ALLOW_PCT = 100 if $NON_SUBSTANTIVE_ALLOW_PCT > 100;
+my $BERT_REPLY_ALLOW_PCT = exists $ENV{BERT_REPLY_ALLOW_PCT} ? 0 + $ENV{BERT_REPLY_ALLOW_PCT} : 50;
+$BERT_REPLY_ALLOW_PCT = 0 if $BERT_REPLY_ALLOW_PCT < 0;
+$BERT_REPLY_ALLOW_PCT = 100 if $BERT_REPLY_ALLOW_PCT > 100;
 
 # --- Conversation memory (SQLite) ---
 
@@ -1139,9 +1142,22 @@ sub _default_channel {
   return ref $channels ? $channels->[0] : $channels;
 }
 
+has _bert_reply_lock => (
+  is => 'rw', traits => ['NoGetopt'],
+  default => sub { 0 },
+);
+
+sub _is_human_nick {
+  my ($self, $nick) = @_;
+  return 0 unless defined $nick && length $nick;
+  return 0 if $nick eq $self->get_nickname;
+  return $self->_is_filtered_bot_nick($nick) ? 0 : 1;
+}
+
 sub _buffer_message {
-  my ($self, $channel, $nick, $msg) = @_;
-  push @{$self->_msg_buffer->{$channel} ||= []}, { channel => $channel, nick => $nick, msg => $msg };
+  my ($self, $channel, $nick, $msg, $extra) = @_;
+  $extra ||= {};
+  push @{$self->_msg_buffer->{$channel} ||= []}, { channel => $channel, nick => $nick, msg => $msg, %$extra };
   # Per-channel timer: cancel previous, set new
   if (my $id = delete $self->_buffer_timers->{$channel}) {
     POE::Kernel->alarm_remove($id);
@@ -1369,7 +1385,20 @@ sub _do_raid {
     );
   }
 
+  my $consumed_bert_reply = 0;
+  for my $m (@$messages) {
+    next unless ($m->{source_kind} // '') eq 'bert_conversation';
+    next unless $m->{nick} && $self->_is_filtered_bot_nick($m->{nick});
+    $consumed_bert_reply = 1;
+    last;
+  }
+
   $self->_send_to_channel($channel, $answer);
+
+  if ($consumed_bert_reply) {
+    $self->_bert_reply_lock(1);
+    $self->info('Bert conversational reply consumed; lock set');
+  }
 
   # Process any messages that arrived while we were thinking
   $self->_schedule_pending_buffers;
@@ -1409,6 +1438,11 @@ event irc_public => sub {
   my $channel = ref $channels ? $channels->[0] : $channels;
   $self->info("$channel <$nick> $msg");
   $self->_last_activity(time());
+
+  if ($self->_is_human_nick($nick) && $self->_bert_reply_lock) {
+    $self->_bert_reply_lock(0);
+    $self->info("Reset bert conversational lock by human nick=$nick");
+  }
 
   if ($msg =~ /^(?::sum\s+|sum:\s*)(https?:\/\/\S+)/i) {
     my $url = $1;
@@ -1479,13 +1513,30 @@ event irc_public => sub {
     return;
   }
 
-  return if $self->_is_filtered_bot_nick($nick);
+  my $speaker_is_filtered_bot = $self->_is_filtered_bot_nick($nick);
 
   my $bot_nick = $self->get_nickname;
   my $nick_re = quotemeta($bot_nick);
-  return unless $msg =~ /(?:^|\W)$nick_re(?:\W|$)/i;
+  my $direct_address = ($msg =~ /(?:^|\W)$nick_re(?:\W|$)/i) ? 1 : 0;
 
-  $self->_buffer_message($channel, $nick, $msg);
+  if ($speaker_is_filtered_bot) {
+    return unless $direct_address;
+    if ($self->_bert_reply_lock) {
+      $self->info('Suppressing Bert conversational message: lock set');
+      return;
+    }
+    if ($BERT_REPLY_ALLOW_PCT < 100 && int(rand(100)) >= $BERT_REPLY_ALLOW_PCT) {
+      $self->info("Suppressing Bert conversational message: probability gate BERT_REPLY_ALLOW_PCT=$BERT_REPLY_ALLOW_PCT");
+      return;
+    }
+    $self->info('Allowing Bert conversational message (direct address, unlocked)');
+    $self->_buffer_message($channel, $nick, $msg, { source_kind => 'bert_conversation' });
+    return;
+  }
+
+  return unless $direct_address;
+
+  $self->_buffer_message($channel, $nick, $msg, { source_kind => 'conversation' });
 };
 
 event irc_join => sub {
