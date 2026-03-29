@@ -1213,29 +1213,29 @@ event irc_public => sub {
   $self->info("$channel <$nick> $msg");
   $self->_last_activity(time());
 
-  if ($msg =~ /^:sum\s+(https?:\/\/\S+)/i) {
+  if ($msg =~ /^(?::sum\s+|sum:\s*)(https?:\/\/\S+)/i) {
     my $url = $1;
     my $result = $self->_summarize_url($url);
     $self->_send_to_channel($channel, $result) if defined($result) && $result =~ /\S/;
     return;
   }
 
-  if ($msg =~ /^:cpan\s+recent(?:\s+(\d+))?\s*$/i) {
-    my $count = defined $1 ? $1 : 3;
+  if ($msg =~ /^(?::cpan\s+recent(?:\s+(\d+))?\s*|cpan:\s*recent(?:\s+(\d+))?\s*)$/i) {
+    my $count = defined $1 ? $1 : (defined $2 ? $2 : 3);
     my $result = $self->_cpan_lookup('recent', $count);
     $self->_send_to_channel($channel, $result) if defined($result) && $result =~ /\S/;
     return;
   }
 
-  if ($msg =~ /^:cpan\s+(module|author|describe)\s+(.+)/i) {
-    my ($mode, $query) = ($1, $2);
+  if ($msg =~ /^(?::cpan\s+(module|author|describe)\s+(.+)|cpan:\s*(module|author|describe)\s+(.+))$/i) {
+    my ($mode, $query) = defined $1 ? ($1, $2) : ($3, $4);
     my $result = $self->_cpan_lookup($mode, $query);
     $self->_send_to_channel($channel, $result) if defined($result) && $result =~ /\S/;
     return;
   }
 
-  if ($msg =~ /^:cpan\s+(.+)/i) {
-    my $query = $1;
+  if ($msg =~ /^(?::cpan\s+(.+)|cpan:\s*(.+))$/i) {
+    my $query = defined $1 ? $1 : $2;
     $query =~ s/^\s+|\s+$//g;
     my $result = $self->_cpan_lookup('module', $query);
     $self->_send_to_channel($channel, $result) if defined($result) && $result =~ /\S/;

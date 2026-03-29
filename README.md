@@ -11,6 +11,32 @@ Current baseline:
 This repo is the clean home for the bot, separate from the earlier Squirt/Koan testbed history.
 
 
+- `search: 2 Olaf Alders`
+
+## MetaCPAN
+
+Treb supports explicit MetaCPAN lookup commands in channel.
+
+Accepted forms:
+
+- `:cpan Moo`
+- `cpan: Moo`
+- `:cpan module Moo`
+- `:cpan describe Adam`
+- `cpan: describe Adam`
+- `:cpan author OALDERS`
+- `cpan: author OALDERS`
+- `:cpan recent`
+- `:cpan recent 5`
+- `cpan: recent 5`
+
+Notes:
+
+- `:cpan <name>` and `cpan: <name>` are shorthand for module lookup.
+- `describe` returns DESCRIPTION-oriented output.
+- `recent` defaults to 3 and is capped at 7.
+- MetaCPAN commands are command-only; they do not trigger from ordinary conversation.
+
 ## Web search
 
 Treb supports an explicit channel search command via Brave Search.
@@ -35,6 +61,7 @@ Notes:
 Treb supports explicit URL summarization in channel via:
 
 - `:sum <url>`
+- `sum: <url>`
 
 Notes:
 
