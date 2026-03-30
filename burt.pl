@@ -302,6 +302,41 @@ sub _persona_text {
   return join("\n", "Persona [$bot]:", map { $_ . ': ' . $cache->{$_} } @PERSONA_TRAIT_ORDER);
 }
 
+sub _persona_summary_text {
+  my ($self) = @_;
+  my $bot = $self->_bot_name_slug;
+  my $cache = $self->_persona_cache || {};
+  $cache = $self->_load_persona_settings unless %$cache;
+  my %label = (
+    join_greet_pct => 'join_greet',
+    ambient_public_reply_pct => 'ambient',
+    public_thread_window_seconds => 'thread_window',
+    bot_reply_pct => 'bot_reply',
+    bot_reply_max_turns => 'bot_turns',
+    non_substantive_allow_pct => 'non_substantive',
+  );
+  return join(' ',
+    "Persona [$bot]",
+    map { ($label{$_} // $_) . '=' . $cache->{$_} } @PERSONA_TRAIT_ORDER,
+  );
+}
+
+sub _set_persona_trait {
+  my ($self, $trait, $value) = @_;
+  return (0, "Unknown persona trait. Valid: " . join(', ', @PERSONA_TRAIT_ORDER))
+    unless exists $PERSONA_TRAIT_META{$trait};
+  return (0, 'Value must be a non-negative integer.')
+    unless defined $value && $value =~ /^\d+$/;
+
+  my $clamped = $self->_clamp_persona_value($trait, $value);
+  my $bot = $self->_bot_name_slug;
+  $self->memory->set_persona_setting($bot, $trait, $clamped);
+  my $cache = $self->_persona_cache || {};
+  $cache->{$trait} = $clamped;
+  $self->_persona_cache($cache);
+  return (1, "Set $trait=$clamped for $bot.");
+}
+
 sub _mcp_tool_logging_enabled {
   my ($self) = @_;
   my $raw = $ENV{MCP_TOOL_LOGGING};
@@ -1583,8 +1618,29 @@ event irc_public => sub {
     return;
   }
 
-  if ($msg =~ /^(?::persona\s*|persona:\s*)$/i) {
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+persona\s+full\s*)$/i) {
+    return unless lc($1) eq lc($self->get_nickname);
     my $line = $self->_persona_text;
+    $self->_send_to_channel($channel, $line);
+    return;
+  }
+
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+persona\s+set\s+(\S+)\s+(\S+)\s*|(?::persona\s+set\s+|persona:\s*set\s+)(\S+)\s+(\S+)\s*)$/i) {
+    my ($target_nick, $trait, $value);
+    if (defined $1 && length $1) {
+      return unless lc($1) eq lc($self->get_nickname);
+      ($target_nick, $trait, $value) = ($1, $2, $3);
+    } else {
+      return;
+    }
+    my ($ok, $line) = $self->_set_persona_trait($trait, $value);
+    $self->_send_to_channel($channel, $line);
+    return;
+  }
+
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+persona\s*)$/i) {
+    return unless lc($1) eq lc($self->get_nickname);
+    my $line = $self->_persona_summary_text;
     $self->_send_to_channel($channel, $line);
     return;
   }
