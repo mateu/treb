@@ -33,9 +33,23 @@ my $IDLE_PING = $ENV{IDLE_PING} || 1800;
 my $NON_SUBSTANTIVE_ALLOW_PCT = exists $ENV{NON_SUBSTANTIVE_ALLOW_PCT} ? 0 + $ENV{NON_SUBSTANTIVE_ALLOW_PCT} : 0;
 $NON_SUBSTANTIVE_ALLOW_PCT = 0 if $NON_SUBSTANTIVE_ALLOW_PCT < 0;
 $NON_SUBSTANTIVE_ALLOW_PCT = 100 if $NON_SUBSTANTIVE_ALLOW_PCT > 100;
+my $PUBLIC_CHAT_ALLOW_PCT = exists $ENV{PUBLIC_CHAT_ALLOW_PCT} ? 0 + $ENV{PUBLIC_CHAT_ALLOW_PCT} : 65;
+$PUBLIC_CHAT_ALLOW_PCT = 0 if $PUBLIC_CHAT_ALLOW_PCT < 0;
+$PUBLIC_CHAT_ALLOW_PCT = 100 if $PUBLIC_CHAT_ALLOW_PCT > 100;
 my $BERT_REPLY_ALLOW_PCT = exists $ENV{BERT_REPLY_ALLOW_PCT} ? 0 + $ENV{BERT_REPLY_ALLOW_PCT} : 50;
 $BERT_REPLY_ALLOW_PCT = 0 if $BERT_REPLY_ALLOW_PCT < 0;
 $BERT_REPLY_ALLOW_PCT = 100 if $BERT_REPLY_ALLOW_PCT > 100;
+my $PUBLIC_THREAD_WINDOW_SECONDS = exists $ENV{PUBLIC_THREAD_WINDOW_SECONDS} ? 0 + $ENV{PUBLIC_THREAD_WINDOW_SECONDS} : 45;
+$PUBLIC_THREAD_WINDOW_SECONDS = 0 if $PUBLIC_THREAD_WINDOW_SECONDS < 0;
+my %PERSONA_TRAIT_META = (
+  join_greet_pct => { kind => 'pct', env => 'JOIN_GREET_PCT', default => 100 },
+  ambient_public_reply_pct => { kind => 'pct', env => 'PUBLIC_CHAT_ALLOW_PCT', default => 50 },
+  public_thread_window_seconds => { kind => 'int', env => 'PUBLIC_THREAD_WINDOW_SECONDS', default => 45 },
+  bot_reply_pct => { kind => 'pct', env => 'BERT_REPLY_ALLOW_PCT', default => 25 },
+  bot_reply_max_turns => { kind => 'int', env => 'BERT_REPLY_MAX_TURNS', default => 1 },
+  non_substantive_allow_pct => { kind => 'pct', env => 'NON_SUBSTANTIVE_ALLOW_PCT', default => 0 },
+);
+my @PERSONA_TRAIT_ORDER = qw(join_greet_pct ambient_public_reply_pct public_thread_window_seconds bot_reply_pct bot_reply_max_turns non_substantive_allow_pct);
 
 # --- Conversation memory (SQLite) ---
 
@@ -58,6 +72,14 @@ package MemoryStore {
     $dbh->do('CREATE TABLE IF NOT EXISTS notes (
       id INTEGER PRIMARY KEY, nick TEXT, content TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )');
+    $dbh->do('CREATE TABLE IF NOT EXISTS persona_settings (
+      id INTEGER PRIMARY KEY,
+      bot_name TEXT NOT NULL,
+      trait_key TEXT NOT NULL,
+      trait_value TEXT NOT NULL,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(bot_name, trait_key)
     )');
     return $dbh;
   }
@@ -101,6 +123,26 @@ package MemoryStore {
       );
     }
     return join("\n", map { "#$_->{id} [$_->{nick}] $_->{content}" } @$rows);
+  }
+
+  sub get_persona_settings {
+    my ($self, $bot_name) = @_;
+    my $rows = $self->_dbh->selectall_arrayref(
+      'SELECT trait_key, trait_value FROM persona_settings WHERE bot_name = ? ORDER BY trait_key',
+      { Slice => {} }, $bot_name,
+    );
+    return { map { $_->{trait_key} => $_->{trait_value} } @$rows };
+  }
+
+  sub set_persona_setting {
+    my ($self, $bot_name, $trait_key, $trait_value) = @_;
+    $self->_dbh->do(
+      q{INSERT INTO persona_settings (bot_name, trait_key, trait_value, updated_at)
+        VALUES (?,?,?,CURRENT_TIMESTAMP)
+        ON CONFLICT(bot_name, trait_key)
+        DO UPDATE SET trait_value=excluded.trait_value, updated_at=CURRENT_TIMESTAMP},
+      undef, $bot_name, $trait_key, "$trait_value",
+    );
   }
 
   sub update_note {
@@ -192,6 +234,74 @@ sub _current_local_time_text {
   return $self->_time_text_for_zone('America/Denver');
 }
 
+sub _clamp_persona_value {
+  my ($self, $key, $value) = @_;
+  my $meta = $PERSONA_TRAIT_META{$key} or return $value;
+  my $num = 0 + ($value // 0);
+  if (($meta->{kind} // '') eq 'pct') {
+    $num = 0 if $num < 0;
+    $num = 100 if $num > 100;
+    return int($num);
+  }
+  $num = 0 if $num < 0;
+  return int($num);
+}
+
+sub _bot_name_slug {
+  my ($self) = @_;
+  return lc($self->get_nickname // $BOT_NICK // 'bot');
+}
+
+sub _default_persona_trait_value {
+  my ($self, $key) = @_;
+  my $meta = $PERSONA_TRAIT_META{$key} or return undef;
+  if (defined $meta->{env} && exists $ENV{$meta->{env}} && defined $ENV{$meta->{env}} && $ENV{$meta->{env}} ne '') {
+    return $self->_clamp_persona_value($key, $ENV{$meta->{env}});
+  }
+  return $self->_clamp_persona_value($key, $meta->{default});
+}
+
+sub _load_persona_settings {
+  my ($self) = @_;
+  my $bot = $self->_bot_name_slug;
+  my $stored = $self->memory->get_persona_settings($bot);
+  my %resolved;
+  for my $key (@PERSONA_TRAIT_ORDER) {
+    if (exists $stored->{$key}) {
+      $resolved{$key} = $self->_clamp_persona_value($key, $stored->{$key});
+    } else {
+      my $default = $self->_default_persona_trait_value($key);
+      $resolved{$key} = $default;
+      $self->memory->set_persona_setting($bot, $key, $default);
+    }
+  }
+  $self->_persona_cache(\%resolved);
+  return \%resolved;
+}
+
+sub _persona_trait {
+  my ($self, $key) = @_;
+  my $cache = $self->_persona_cache || {};
+  return $cache->{$key} if exists $cache->{$key};
+  $cache = $self->_load_persona_settings;
+  return $cache->{$key};
+}
+
+sub _persona_stats_text {
+  my ($self) = @_;
+  my $cache = $self->_persona_cache || {};
+  $cache = $self->_load_persona_settings unless %$cache;
+  return join('; ', map { $_ . '=' . $cache->{$_} } @PERSONA_TRAIT_ORDER);
+}
+
+sub _persona_text {
+  my ($self) = @_;
+  my $bot = $self->_bot_name_slug;
+  my $cache = $self->_persona_cache || {};
+  $cache = $self->_load_persona_settings unless %$cache;
+  return join("\n", "Persona [$bot]:", map { $_ . ': ' . $cache->{$_} } @PERSONA_TRAIT_ORDER);
+}
+
 sub _mcp_tool_logging_enabled {
   my ($self) = @_;
   my $raw = $ENV{MCP_TOOL_LOGGING};
@@ -238,8 +348,8 @@ sub _db_stats_text {
   $channel_count ||= 0;
   $system_rows ||= 0;
   $latest ||= 'n/a';
-  return sprintf('DB: %s | conversations: %d | notes: %d | channels: %d | system rows: %d | latest: %s',
-    $self->memory->db_file, $conv_count, $note_count, $channel_count, $system_rows, $latest);
+  return sprintf('DB: %s | conversations: %d | notes: %d | channels: %d | system rows: %d | latest: %s | persona={%s}',
+    $self->memory->db_file, $conv_count, $note_count, $channel_count, $system_rows, $latest, $self->_persona_stats_text);
 }
 
 
@@ -1147,6 +1257,16 @@ has _bert_reply_lock => (
   default => sub { 0 },
 );
 
+has _public_thread_open_until => (
+  is => 'rw', traits => ['NoGetopt'],
+  default => sub { 0 },
+);
+
+has _persona_cache => (
+  is => 'rw', traits => ['NoGetopt'],
+  default => sub { {} },
+);
+
 sub _is_human_nick {
   my ($self, $nick) = @_;
   return 0 unless defined $nick && length $nick;
@@ -1336,8 +1456,9 @@ sub _do_raid {
   }
 
   if ($self->_is_non_substantive_output($answer)) {
-    if ($NON_SUBSTANTIVE_ALLOW_PCT > 0 && int(rand(100)) < $NON_SUBSTANTIVE_ALLOW_PCT) {
-      $self->info("Allowing non-substantive output due to NON_SUBSTANTIVE_ALLOW_PCT=$NON_SUBSTANTIVE_ALLOW_PCT");
+    my $non_substantive_allow_pct = $self->_persona_trait('non_substantive_allow_pct');
+    if ($non_substantive_allow_pct > 0 && int(rand(100)) < $non_substantive_allow_pct) {
+      $self->info("Allowing non-substantive output due to non_substantive_allow_pct=$non_substantive_allow_pct");
     } else {
       $self->info("Suppressing non-substantive output");
       $self->_schedule_pending_buffers;
@@ -1462,6 +1583,12 @@ event irc_public => sub {
     return;
   }
 
+  if ($msg =~ /^(?::persona\s*|persona:\s*)$/i) {
+    my $line = $self->_persona_text;
+    $self->_send_to_channel($channel, $line);
+    return;
+  }
+
   if ($msg =~ /^(?::notes\s+|notes:\s*)(\S+)\s*$/i) {
     my $nick = $1;
     my $line = $self->_notes_text($nick);
@@ -1518,6 +1645,7 @@ event irc_public => sub {
   my $bot_nick = $self->get_nickname;
   my $nick_re = quotemeta($bot_nick);
   my $direct_address = ($msg =~ /(?:^|\W)$nick_re(?:\W|$)/i) ? 1 : 0;
+  my $thread_open = ($self->_public_thread_open_until && time() <= $self->_public_thread_open_until) ? 1 : 0;
 
   if ($speaker_is_filtered_bot) {
     return unless $direct_address;
@@ -1525,17 +1653,44 @@ event irc_public => sub {
       $self->info('Suppressing Burt conversational message: lock set');
       return;
     }
-    if ($BERT_REPLY_ALLOW_PCT < 100 && int(rand(100)) >= $BERT_REPLY_ALLOW_PCT) {
-      $self->info("Suppressing Burt conversational message: probability gate BERT_REPLY_ALLOW_PCT=$BERT_REPLY_ALLOW_PCT");
+    my $bot_reply_pct = $self->_persona_trait('bot_reply_pct');
+    if ($bot_reply_pct < 100 && int(rand(100)) >= $bot_reply_pct) {
+      $self->info("Suppressing Burt conversational message: probability gate bot_reply_pct=$bot_reply_pct");
       return;
     }
     $self->info('Allowing Burt conversational message (direct address, unlocked)');
+    my $public_thread_window_seconds = $self->_persona_trait('public_thread_window_seconds');
+    if ($public_thread_window_seconds > 0) {
+      $self->_public_thread_open_until(time() + $public_thread_window_seconds);
+      $self->info("Opened public thread window for ${public_thread_window_seconds}s (filtered bot lane)");
+    }
     $self->_buffer_message($channel, $nick, $msg, { source_kind => 'bert_conversation' });
     return;
   }
 
-  return unless $direct_address;
+  if ($direct_address) {
+    my $public_thread_window_seconds = $self->_persona_trait('public_thread_window_seconds');
+    if ($public_thread_window_seconds > 0) {
+      $self->_public_thread_open_until(time() + $public_thread_window_seconds);
+      $self->info("Opened public thread window for ${public_thread_window_seconds}s (direct address)");
+    }
+    $self->_buffer_message($channel, $nick, $msg, { source_kind => 'conversation' });
+    return;
+  }
 
+  if ($thread_open) {
+    $self->info('Allowing public conversational message due to open thread window');
+    $self->_buffer_message($channel, $nick, $msg, { source_kind => 'conversation' });
+    return;
+  }
+
+  my $ambient_public_reply_pct = $self->_persona_trait('ambient_public_reply_pct');
+  if ($ambient_public_reply_pct < 100 && int(rand(100)) >= $ambient_public_reply_pct) {
+    $self->info("Suppressing public conversational message: probability gate ambient_public_reply_pct=$ambient_public_reply_pct");
+    return;
+  }
+
+  $self->info('Allowing public conversational message via ambient probability gate');
   $self->_buffer_message($channel, $nick, $msg, { source_kind => 'conversation' });
 };
 
@@ -1546,7 +1701,7 @@ event irc_join => sub {
   $self->info("$channel $nick ($host) joined");
   $self->_last_activity(time());
   $self->_buffer_message($channel, 'system',
-    "$nick ($host) has joined the channel. Greet them if you like!");
+    "$nick ($host) has joined the channel. join_greet_pct=" . $self->_persona_trait('join_greet_pct') . ". Greet them if you like!");
 };
 
 event irc_part => sub {
