@@ -1625,15 +1625,9 @@ event irc_public => sub {
     return;
   }
 
-  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+persona\s+set\s+(\S+)\s+(\S+)\s*|(?::persona\s+set\s+|persona:\s*set\s+)(\S+)\s+(\S+)\s*)$/i) {
-    my ($target_nick, $trait, $value);
-    if (defined $1 && length $1) {
-      return unless lc($1) eq lc($self->get_nickname);
-      ($target_nick, $trait, $value) = ($1, $2, $3);
-    } else {
-      return;
-    }
-    my ($ok, $line) = $self->_set_persona_trait($trait, $value);
+  if ($msg =~ /^([A-Za-z0-9_\-]+):\s+persona\s+set\s+(\S+)\s+(\S+)\s*$/i) {
+    return unless lc($1) eq lc($self->get_nickname);
+    my ($ok, $line) = $self->_set_persona_trait($2, $3);
     $self->_send_to_channel($channel, $line);
     return;
   }

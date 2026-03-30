@@ -8,20 +8,20 @@ sub check_source {
 
   like(
     $text,
-    qr/\^\(\?:\(\[A-Za-z0-9_\\-\]\+\):\\s\+persona\\s\+set\\s\+\(\\S\+\)\\s\+\(\\S\+\)/s,
-    "$args{name} supports addressed persona set syntax",
+    qr/\):\\s\+persona\\s\+set\\s\+/,
+    "$args{name} still has addressed persona set handler",
   );
 
   like(
     $text,
-    qr/return unless lc\(\$1\) eq lc\(\$self->get_nickname\)/,
+    qr/return unless lc\(\$1\) eq lc\(\$self->get_nickname\);/,
     "$args{name} persona set checks addressed nick matches self",
   );
 
-  like(
+  unlike(
     $text,
-    qr/else \{\n\s+return;\n\s+\}/s,
-    "$args{name} rejects unaddressed persona set writes",
+    qr/\(\?::persona\\s\+set\\s\+\|persona:\\s\*set\\s\+\)/,
+    "$args{name} no legacy bare persona set fallback remains",
   );
 }
 
