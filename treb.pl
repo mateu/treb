@@ -23,6 +23,17 @@ use lib 'lib';
 use Bot::MemoryStore;
 use Bot::Mission qw(load_mission_for_script);
 use Bot::Commands::Time qw(time_text_for_zone current_local_time_text);
+use Bot::Persona qw(
+  persona_trait_meta
+  persona_trait_order
+  clamp_persona_value
+  load_persona_cache
+  persona_text
+  persona_summary_text
+  persona_trait_text
+  set_persona_trait
+  apply_persona_preset
+);
 
 my @BOT_NAMES = qw(
   Botsworth Clanky Sparky Fizz Gizmo Pixel Blip Rusty Ziggy Turbo
@@ -114,15 +125,7 @@ sub _current_local_time_text {
 
 sub _clamp_persona_value {
   my ($self, $key, $value) = @_;
-  my $meta = $PERSONA_TRAIT_META{$key} or return $value;
-  my $num = 0 + ($value // 0);
-  if (($meta->{kind} // '') eq 'pct') {
-    $num = 0 if $num < 0;
-    $num = 100 if $num > 100;
-    return int($num);
-  }
-  $num = 0 if $num < 0;
-  return int($num);
+  return Bot::Persona::clamp_persona_value($key, $value, trait_meta => \%PERSONA_TRAIT_META, trait_order => \@PERSONA_TRAIT_ORDER);
 }
 
 sub _bot_name_slug {
@@ -132,29 +135,26 @@ sub _bot_name_slug {
 
 sub _default_persona_trait_value {
   my ($self, $key) = @_;
-  my $meta = $PERSONA_TRAIT_META{$key} or return undef;
-  if (defined $meta->{env} && exists $ENV{$meta->{env}} && defined $ENV{$meta->{env}} && $ENV{$meta->{env}} ne '') {
-    return $self->_clamp_persona_value($key, $ENV{$meta->{env}});
-  }
-  return $self->_clamp_persona_value($key, $meta->{default});
+  my $cache = Bot::Persona::load_persona_cache(
+    memory     => $self->memory,
+    bot_name   => $self->_bot_name_slug,
+    trait_meta => \%PERSONA_TRAIT_META,
+    trait_order => \@PERSONA_TRAIT_ORDER,
+  );
+  $self->_persona_cache($cache);
+  return $cache->{$key};
 }
 
 sub _load_persona_settings {
   my ($self) = @_;
-  my $bot = $self->_bot_name_slug;
-  my $stored = $self->memory->get_persona_settings($bot);
-  my %resolved;
-  for my $key (@PERSONA_TRAIT_ORDER) {
-    if (exists $stored->{$key}) {
-      $resolved{$key} = $self->_clamp_persona_value($key, $stored->{$key});
-    } else {
-      my $default = $self->_default_persona_trait_value($key);
-      $resolved{$key} = $default;
-      $self->memory->set_persona_setting($bot, $key, $default);
-    }
-  }
-  $self->_persona_cache(\%resolved);
-  return \%resolved;
+  my $cache = Bot::Persona::load_persona_cache(
+    memory      => $self->memory,
+    bot_name    => $self->_bot_name_slug,
+    trait_meta  => \%PERSONA_TRAIT_META,
+    trait_order => \@PERSONA_TRAIT_ORDER,
+  );
+  $self->_persona_cache($cache);
+  return $cache;
 }
 
 sub _persona_trait {
@@ -174,149 +174,72 @@ sub _persona_stats_text {
 
 sub _persona_text {
   my ($self) = @_;
-  my $bot = $self->_bot_name_slug;
   my $cache = $self->_persona_cache || {};
   $cache = $self->_load_persona_settings unless %$cache;
-  return join("\n", "Persona [$bot]:", map { $_ . ': ' . $cache->{$_} } @PERSONA_TRAIT_ORDER);
+  return Bot::Persona::persona_text(
+    bot_name    => $self->_bot_name_slug,
+    cache       => $cache,
+    full        => 1,
+    trait_meta  => \%PERSONA_TRAIT_META,
+    trait_order => \@PERSONA_TRAIT_ORDER,
+  );
 }
 
 sub _persona_summary_text {
   my ($self) = @_;
-  my $bot = $self->_bot_name_slug;
   my $cache = $self->_persona_cache || {};
   $cache = $self->_load_persona_settings unless %$cache;
-  my %label = (
-    join_greet_pct => 'join_greet',
-    ambient_public_reply_pct => 'ambient',
-    public_thread_window_seconds => 'thread_window',
-    bot_reply_pct => 'bot_reply',
-    bot_reply_max_turns => 'bot_turns',
-    non_substantive_allow_pct => 'non_substantive',
-  );
-  return join(' ',
-    "Persona [$bot]",
-    map { ($label{$_} // $_) . '=' . $cache->{$_} } @PERSONA_TRAIT_ORDER,
+  return Bot::Persona::persona_summary_text(
+    bot_name    => $self->_bot_name_slug,
+    cache       => $cache,
+    trait_meta  => \%PERSONA_TRAIT_META,
+    trait_order => \@PERSONA_TRAIT_ORDER,
   );
 }
 
 sub _persona_trait_text {
   my ($self, $trait) = @_;
-  return "Unknown persona trait. Valid: " . join(', ', @PERSONA_TRAIT_ORDER)
-    unless defined $trait && exists $PERSONA_TRAIT_META{$trait};
-  my $value = $self->_persona_trait($trait);
-  return "$trait=$value";
+  my $cache = $self->_persona_cache || {};
+  $cache = $self->_load_persona_settings unless %$cache;
+  return Bot::Persona::persona_trait_text(
+    trait       => $trait,
+    cache       => $cache,
+    trait_meta  => \%PERSONA_TRAIT_META,
+    trait_order => \@PERSONA_TRAIT_ORDER,
+  );
 }
 
 sub _set_persona_trait {
   my ($self, $trait, $value) = @_;
-  return (0, "Unknown persona trait. Valid: " . join(', ', @PERSONA_TRAIT_ORDER))
-    unless exists $PERSONA_TRAIT_META{$trait};
-  return (0, 'Value must be a non-negative integer.')
-    unless defined $value && $value =~ /^\d+$/;
-
-  my $clamped = $self->_clamp_persona_value($trait, $value);
-  my $bot = $self->_bot_name_slug;
-  $self->memory->set_persona_setting($bot, $trait, $clamped);
   my $cache = $self->_persona_cache || {};
-  $cache->{$trait} = $clamped;
+  $cache = $self->_load_persona_settings unless %$cache;
+  my ($ok, $msg) = Bot::Persona::set_persona_trait(
+    memory      => $self->memory,
+    bot_name    => $self->_bot_name_slug,
+    cache       => $cache,
+    trait       => $trait,
+    value       => $value,
+    trait_meta  => \%PERSONA_TRAIT_META,
+    trait_order => \@PERSONA_TRAIT_ORDER,
+  );
   $self->_persona_cache($cache);
-  return (1, "Set $trait=$clamped for $bot.");
+  return ($ok, $ok ? "Set $msg for " . $self->_bot_name_slug . "." : $msg);
 }
 
 sub _apply_persona_preset {
   my ($self, $value) = @_;
-  if (defined $value) {
-    $value =~ s/[-\x7f]+/ /g;
-    $value =~ s/^\s+|\s+$//g;
-  }
-  return (0, 'Preset value must be a non-negative integer.')
-    unless defined $value && $value =~ /^\d+$/;
-
-  my $bot = $self->_bot_name_slug;
-  my $n = int($value);
-  my %targets;
-
-  # Stepped preset scaling: 0=silent, 1-5=low-to-mid, 6-10=high, 11+=max
-  if ($n == 0) {
-    %targets = map { $_ => 0 } @PERSONA_TRAIT_ORDER;
-  }
-  elsif ($n <= 5) {
-    # Low-to-mid: pct scales 10-50, turns 1-5, window 9-45
-    my $pct = $n * 10;
-    for my $trait (@PERSONA_TRAIT_ORDER) {
-      my $kind = $PERSONA_TRAIT_META{$trait}{kind} || '';
-      if ($kind eq 'pct') {
-        if ($trait eq 'non_substantive_allow_pct') {
-          $targets{$trait} = $self->_persona_trait('non_substantive_allow_pct') // 0;
-        } else {
-          $targets{$trait} = $pct;
-        }
-      }
-      elsif ($trait eq 'bot_reply_max_turns') {
-        $targets{$trait} = $n;
-      }
-      elsif ($trait eq 'public_thread_window_seconds') {
-        $targets{$trait} = $n * 9;
-      }
-      else {
-        $targets{$trait} = $self->_clamp_persona_value($trait, $n);
-      }
-    }
-  }
-  elsif ($n <= 10) {
-    # High: pct scales 60-100, turns 6-10, window 48-60
-    my $pct = 50 + ($n - 5) * 10;
-    for my $trait (@PERSONA_TRAIT_ORDER) {
-      my $kind = $PERSONA_TRAIT_META{$trait}{kind} || '';
-      if ($kind eq 'pct') {
-        if ($trait eq 'non_substantive_allow_pct') {
-          $targets{$trait} = $self->_persona_trait('non_substantive_allow_pct') // 0;
-        } else {
-          $targets{$trait} = $pct;
-        }
-      }
-      elsif ($trait eq 'bot_reply_max_turns') {
-        $targets{$trait} = $n;
-      }
-      elsif ($trait eq 'public_thread_window_seconds') {
-        $targets{$trait} = 45 + ($n - 5) * 3;
-      }
-      else {
-        $targets{$trait} = $self->_clamp_persona_value($trait, $n);
-      }
-    }
-  }
-  else {
-    # Max (11+): everything at 100 except non_substantive
-    for my $trait (@PERSONA_TRAIT_ORDER) {
-      my $kind = $PERSONA_TRAIT_META{$trait}{kind} || '';
-      if ($kind eq 'pct') {
-        if ($trait eq 'non_substantive_allow_pct') {
-          $targets{$trait} = $self->_persona_trait('non_substantive_allow_pct') // 0;
-        } else {
-          $targets{$trait} = 100;
-        }
-      }
-      elsif ($trait eq 'bot_reply_max_turns') {
-        $targets{$trait} = $n;
-      }
-      elsif ($trait eq 'public_thread_window_seconds') {
-        $targets{$trait} = 60;
-      }
-      else {
-        $targets{$trait} = $self->_clamp_persona_value($trait, $n);
-      }
-    }
-  }
-
   my $cache = $self->_persona_cache || {};
-  for my $trait (@PERSONA_TRAIT_ORDER) {
-    my $v = $self->_clamp_persona_value($trait, $targets{$trait});
-    $self->memory->set_persona_setting($bot, $trait, $v);
-    $cache->{$trait} = $v;
-  }
+  $cache = $self->_load_persona_settings unless %$cache;
+  my ($ok, $msg) = Bot::Persona::apply_persona_preset(
+    memory      => $self->memory,
+    bot_name    => $self->_bot_name_slug,
+    cache       => $cache,
+    value       => $value,
+    trait_meta  => \%PERSONA_TRAIT_META,
+    trait_order => \@PERSONA_TRAIT_ORDER,
+  );
   $self->_persona_cache($cache);
-  return (1, 'Applied persona preset ' . $n . ': ' . $self->_persona_summary_text);
+  return ($ok, $msg);
 }
 
 sub _mcp_tool_logging_enabled {
