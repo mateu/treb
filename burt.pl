@@ -473,6 +473,55 @@ sub _store_empty_response_rows_enabled {
   return $self->_env_flag_enabled('STORE_EMPTY_RESPONSE_ROWS', 0);
 }
 
+sub _cleanup_logging_enabled {
+  my ($self) = @_;
+  return $self->_env_flag_enabled('CLEANUP_LOGGING', 0);
+}
+
+sub _cleanup_log_preview {
+  my ($self, $text) = @_;
+  return '' unless defined $text;
+  $text =~ s/[\r\n\t]+/ /g;
+  $text =~ s/\s{2,}/ /g;
+  $text =~ s/^\s+|\s+$//g;
+  $text = substr($text, 0, 120) . '...' if length($text) > 120;
+  return $text;
+}
+
+sub _log_cleanup_change {
+  my ($self, $label, $before, $after) = @_;
+  return unless $self->_cleanup_logging_enabled;
+  $before = '' unless defined $before;
+  $after  = '' unless defined $after;
+  return if $before eq $after;
+  my $before_preview = $self->_cleanup_log_preview($before);
+  my $after_preview  = $self->_cleanup_log_preview($after);
+  $self->info(sprintf(
+    'Cleanup[%s] len=%d -> %d | before="%s" | after="%s"',
+    $label,
+    length($before),
+    length($after),
+    $before_preview,
+    $after_preview,
+  ));
+}
+
+sub _log_cleanup_empty {
+  my ($self, $before, $after) = @_;
+  return unless $self->_cleanup_logging_enabled;
+  $before = '' unless defined $before;
+  $after  = '' unless defined $after;
+  my $before_preview = $self->_cleanup_log_preview($before);
+  my $after_preview  = $self->_cleanup_log_preview($after);
+  $self->info(sprintf(
+    'Cleanup collapsed to empty len=%d -> %d | before="%s" | after="%s"',
+    length($before),
+    length($after),
+    $before_preview,
+    $after_preview,
+  ));
+}
+
 
 sub _db_stats_text {
   my ($self) = @_;
@@ -769,6 +818,27 @@ async sub _setup_raider {
   open my $mf, '<', $mission_file or die "Unable to read mission file $mission_file: $!";
   my $mission = do { local $/; <$mf> };
   close $mf;
+
+  my $base_persona_file = __FILE__;
+  $base_persona_file =~ s{[^/]+\.pl$}{base.persona.txt};
+  my $bot_persona_file = __FILE__;
+  $bot_persona_file =~ s/\.pl$/.persona.txt/;
+
+  if ($mission =~ /\{\{BASE_PERSONA\}\}/) {
+    open my $bf, '<', $base_persona_file
+      or die "Mission template references {{BASE_PERSONA}} but $base_persona_file is missing: $!";
+    my $base_persona = do { local $/; <$bf> };
+    close $bf;
+    $mission =~ s/\{\{BASE_PERSONA\}\}/$base_persona/g;
+  }
+
+  if ($mission =~ /\{\{BOT_PERSONA\}\}/) {
+    open my $pf, '<', $bot_persona_file
+      or die "Mission template references {{BOT_PERSONA}} but $bot_persona_file is missing: $!";
+    my $bot_persona = do { local $/; <$pf> };
+    close $pf;
+    $mission =~ s/\{\{BOT_PERSONA\}\}/$bot_persona/g;
+  }
 
   my %mission_vars = (
     '{{NICK}}'     => $nick,
@@ -1587,11 +1657,15 @@ sub _do_raid {
   }
 
   # Clean up AI output
+  my $raw_answer = $answer;
+  my $answer_before_strip = $answer;
   # Strip full internal reasoning blocks before any lighter tag cleanup.
   $answer =~ s/<think\b[^>]*>.*?<\/think>\s*//gsi;
   $answer =~ s/<thinking\b[^>]*>.*?<\/thinking>\s*//gsi;
   $answer =~ s/^\s*(?:Thought|Reasoning|Chain[ -]?of[ -]?Thought|Internal Reasoning)\s*:\s*.*?(?=^\S|\z)//gims;
+  $self->_log_cleanup_change('strip_reasoning', $answer_before_strip, $answer);
 
+  my $answer_before_markup = $answer;
   $answer =~ s/^<\s*\@?\s*(\w+)\s*>:?\s*/$1: /mg;     # line start <@nick> → Nick:
   $answer =~ s/<\s*\@?\s*(\w+)\s*>/$1/g;               # mid-text <nick> → Nick
   $answer =~ s/<\/?\w+>//g;                            # strip remaining XML tags
@@ -1599,8 +1673,14 @@ sub _do_raid {
   $answer =~ s/^\*?\s*(save_note|recall_notes|update_note|delete_note|recall_history|stay_silent|set_alarm|whois|send_private_message)\b[^\n]*\n?//mg;
   $answer =~ s/^\s+//;
   $answer =~ s/\s+$//;
+  $self->_log_cleanup_change('strip_markup', $answer_before_markup, $answer);
+
+  my $answer_before_normalize = $answer;
+  $answer = $self->_clean_text_for_irc($answer) if defined $answer;
+  $self->_log_cleanup_change('normalize_text', $answer_before_normalize, $answer);
 
   if ($answer !~ /\S/) {
+    $self->_log_cleanup_empty($raw_answer, $answer);
     $self->info("Answer empty after cleanup; staying silent");
     $self->_schedule_pending_buffers;
     return;
