@@ -345,6 +345,54 @@ sub _set_persona_trait {
   return (1, "Set $trait=$clamped for $bot.");
 }
 
+sub _apply_persona_preset {
+  my ($self, $value) = @_;
+  if (defined $value) {
+    $value =~ s/[ -]+/ /g;
+    $value =~ s/^\s+|\s+$//g;
+  }
+  return (0, 'Preset value must be a non-negative integer.')
+    unless defined $value && $value =~ /^\d+$/;
+
+  my $bot = $self->_bot_name_slug;
+  my $n = int($value);
+  my %targets;
+  if ($n == 0) {
+    %targets = map { $_ => 0 } @PERSONA_TRAIT_ORDER;
+  }
+  else {
+    for my $trait (@PERSONA_TRAIT_ORDER) {
+      my $kind = $PERSONA_TRAIT_META{$trait}{kind} || '';
+      if ($kind eq 'pct') {
+        # Keep non_substantive_allow_pct conservative; boost everything else
+        if ($trait eq 'non_substantive_allow_pct') {
+          $targets{$trait} = $self->_persona_trait('non_substantive_allow_pct') // 0;
+        } else {
+          $targets{$trait} = 100;
+        }
+      }
+      elsif ($trait eq 'bot_reply_max_turns') {
+        $targets{$trait} = $n;
+      }
+      elsif ($trait eq 'public_thread_window_seconds') {
+        $targets{$trait} = 60;
+      }
+      else {
+        $targets{$trait} = $self->_clamp_persona_value($trait, $n);
+      }
+    }
+  }
+
+  my $cache = $self->_persona_cache || {};
+  for my $trait (@PERSONA_TRAIT_ORDER) {
+    my $v = $self->_clamp_persona_value($trait, $targets{$trait});
+    $self->memory->set_persona_setting($bot, $trait, $v);
+    $cache->{$trait} = $v;
+  }
+  $self->_persona_cache($cache);
+  return (1, 'Applied persona preset ' . $n . ': ' . $self->_persona_summary_text);
+}
+
 sub _mcp_tool_logging_enabled {
   my ($self) = @_;
   my $raw = $ENV{MCP_TOOL_LOGGING};
@@ -1210,6 +1258,17 @@ sub _search_web {
   return $self->_format_search_results($query, $data, $limit);
 }
 
+sub _is_trivial_parenthetical {
+  my ($self, $text) = @_;
+  return 0 unless defined $text;
+  my $t = $text;
+  $t =~ s/^\s+|\s+$//g;
+  return 0 unless length $t;
+  return 1 if $t =~ /^\(\s*(?:\.{1,}|…+|\.\s*\.\s*\.|…\s*…\s*…|uh+|um+|er+|hmm+|hm+|\.\.\.\s*)\s*\)$/i;
+  return 1 if $t =~ /^\(\s*(?:pause|beat|silence|quiet|thinking|muttering|listening|watching|observing)\s*\)$/i;
+  return 0;
+}
+
 sub _is_non_substantive_output {
   my ($self, $text) = @_;
   return 1 unless defined $text;
@@ -1217,6 +1276,7 @@ sub _is_non_substantive_output {
   my $t = $text;
   $t =~ s/^\s+|\s+$//g;
   return 1 unless length $t;
+  return 1 if $self->_is_trivial_parenthetical($t);
 
   my $lc = lc $t;
   return 0 if $t =~ m{https?://};
@@ -1498,6 +1558,12 @@ sub _do_raid {
     return;
   }
 
+  if ($self->_is_trivial_parenthetical($answer)) {
+    $self->info("Suppressing trivial parenthetical output");
+    $self->_schedule_pending_buffers;
+    return;
+  }
+
   if ($self->_is_non_substantive_output($answer)) {
     my $non_substantive_allow_pct = $self->_persona_trait('non_substantive_allow_pct');
     if ($non_substantive_allow_pct > 0 && int(rand(100)) < $non_substantive_allow_pct) {
@@ -1648,10 +1714,16 @@ event irc_public => sub {
   }
 
   if ($msg =~ /^([A-Za-z0-9_\-]+):\s+persona\s+(\S+)\s*$/i) {
-    return unless lc($1) eq lc($self->get_nickname);
-    my $token = lc($2);
+    my ($target_nick, $arg) = ($1, $2);
+    return unless lc($target_nick) eq lc($self->get_nickname);
+    my $token = lc($arg);
     return if $token eq 'full' || $token eq 'set' || $token eq 'get';
-    my $line = $self->_persona_trait_text($2);
+    if ($arg =~ /^\d+$/) {
+      my ($ok, $line) = $self->_apply_persona_preset($arg);
+      $self->_send_to_channel($channel, $line);
+      return;
+    }
+    my $line = $self->_persona_trait_text($arg);
     $self->_send_to_channel($channel, $line);
     return;
   }
