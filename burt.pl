@@ -844,9 +844,19 @@ sub _is_trivial_parenthetical {
 sub _is_non_substantive_output {
   my ($self, $text) = @_;
   return 1 unless defined $text;
+
   my $t = $text;
   $t =~ s/^\s+|\s+$//g;
-  return 1 if length($t) && $self->_is_trivial_parenthetical($t);
+  return 1 unless length $t;
+  return 1 if $self->_is_trivial_parenthetical($t);
+
+  # Burt is intentionally more conversational/atmospheric than Treb.
+  # Preserve a few of the older permissive guardrails here so shared
+  # cleanup extraction does not over-suppress substantive Burt replies.
+  return 0 if $t =~ m{https?://};
+  return 0 if $t =~ /[:;]/;
+  return 0 if length($t) > 180;
+
   return Bot::OutputCleanup::is_non_substantive_output($text);
 }
 
