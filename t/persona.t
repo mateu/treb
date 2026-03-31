@@ -3,7 +3,7 @@ use warnings;
 use Test::More;
 use DBI;
 
-my $db = 't/persona_v1.sqlite';
+my $db = 't/persona.sqlite';
 unlink $db if -f $db;
 
 local $ENV{DB_FILE} = $db;
