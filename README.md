@@ -20,7 +20,8 @@ A first-pass behavior-regression harness is available at:
 What it does:
 
 1. Starts a tiny local IRC server process on `127.0.0.1:6667`.
-2. Starts a fake Ollama-compatible local HTTP endpoint for deterministic model replies.
+2. In deterministic mode (default), starts a fake Ollama-compatible local HTTP endpoint for deterministic model replies.
+   In real mode, skips the fake endpoint and uses a real model backend (configured via env).
 3. Launches **Burt** and **Treb** as real `perl` processes with dedicated harness env + sqlite DBs.
 4. Launches a simulated human IRC client (`Alice`) in the same channel.
 5. Runs scripted scenarios:
@@ -34,16 +35,37 @@ What it does:
 Run it:
 
 ```bash
+# deterministic (default; fake model backend)
 script/run-local-irc-harness.sh
+# or: script/run-local-irc-harness.sh --mode deterministic
+
+# real model mode (opt-in)
+script/run-local-irc-harness.sh --mode real
+# or: IRC_HARNESS_MODE=real script/run-local-irc-harness.sh
 ```
+
+
+### Mode selection and env
+
+- `--mode deterministic|real` (flag takes precedence over env)
+- `IRC_HARNESS_MODE=deterministic|real` (default: `deterministic`)
+
+Real mode assumptions (smallest practical implementation):
+
+- defaults to a real local Ollama endpoint at `http://127.0.0.1:11434`
+- defaults model to `llama3.2:3b`
+- override with:
+  - `IRC_HARNESS_REAL_OLLAMA_URL`
+  - `IRC_HARNESS_REAL_MODEL`
+  - optional `IRC_HARNESS_REAL_ENGINE` (default `Ollama`)
 
 Artifacts land under:
 
-- `log/irc-harness/<timestamp>/transcript.log` (full low-level trace)
-- `log/irc-harness/<timestamp>/conversation.log` (high-value joins/scenario markers/messages/evaluator notes)
-- `log/irc-harness/<timestamp>/evaluation.txt` (PASS/FAIL checks)
-- `log/irc-harness/<timestamp>/behavior_report.txt` (sectioned human-readable report)
-- `log/irc-harness/<timestamp>/summary.json`
+- `log/irc-harness/<mode>-<timestamp>/transcript.log` (full low-level trace; includes mode/engine/model header)
+- `log/irc-harness/<mode>-<timestamp>/conversation.log` (high-value joins/scenario markers/messages/evaluator notes)
+- `log/irc-harness/<mode>-<timestamp>/evaluation.txt` (PASS/FAIL checks)
+- `log/irc-harness/<mode>-<timestamp>/behavior_report.txt` (sectioned human-readable report)
+- `log/irc-harness/<mode>-<timestamp>/summary.json` (includes `mode`, `engine`, `model`, `ollama_url`)
 - plus bot process logs: `burt.log`, `treb.log`
 
 The harness exits non-zero when evaluator checks fail.

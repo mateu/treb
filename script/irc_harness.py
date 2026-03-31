@@ -13,6 +13,7 @@ Writes readable artifacts under: log/irc-harness/<timestamp>/
 from __future__ import annotations
 
 import asyncio
+import argparse
 import contextlib
 import dataclasses
 import datetime as dt
@@ -27,6 +28,9 @@ from typing import Dict, List, Optional, Set, Tuple
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 DEFAULT_CHANNEL = "#lab"
+
+HARNESS_MODE_DETERMINISTIC = "deterministic"
+HARNESS_MODE_REAL = "real"
 
 
 def ts() -> str:
@@ -44,6 +48,44 @@ class IRCEvent:
     nick: str = ""
     target: str = ""
     text: str = ""
+
+
+@dataclasses.dataclass
+class HarnessConfig:
+    mode: str
+    engine: str
+    model: str
+    ollama_url: str
+    start_fake_ollama: bool
+
+
+def resolve_config(argv: Optional[List[str]] = None) -> HarnessConfig:
+    parser = argparse.ArgumentParser(description="Run local IRC integration harness.")
+    parser.add_argument(
+        "--mode",
+        choices=[HARNESS_MODE_DETERMINISTIC, HARNESS_MODE_REAL],
+        default=os.environ.get("IRC_HARNESS_MODE", HARNESS_MODE_DETERMINISTIC),
+        help="Harness mode: deterministic (fake Ollama, default) or real (real model backend).",
+    )
+    args = parser.parse_args(argv)
+
+    mode = args.mode
+    if mode == HARNESS_MODE_DETERMINISTIC:
+        return HarnessConfig(
+            mode=mode,
+            engine="Ollama",
+            model="fake-kimi",
+            ollama_url="",
+            start_fake_ollama=True,
+        )
+
+    return HarnessConfig(
+        mode=mode,
+        engine=os.environ.get("IRC_HARNESS_REAL_ENGINE", os.environ.get("ENGINE", "Ollama")),
+        model=os.environ.get("IRC_HARNESS_REAL_MODEL", os.environ.get("MODEL", "llama3.2:3b")),
+        ollama_url=os.environ.get("IRC_HARNESS_REAL_OLLAMA_URL", os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")),
+        start_fake_ollama=False,
+    )
 
 
 class ClientState:
@@ -401,13 +443,13 @@ async def terminate_process(proc: asyncio.subprocess.Process, name: str, transcr
         await proc.wait()
 
 
-def build_bot_env(bot: str, channel: str, irc_host: str, ollama_port: int, db_file: pathlib.Path) -> Dict[str, str]:
+def build_bot_env(bot: str, channel: str, irc_host: str, db_file: pathlib.Path, cfg: HarnessConfig) -> Dict[str, str]:
     env = dict(os.environ)
     env.update(
         {
-            "ENGINE": "Ollama",
-            "MODEL": "fake-kimi",
-            "OLLAMA_URL": f"http://127.0.0.1:{ollama_port}",
+            "ENGINE": cfg.engine,
+            "MODEL": cfg.model,
+            "OLLAMA_URL": cfg.ollama_url,
             "IRC_SERVER": irc_host,
             "IRC_CHANNELS": channel,
             "IRC_NICKNAME": bot,
@@ -637,7 +679,9 @@ def build_conversation_log(events: List[IRCEvent], notes: List[str], channel: st
 
 
 async def main() -> int:
-    run_dir = ROOT / "log" / "irc-harness" / now_slug()
+    cfg = resolve_config()
+
+    run_dir = ROOT / "log" / "irc-harness" / f"{cfg.mode}-{now_slug()}"
     run_dir.mkdir(parents=True, exist_ok=True)
 
     transcript_lines: List[str] = []
@@ -645,8 +689,10 @@ async def main() -> int:
     all_events: List[IRCEvent] = []
 
     irc = MiniIRCServer("127.0.0.1", 6667, transcript_lines, event_q)
-    ollama_port = pick_free_port()
-    ollama = FakeOllama("127.0.0.1", ollama_port, transcript_lines)
+    fake_ollama_port = pick_free_port() if cfg.start_fake_ollama else None
+    if fake_ollama_port is not None:
+        cfg.ollama_url = f"http://127.0.0.1:{fake_ollama_port}"
+    fake_ollama = FakeOllama("127.0.0.1", fake_ollama_port, transcript_lines) if cfg.start_fake_ollama else None
     human = HumanClient("127.0.0.1", 6667, "Alice", transcript_lines, event_q)
 
     burt_log = run_dir / "burt.log"
@@ -656,13 +702,17 @@ async def main() -> int:
     treb_proc = None
 
     try:
+        transcript_lines.append(
+            f"[{ts()}] SYS harness mode={cfg.mode} engine={cfg.engine} model={cfg.model} ollama_url={cfg.ollama_url}"
+        )
         await irc.start()
-        await ollama.start()
+        if fake_ollama:
+            await fake_ollama.start()
         await human.connect()
         await human.join(DEFAULT_CHANNEL)
 
-        burt_env = build_bot_env("Burt", DEFAULT_CHANNEL, "127.0.0.1", ollama_port, run_dir / "burt-harness.sqlite")
-        treb_env = build_bot_env("Treb", DEFAULT_CHANNEL, "127.0.0.1", ollama_port, run_dir / "treb-harness.sqlite")
+        burt_env = build_bot_env("Burt", DEFAULT_CHANNEL, "127.0.0.1", run_dir / "burt-harness.sqlite", cfg)
+        treb_env = build_bot_env("Treb", DEFAULT_CHANNEL, "127.0.0.1", run_dir / "treb-harness.sqlite", cfg)
 
         burt_fh = burt_log.open("wb")
         treb_fh = treb_log.open("wb")
@@ -717,7 +767,8 @@ async def main() -> int:
         await terminate_process(burt_proc, "Burt", transcript_lines)
         await terminate_process(treb_proc, "Treb", transcript_lines)
         await human.close()
-        await ollama.close()
+        if fake_ollama:
+            await fake_ollama.close()
         await irc.close()
         burt_fh.close()
         treb_fh.close()
@@ -729,7 +780,8 @@ async def main() -> int:
         if treb_proc:
             await terminate_process(treb_proc, "Treb", transcript_lines)
         await human.close()
-        await ollama.close()
+        if fake_ollama:
+            await fake_ollama.close()
         await irc.close()
         (run_dir / "transcript.log").write_text("\n".join(transcript_lines) + "\n", encoding="utf-8")
         raise
@@ -751,6 +803,10 @@ async def main() -> int:
 
     summary = {
         "ok": ok,
+        "mode": cfg.mode,
+        "engine": cfg.engine,
+        "model": cfg.model,
+        "ollama_url": cfg.ollama_url,
         "run_dir": str(run_dir),
         "transcript": str(transcript_path),
         "evaluation": str(eval_path),
