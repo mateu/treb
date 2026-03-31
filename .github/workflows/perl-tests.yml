@@ -1,0 +1,41 @@
+name: Perl tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Perl
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.38'
+
+      - name: Install dependencies
+        run: cpanm --quiet --notest --installdeps .
+
+      - name: Run unit tests (fast loop)
+        run: |
+          set -euo pipefail
+          tests=$(ls t/*.t | grep -v 't/irc_harness_deterministic.t' || true)
+          if [ -n "$tests" ]; then
+            prove -lr $tests
+          fi
+
+      - name: Run deterministic IRC harness wrapper test
+        env:
+          RUN_IRC_HARNESS_DETERMINISTIC: '1'
+        run: prove -lv t/irc_harness_deterministic.t
+
+      - name: Upload IRC harness artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: irc-harness-logs
+          path: log/irc-harness/
+          if-no-files-found: ignore
