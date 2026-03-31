@@ -25,10 +25,11 @@ What it does:
 4. Launches a simulated human IRC client (`Alice`) in the same channel.
 5. Runs scripted scenarios:
    - Burt joins first, then Treb joins.
-   - Human sends substantive prompts to both bots.
+   - Human runs an addressed split prompt to Burt and Treb (addressed bot should reply; non-addressed should not pile on).
    - Human issues `:time` command (command path check).
    - Human asks Burt to prompt Treb (bounded bot-to-bot exchange).
-6. Produces transcript + lightweight guardrail evaluation (shape checks, not exact prose matching).
+   - Evaluator checks explicit join order/greet expectation and repeated-line spam guardrail.
+6. Produces transcript + readable behavior artifacts with guardrail evaluation (shape checks, not exact prose matching).
 
 Run it:
 
@@ -38,8 +39,10 @@ script/run-local-irc-harness.sh
 
 Artifacts land under:
 
-- `log/irc-harness/<timestamp>/transcript.log`
-- `log/irc-harness/<timestamp>/evaluation.txt`
+- `log/irc-harness/<timestamp>/transcript.log` (full low-level trace)
+- `log/irc-harness/<timestamp>/conversation.log` (high-value joins/scenario markers/messages/evaluator notes)
+- `log/irc-harness/<timestamp>/evaluation.txt` (PASS/FAIL checks)
+- `log/irc-harness/<timestamp>/behavior_report.txt` (sectioned human-readable report)
 - `log/irc-harness/<timestamp>/summary.json`
 - plus bot process logs: `burt.log`, `treb.log`
 

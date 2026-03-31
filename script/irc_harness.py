@@ -367,6 +367,10 @@ def parse_privmsg(raw: str) -> Optional[IRCEvent]:
     return IRCEvent(kind="privmsg", raw=raw, nick=nick, target=target, text=text)
 
 
+def marker(text: str) -> IRCEvent:
+    return IRCEvent(kind="marker", raw=text, text=text)
+
+
 async def wait_for_join(q: asyncio.Queue[IRCEvent], nick: str, timeout: float = 20.0) -> IRCEvent:
     end = asyncio.get_running_loop().time() + timeout
     while True:
@@ -432,8 +436,29 @@ def build_bot_env(bot: str, channel: str, irc_host: str, ollama_port: int, db_fi
     return env
 
 
-def evaluate(events: List[IRCEvent], channel: str) -> Tuple[bool, List[str]]:
+def _normalize_line(text: str) -> str:
+    return re.sub(r"\s+", " ", text.strip().lower())
+
+
+def _dedupe_privmsg_echoes(events: List[IRCEvent]) -> List[IRCEvent]:
+    out: List[IRCEvent] = []
+    last_key: Optional[Tuple[str, str, str]] = None
+    for ev in events:
+        if ev.kind == "privmsg":
+            key = (ev.nick, ev.target, ev.text)
+            if key == last_key:
+                continue
+            last_key = key
+        else:
+            last_key = None
+        out.append(ev)
+    return out
+
+
+def evaluate(events: List[IRCEvent], channel: str) -> Tuple[bool, List[str], List[str]]:
     notes: List[str] = []
+    report: List[str] = []
+    events = _dedupe_privmsg_echoes(events)
     bot_msgs = [e for e in events if e.kind == "privmsg" and e.target == channel and e.nick in {"Burt", "Treb"}]
     human_msgs = [e for e in events if e.kind == "privmsg" and e.nick == "Alice"]
     joins = [e for e in events if e.kind == "join"]
@@ -448,6 +473,37 @@ def evaluate(events: List[IRCEvent], channel: str) -> Tuple[bool, List[str]]:
     else:
         notes.append("PASS no blank bot outputs")
 
+    report.append("Join behavior")
+    report.append("-------------")
+
+    join_order = [e.nick for e in joins if e.nick in {"Burt", "Treb"}]
+    if len(join_order) >= 2 and join_order[0] == "Burt" and join_order[1] == "Treb":
+        notes.append("PASS join order explicit: Burt first, Treb second")
+    else:
+        ok = False
+        notes.append(f"FAIL join order expected [Burt, Treb], observed {join_order[:2]}")
+
+    join_index_treb = next((i for i, e in enumerate(events) if e.kind == "join" and e.nick == "Treb"), None)
+    greeted = False
+    if join_index_treb is not None:
+        for e in events[join_index_treb + 1 : join_index_treb + 15]:
+            if e.kind == "privmsg" and e.nick == "Burt" and e.target == channel:
+                greeted = True
+                break
+    if greeted:
+        notes.append("PASS Burt greeted soon after Treb joined")
+    else:
+        ok = False
+        notes.append("FAIL did not observe Burt greeting after Treb join")
+
+    for line in notes:
+        if line.startswith(("PASS join order", "FAIL join order", "PASS Burt greeted", "FAIL did not observe Burt")):
+            report.append(f"- {line}")
+
+    report.append("")
+    report.append("Addressed human replies")
+    report.append("----------------------")
+
     for bot in ("Burt", "Treb"):
         count = sum(1 for e in bot_msgs if e.nick == bot)
         if count < 1:
@@ -456,8 +512,53 @@ def evaluate(events: List[IRCEvent], channel: str) -> Tuple[bool, List[str]]:
         else:
             notes.append(f"PASS {bot} produced {count} channel replies")
 
-    # Guardrail: bounded bot-to-bot exchange per bot_reply_max_turns=1
-    # Treb should not chain endless replies to Burt.
+    split_cases = [
+        ("Burt", "Treb", "Burt, give one practical debugging habit for flaky IRC bots."),
+        ("Treb", "Burt", "Treb, how would you triage a noisy regression transcript quickly?"),
+    ]
+    for addressed, other, prompt in split_cases:
+        prompt_idx = next(
+            (i for i, e in enumerate(events) if e.kind == "privmsg" and e.nick == "Alice" and e.text == prompt),
+            None,
+        )
+        if prompt_idx is None:
+            ok = False
+            notes.append(f"FAIL addressed split missing prompt: {prompt}")
+            report.append(f"- FAIL missing prompt for {addressed}")
+            continue
+        next_human = next(
+            (i for i, e in enumerate(events[prompt_idx + 1 :], start=prompt_idx + 1) if e.kind == "privmsg" and e.nick == "Alice"),
+            len(events),
+        )
+        window = [
+            e
+            for e in events[prompt_idx + 1 : next_human]
+            if e.kind == "privmsg" and e.target == channel and e.nick in {"Burt", "Treb"}
+        ]
+        addressed_replies = [e for e in window if e.nick == addressed]
+        other_replies = [e for e in window if e.nick == other]
+
+        if addressed_replies:
+            notes.append(f"PASS addressed prompt: {addressed} replied ({len(addressed_replies)})")
+        else:
+            ok = False
+            notes.append(f"FAIL addressed prompt: {addressed} did not reply")
+
+        if len(other_replies) > 1:
+            ok = False
+            notes.append(f"FAIL addressed prompt: {other} piled on ({len(other_replies)})")
+        elif len(other_replies) == 1:
+            notes.append(f"PASS addressed prompt: {other} gave only a single non-piling interjection")
+        else:
+            notes.append(f"PASS addressed prompt: {other} stayed quiet")
+
+        report.append(
+            f"- Prompt to {addressed}: addressed_replies={len(addressed_replies)} other_replies={len(other_replies)}"
+        )
+
+    report.append("")
+    report.append("Bot-to-bot exchange")
+    report.append("-------------------")
     b2b_pairs = 0
     for i in range(1, len(events)):
         prev, cur = events[i - 1], events[i]
@@ -469,28 +570,70 @@ def evaluate(events: List[IRCEvent], channel: str) -> Tuple[bool, List[str]]:
         notes.append(f"FAIL bot-to-bot exchange too long ({b2b_pairs} adjacent alternations)")
     else:
         notes.append(f"PASS bounded bot-to-bot exchange ({b2b_pairs} alternations)")
+    report.append(notes[-1].replace("PASS ", "- ").replace("FAIL ", "- "))
 
+    report.append("")
+    report.append("Command path")
+    report.append("------------")
     time_cmd_seen = any(e.nick in {"Burt", "Treb"} and "Current local time:" in e.text for e in bot_msgs)
     if time_cmd_seen:
         notes.append("PASS command path still works (:time observed)")
     else:
         ok = False
         notes.append("FAIL expected :time command response")
+    report.append(notes[-1].replace("PASS ", "- ").replace("FAIL ", "- "))
 
-    join_index_treb = next((i for i, e in enumerate(events) if e.kind == "join" and e.nick == "Treb"), None)
-    greeted = False
-    if join_index_treb is not None:
-        for e in events[join_index_treb + 1 : join_index_treb + 15]:
-            if e.kind == "privmsg" and e.nick == "Burt" and e.target == channel:
-                greeted = True
-                break
-    if greeted:
-        notes.append("PASS Burt posted soon after Treb joined (join-greet likely fired)")
+    report.append("")
+    report.append("Repeated-line check")
+    report.append("-------------------")
+    repeated_lines: List[str] = []
+    for bot in ("Burt", "Treb"):
+        counts: Dict[str, int] = {}
+        for msg in (e.text for e in bot_msgs if e.nick == bot):
+            norm = _normalize_line(msg)
+            if len(norm) < 20 or not re.search(r"[a-z]", norm):
+                continue
+            counts[norm] = counts.get(norm, 0) + 1
+        bad = [(line, n) for line, n in counts.items() if n >= 4]
+        if bad:
+            ok = False
+            for line, n in bad:
+                repeated_lines.append(f"{bot} repeated {n}x: {line}")
+        else:
+            notes.append(f"PASS no repeated substantive-line spam from {bot}")
+
+    if repeated_lines:
+        for item in repeated_lines:
+            notes.append(f"FAIL repetition: {item}")
+            report.append(f"- FAIL {item}")
     else:
-        ok = False
-        notes.append("FAIL did not observe Burt message soon after Treb join")
+        report.append("- PASS no substantive line repeated >=4 times by a bot")
 
-    return ok, notes
+    report.append("")
+    report.append("Anomalies")
+    report.append("---------")
+    fail_lines = [n for n in notes if n.startswith("FAIL")]
+    if fail_lines:
+        report.extend(f"- {n}" for n in fail_lines)
+    else:
+        report.append("- none observed")
+
+    return ok, notes, report
+
+
+def build_conversation_log(events: List[IRCEvent], notes: List[str], channel: str) -> List[str]:
+    out: List[str] = []
+    for ev in _dedupe_privmsg_echoes(events):
+        if ev.kind == "join" and ev.nick in {"Burt", "Treb", "Alice"}:
+            out.append(f"JOIN {ev.nick} -> {ev.target}")
+        elif ev.kind == "marker":
+            out.append(f"SCENARIO {ev.text}")
+        elif ev.kind == "privmsg" and ev.target == channel and ev.nick in {"Alice", "Burt", "Treb"}:
+            out.append(f"MSG {ev.nick}: {ev.text}")
+    out.append("")
+    out.append("EVALUATOR")
+    out.extend(f"- {n}" for n in notes)
+    return out
 
 
 async def main() -> int:
@@ -551,12 +694,16 @@ async def main() -> int:
 
         await asyncio.sleep(2.0)
 
+        all_events.append(marker("addressed-human split prompt -> Burt"))
         await human.say(DEFAULT_CHANNEL, "Burt, give one practical debugging habit for flaky IRC bots.")
-        await asyncio.sleep(2.5)
+        await asyncio.sleep(4.0)
+        all_events.append(marker("addressed-human split prompt -> Treb"))
         await human.say(DEFAULT_CHANNEL, "Treb, how would you triage a noisy regression transcript quickly?")
-        await asyncio.sleep(2.5)
+        await asyncio.sleep(4.0)
+        all_events.append(marker("command-path prompt"))
         await human.say(DEFAULT_CHANNEL, "time:")
         await asyncio.sleep(2.5)
+        all_events.append(marker("bot-to-bot trigger prompt"))
         await human.say(DEFAULT_CHANNEL, "Burt, ask Treb one concise bot-to-bot test question.")
 
         deadline = asyncio.get_running_loop().time() + 18
@@ -594,15 +741,21 @@ async def main() -> int:
     transcript_path = run_dir / "transcript.log"
     transcript_path.write_text("\n".join(transcript_lines) + "\n", encoding="utf-8")
 
-    ok, notes = evaluate(all_events, DEFAULT_CHANNEL)
+    ok, notes, report = evaluate(all_events, DEFAULT_CHANNEL)
     eval_path = run_dir / "evaluation.txt"
     eval_path.write_text("\n".join(notes) + "\n", encoding="utf-8")
+    convo_path = run_dir / "conversation.log"
+    convo_path.write_text("\n".join(build_conversation_log(all_events, notes, DEFAULT_CHANNEL)) + "\n", encoding="utf-8")
+    behavior_report_path = run_dir / "behavior_report.txt"
+    behavior_report_path.write_text("\n".join(report) + "\n", encoding="utf-8")
 
     summary = {
         "ok": ok,
         "run_dir": str(run_dir),
         "transcript": str(transcript_path),
         "evaluation": str(eval_path),
+        "conversation_log": str(convo_path),
+        "behavior_report": str(behavior_report_path),
         "events": len(all_events),
     }
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
