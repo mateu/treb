@@ -319,6 +319,14 @@ sub _persona_summary_text {
   );
 }
 
+sub _persona_trait_text {
+  my ($self, $trait) = @_;
+  return "Unknown persona trait. Valid: " . join(', ', @PERSONA_TRAIT_ORDER)
+    unless defined $trait && exists $PERSONA_TRAIT_META{$trait};
+  my $value = $self->_persona_trait($trait);
+  return "$trait=$value";
+}
+
 sub _set_persona_trait {
   my ($self, $trait, $value) = @_;
   return (0, "Unknown persona trait. Valid: " . join(', ', @PERSONA_TRAIT_ORDER))
@@ -1626,6 +1634,22 @@ event irc_public => sub {
   if ($msg =~ /^([A-Za-z0-9_\-]+):\s+persona\s+set\s+(\S+)\s+(\S+)\s*$/i) {
     return unless lc($1) eq lc($self->get_nickname);
     my ($ok, $line) = $self->_set_persona_trait($2, $3);
+    $self->_send_to_channel($channel, $line);
+    return;
+  }
+
+  if ($msg =~ /^([A-Za-z0-9_\-]+):\s+persona\s+get\s+(\S+)\s*$/i) {
+    return unless lc($1) eq lc($self->get_nickname);
+    my $line = $self->_persona_trait_text($2);
+    $self->_send_to_channel($channel, $line);
+    return;
+  }
+
+  if ($msg =~ /^([A-Za-z0-9_\-]+):\s+persona\s+(\S+)\s*$/i) {
+    return unless lc($1) eq lc($self->get_nickname);
+    my $token = lc($2);
+    return if $token eq 'full' || $token eq 'set' || $token eq 'get';
+    my $line = $self->_persona_trait_text($2);
     $self->_send_to_channel($channel, $line);
     return;
   }
