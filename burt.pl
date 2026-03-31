@@ -348,7 +348,7 @@ sub _set_persona_trait {
 sub _apply_persona_preset {
   my ($self, $value) = @_;
   if (defined $value) {
-    $value =~ s/[ -]+/ /g;
+    $value =~ s/[-\x7f]+/ /g;
     $value =~ s/^\s+|\s+$//g;
   }
   return (0, 'Preset value must be a non-negative integer.')
@@ -357,14 +357,62 @@ sub _apply_persona_preset {
   my $bot = $self->_bot_name_slug;
   my $n = int($value);
   my %targets;
+
+  # Stepped preset scaling: 0=silent, 1-5=low-to-mid, 6-10=high, 11+=max
   if ($n == 0) {
     %targets = map { $_ => 0 } @PERSONA_TRAIT_ORDER;
   }
-  else {
+  elsif ($n <= 5) {
+    # Low-to-mid: pct scales 10-50, turns 1-5, window 9-45
+    my $pct = $n * 10;
     for my $trait (@PERSONA_TRAIT_ORDER) {
       my $kind = $PERSONA_TRAIT_META{$trait}{kind} || '';
       if ($kind eq 'pct') {
-        # Keep non_substantive_allow_pct conservative; boost everything else
+        if ($trait eq 'non_substantive_allow_pct') {
+          $targets{$trait} = $self->_persona_trait('non_substantive_allow_pct') // 0;
+        } else {
+          $targets{$trait} = $pct;
+        }
+      }
+      elsif ($trait eq 'bot_reply_max_turns') {
+        $targets{$trait} = $n;
+      }
+      elsif ($trait eq 'public_thread_window_seconds') {
+        $targets{$trait} = $n * 9;
+      }
+      else {
+        $targets{$trait} = $self->_clamp_persona_value($trait, $n);
+      }
+    }
+  }
+  elsif ($n <= 10) {
+    # High: pct scales 60-100, turns 6-10, window 48-60
+    my $pct = 50 + ($n - 5) * 10;
+    for my $trait (@PERSONA_TRAIT_ORDER) {
+      my $kind = $PERSONA_TRAIT_META{$trait}{kind} || '';
+      if ($kind eq 'pct') {
+        if ($trait eq 'non_substantive_allow_pct') {
+          $targets{$trait} = $self->_persona_trait('non_substantive_allow_pct') // 0;
+        } else {
+          $targets{$trait} = $pct;
+        }
+      }
+      elsif ($trait eq 'bot_reply_max_turns') {
+        $targets{$trait} = $n;
+      }
+      elsif ($trait eq 'public_thread_window_seconds') {
+        $targets{$trait} = 45 + ($n - 5) * 3;
+      }
+      else {
+        $targets{$trait} = $self->_clamp_persona_value($trait, $n);
+      }
+    }
+  }
+  else {
+    # Max (11+): everything at 100 except non_substantive
+    for my $trait (@PERSONA_TRAIT_ORDER) {
+      my $kind = $PERSONA_TRAIT_META{$trait}{kind} || '';
+      if ($kind eq 'pct') {
         if ($trait eq 'non_substantive_allow_pct') {
           $targets{$trait} = $self->_persona_trait('non_substantive_allow_pct') // 0;
         } else {
