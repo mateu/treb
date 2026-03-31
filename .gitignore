@@ -9,3 +9,4 @@ local/
 treb.env
 treb.sqlite
 burt.env
+log/irc-harness/

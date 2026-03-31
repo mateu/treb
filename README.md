@@ -10,6 +10,40 @@ Current baseline:
 
 This repo is the clean home for the bot, separate from the earlier Squirt/Koan testbed history.
 
+## Local IRC integration harness (Burt + Treb)
+
+A first-pass behavior-regression harness is available at:
+
+- `script/irc_harness.py`
+- wrapper: `script/run-local-irc-harness.sh`
+
+What it does:
+
+1. Starts a tiny local IRC server process on `127.0.0.1:6667`.
+2. Starts a fake Ollama-compatible local HTTP endpoint for deterministic model replies.
+3. Launches **Burt** and **Treb** as real `perl` processes with dedicated harness env + sqlite DBs.
+4. Launches a simulated human IRC client (`Alice`) in the same channel.
+5. Runs scripted scenarios:
+   - Burt joins first, then Treb joins.
+   - Human sends substantive prompts to both bots.
+   - Human issues `:time` command (command path check).
+   - Human asks Burt to prompt Treb (bounded bot-to-bot exchange).
+6. Produces transcript + lightweight guardrail evaluation (shape checks, not exact prose matching).
+
+Run it:
+
+```bash
+script/run-local-irc-harness.sh
+```
+
+Artifacts land under:
+
+- `log/irc-harness/<timestamp>/transcript.log`
+- `log/irc-harness/<timestamp>/evaluation.txt`
+- `log/irc-harness/<timestamp>/summary.json`
+- plus bot process logs: `burt.log`, `treb.log`
+
+The harness exits non-zero when evaluator checks fail.
 
 - `search: 2 Olaf Alders`
 
