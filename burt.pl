@@ -18,6 +18,11 @@
 
 use strict;
 use warnings;
+use lib 'lib';
+
+use Bot::MemoryStore;
+use Bot::Mission qw(load_mission_for_script);
+use Bot::Commands::Time qw(time_text_for_zone current_local_time_text);
 
 my @BOT_NAMES = qw(
   Botsworth Clanky Sparky Fizz Gizmo Pixel Blip Rusty Ziggy Turbo
@@ -51,115 +56,6 @@ my %PERSONA_TRAIT_META = (
 );
 my @PERSONA_TRAIT_ORDER = qw(join_greet_pct ambient_public_reply_pct public_thread_window_seconds bot_reply_pct bot_reply_max_turns non_substantive_allow_pct);
 
-# --- Conversation memory (SQLite) ---
-
-package MemoryStore {
-  use Moose;
-  use DBI;
-
-  has db_file => ( is => 'ro', default => sub { $ENV{DB_FILE} || 'ai-bot.db' } );
-  has _dbh => ( is => 'ro', lazy => 1, builder => '_build_dbh' );
-
-  sub _build_dbh {
-    my ($self) = @_;
-    my $dbh = DBI->connect('dbi:SQLite:dbname=' . $self->db_file, '', '', {
-      RaiseError => 1, sqlite_unicode => 1,
-    });
-    $dbh->do('CREATE TABLE IF NOT EXISTS conversations (
-      id INTEGER PRIMARY KEY, nick TEXT, message TEXT, response TEXT,
-      channel TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )');
-    $dbh->do('CREATE TABLE IF NOT EXISTS notes (
-      id INTEGER PRIMARY KEY, nick TEXT, content TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )');
-    $dbh->do('CREATE TABLE IF NOT EXISTS persona_settings (
-      id INTEGER PRIMARY KEY,
-      bot_name TEXT NOT NULL,
-      trait_key TEXT NOT NULL,
-      trait_value TEXT NOT NULL,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(bot_name, trait_key)
-    )');
-    return $dbh;
-  }
-
-  sub store_conversation {
-    my ($self, %a) = @_;
-    $self->_dbh->do(
-      'INSERT INTO conversations (nick, message, response, channel) VALUES (?,?,?,?)',
-      undef, @a{qw(nick message response channel)},
-    );
-  }
-
-  sub recall {
-    my ($self, $query, $limit) = @_;
-    $limit //= 5;
-    my $rows = $self->_dbh->selectall_arrayref(
-      'SELECT nick, message, response FROM conversations WHERE message LIKE ? OR response LIKE ? ORDER BY id DESC LIMIT ?',
-      { Slice => {} }, "%$query%", "%$query%", $limit,
-    );
-    return join("\n---\n", map { "<$_->{nick}> $_->{message}\n$_->{response}" } @$rows);
-  }
-
-  sub save_note {
-    my ($self, $nick, $content) = @_;
-    $self->_dbh->do('INSERT INTO notes (nick, content) VALUES (?,?)', undef, $nick, $content);
-  }
-
-  sub recall_notes {
-    my ($self, $nick, $query, $limit) = @_;
-    $limit //= 10;
-    my $rows;
-    if ($nick) {
-      $rows = $self->_dbh->selectall_arrayref(
-        'SELECT id, nick, content FROM notes WHERE nick = ? AND content LIKE ? ORDER BY id DESC LIMIT ?',
-        { Slice => {} }, $nick, "%$query%", $limit,
-      );
-    } else {
-      $rows = $self->_dbh->selectall_arrayref(
-        'SELECT id, nick, content FROM notes WHERE content LIKE ? ORDER BY id DESC LIMIT ?',
-        { Slice => {} }, "%$query%", $limit,
-      );
-    }
-    return join("\n", map { "#$_->{id} [$_->{nick}] $_->{content}" } @$rows);
-  }
-
-  sub get_persona_settings {
-    my ($self, $bot_name) = @_;
-    my $rows = $self->_dbh->selectall_arrayref(
-      'SELECT trait_key, trait_value FROM persona_settings WHERE bot_name = ? ORDER BY trait_key',
-      { Slice => {} }, $bot_name,
-    );
-    return { map { $_->{trait_key} => $_->{trait_value} } @$rows };
-  }
-
-  sub set_persona_setting {
-    my ($self, $bot_name, $trait_key, $trait_value) = @_;
-    $self->_dbh->do(
-      q{INSERT INTO persona_settings (bot_name, trait_key, trait_value, updated_at)
-        VALUES (?,?,?,CURRENT_TIMESTAMP)
-        ON CONFLICT(bot_name, trait_key)
-        DO UPDATE SET trait_value=excluded.trait_value, updated_at=CURRENT_TIMESTAMP},
-      undef, $bot_name, $trait_key, "$trait_value",
-    );
-  }
-
-  sub update_note {
-    my ($self, $id, $content) = @_;
-    my $rows = $self->_dbh->do('UPDATE notes SET content = ? WHERE id = ?', undef, $content, $id);
-    return $rows > 0;
-  }
-
-  sub delete_note {
-    my ($self, $id) = @_;
-    my $rows = $self->_dbh->do('DELETE FROM notes WHERE id = ?', undef, $id);
-    return $rows > 0;
-  }
-
-  __PACKAGE__->meta->make_immutable;
-}
-
 # --- The IRC Bot ---
 
 package BurtBot;
@@ -182,7 +78,7 @@ channels ( $ENV{IRC_CHANNELS} ? split(/,/, $ENV{IRC_CHANNELS}) : '#ai' );
 
 has memory => (
   is => 'ro', lazy => 1, traits => ['NoGetopt'],
-  default => sub { MemoryStore->new },
+  default => sub { Bot::MemoryStore->new },
 );
 
 has _mcp => ( is => 'rw', traits => ['NoGetopt'] );
@@ -210,28 +106,12 @@ has _rate_limit_wait => (
 
 sub _time_text_for_zone {
   my ($self, $zone) = @_;
-  $zone ||= 'America/Denver';
-  local $ENV{TZ} = $zone;
-  my @lt = localtime(time());
-  my @days = qw(Sunday Monday Tuesday Wednesday Thursday Friday Saturday);
-  my @months = qw(January February March April May June July August September October November December);
-  my $wday = $days[$lt[6]];
-  my $month = $months[$lt[4]];
-  my $mday = $lt[3];
-  my $year = $lt[5] + 1900;
-  my $hour24 = $lt[2];
-  my $min = $lt[1];
-  my $ampm = $hour24 >= 12 ? 'PM' : 'AM';
-  my $hour12 = $hour24 % 12;
-  $hour12 = 12 if $hour12 == 0;
-  my $tz = POSIX::strftime('%Z', localtime(time())) || $zone;
-  return sprintf('%s, %s %d, %d, %d:%02d %s %s (%s)',
-    $wday, $month, $mday, $year, $hour12, $min, $ampm, $tz, $zone);
+  return Bot::Commands::Time::time_text_for_zone($zone);
 }
 
 sub _current_local_time_text {
   my ($self) = @_;
-  return $self->_time_text_for_zone('America/Denver');
+  return Bot::Commands::Time::current_local_time_text();
 }
 
 sub _clamp_persona_value {
@@ -813,49 +693,16 @@ async sub _setup_raider {
   my $model = $engine->model;
   my $provider = ref($engine) =~ s/.*:://r;
   my $chan_list = join(', ', $self->get_channels);
-  my $mission_file = __FILE__;
-  $mission_file =~ s/\.pl$/.mission.txt/;
-  open my $mf, '<', $mission_file or die "Unable to read mission file $mission_file: $!";
-  my $mission = do { local $/; <$mf> };
-  close $mf;
-
-  my $base_persona_file = __FILE__;
-  $base_persona_file =~ s{[^/]+\.pl$}{base.persona.txt};
-  my $bot_persona_file = __FILE__;
-  $bot_persona_file =~ s/\.pl$/.persona.txt/;
-
-  if ($mission =~ /\{\{BASE_PERSONA\}\}/) {
-    open my $bf, '<', $base_persona_file
-      or die "Mission template references {{BASE_PERSONA}} but $base_persona_file is missing: $!";
-    my $base_persona = do { local $/; <$bf> };
-    close $bf;
-    $mission =~ s/\{\{BASE_PERSONA\}\}/$base_persona/g;
-  }
-
-  if ($mission =~ /\{\{BOT_PERSONA\}\}/) {
-    open my $pf, '<', $bot_persona_file
-      or die "Mission template references {{BOT_PERSONA}} but $bot_persona_file is missing: $!";
-    my $bot_persona = do { local $/; <$pf> };
-    close $pf;
-    $mission =~ s/\{\{BOT_PERSONA\}\}/$bot_persona/g;
-  }
-
-  my %mission_vars = (
-    '{{NICK}}'     => $nick,
-    '{{OWNER}}'    => $OWNER,
-    '{{MODEL}}'    => $model,
-    '{{PROVIDER}}' => $provider,
-    '{{CHANNELS}}' => $chan_list,
-    '{{MAX_LINE}}' => $MAX_LINE,
+  my $mission = Bot::Mission::load_mission_for_script(
+    script_file   => __FILE__,
+    nick          => $nick,
+    owner         => $OWNER,
+    model         => $model,
+    provider      => $provider,
+    channels      => $chan_list,
+    max_line      => $MAX_LINE,
+    mission_extra => $ENV{SYSTEM_PROMPT},
   );
-  for my $k (keys %mission_vars) {
-    my $v = $mission_vars{$k};
-    $mission =~ s/\Q$k\E/$v/g;
-  }
-
-  if (my $extra = $ENV{SYSTEM_PROMPT}) {
-    $mission .= "\n$extra\n";
-  }
 
   my $raider = Langertha::Raider->new(
     engine             => $engine,
