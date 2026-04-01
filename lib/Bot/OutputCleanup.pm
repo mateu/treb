@@ -65,6 +65,8 @@ sub is_non_substantive_output {
   return 1 if $lc =~ /^(?:ok|okay|kk|noted|understood|got it|roger|sure|fine|yep|yeah|...|\.)$/;
   return 1 if $lc =~ /^\((?:[^()]|\([^)]*\)){0,120}\)$/ && $lc !~ /[a-z0-9].*[a-z0-9].*[a-z0-9]/;
   return 1 if $lc =~ /^(?:\*.*\*|_.*_)$/ && length($lc) < 80;
+  return 1 if $lc =~ /^\(?\s*silent\s*[-:]/;
+  return 1 if $lc =~ /\b(?:bot-to-bot banter|no human involved|continuing .* without human involvement|staying quiet|remain(?:ing)? quiet|stays quiet|stays silent|without comment|notes the pattern|not speaking)\b/ && length($lc) < 240;
   return 1 if $lc =~ /^(?:silently|quietly|softly|calmly|gently|watchfully|wordlessly|still|silent|quiet)\b/ && length($lc) < 120;
   return 1 if $lc =~ /\b(?:watch(?:ing)?|listen(?:ing)?|lurking|observ(?:e|ing)|waiting|standing by)\b/ && length($lc) < 120 && $lc !~ /https?:\/\//;
   return 1 if $lc =~ /\b(?:rafters|tuning|humming|ambient|background)\b/ && length($lc) < 120;

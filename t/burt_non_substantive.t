@@ -14,6 +14,8 @@ ok($bot->_is_trivial_parenthetical('(…)'), 'unicode ellipsis parenthetical is 
 ok($bot->_is_trivial_parenthetical('(pause)'), 'pause parenthetical is trivial');
 ok(!$bot->_is_trivial_parenthetical('(the chickens are in, by the way)'), 'real content parenthetical not trivial');
 ok($bot->_is_non_substantive_output('( ... )'), 'trivial parenthetical is non-substantive');
+ok($bot->_is_non_substantive_output('(Silent - Treb\'s greeting is bot-to-bot banter, no human involved.)'), 'silent policy narration is non-substantive');
+ok($bot->_is_non_substantive_output('(Silent - continuing bot-to-bot banter without human involvement.)'), 'continued silent-policy narration is non-substantive');
 ok(!$bot->_is_non_substantive_output('mateu: the chickens are in ok.'), 'substantive line not non-substantive');
 
 done_testing;
