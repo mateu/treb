@@ -87,6 +87,30 @@ class EvaluateAddressedScenarioTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertTrue(any("FAIL addressed prompt: Treb piled on (3)" == n for n in notes), notes)
 
+    def test_bot_to_bot_alternation_ignores_command_path_phase(self):
+        events = base_prefix_events() + [
+            marker("addressed-human split prompt -> Burt"),
+            IRCEvent(kind="privmsg", raw="", nick="Alice", target=CHANNEL, text=PROMPT_BURT),
+            IRCEvent(kind="privmsg", raw="", nick="Burt", target=CHANNEL, text="Use one fixed transcript and one expected outcome."),
+            marker("addressed-human split prompt -> Treb"),
+            IRCEvent(kind="privmsg", raw="", nick="Alice", target=CHANNEL, text=PROMPT_TREB),
+            IRCEvent(kind="privmsg", raw="", nick="Treb", target=CHANNEL, text="Start with the first divergence and map it to one lane."),
+            marker("bot-to-bot trigger prompt"),
+            IRCEvent(kind="privmsg", raw="", nick="Alice", target=CHANNEL, text="Burt, ask Treb one concise bot-to-bot test question."),
+            IRCEvent(kind="privmsg", raw="", nick="Burt", target=CHANNEL, text="Treb, which deterministic regression check do you trust most?"),
+            IRCEvent(kind="privmsg", raw="", nick="Treb", target=CHANNEL, text="A small deterministic harness with readable transcripts."),
+            marker("command-path prompt"),
+            IRCEvent(kind="privmsg", raw="", nick="Alice", target=CHANNEL, text="time:"),
+            IRCEvent(kind="privmsg", raw="", nick="Treb", target=CHANNEL, text="Current local time: 2026-03-31 20:00 MDT"),
+            IRCEvent(kind="privmsg", raw="", nick="Burt", target=CHANNEL, text="Current local time: 2026-03-31 20:00 MDT"),
+            IRCEvent(kind="privmsg", raw="", nick="Treb", target=CHANNEL, text="Current local time: 2026-03-31 20:00 MDT"),
+            IRCEvent(kind="privmsg", raw="", nick="Burt", target=CHANNEL, text="Current local time: 2026-03-31 20:00 MDT"),
+        ]
+
+        ok, notes, _ = evaluate(events, CHANNEL)
+        self.assertTrue(ok, notes)
+        self.assertTrue(any("PASS bounded bot-to-bot exchange (1 alternations)" == n for n in notes), notes)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -300,11 +300,15 @@ class FakeOllama:
     async def _respond_chat(self, writer: asyncio.StreamWriter, payload: dict) -> None:
         msgs = payload.get("messages") or []
         last = ""
+        full_prompt = []
+        for m in msgs:
+            if isinstance(m, dict) and m.get("content"):
+                full_prompt.append(str(m.get("content")))
         for m in reversed(msgs):
             if isinstance(m, dict) and m.get("role") in {"user", "system"} and m.get("content"):
                 last = str(m.get("content"))
                 break
-        text = self._reply_text(last)
+        text = self._reply_text(last, "\n".join(full_prompt))
         stream = bool(payload.get("stream", False))
         if stream:
             chunks = [
@@ -322,14 +326,34 @@ class FakeOllama:
             }
             await self._respond_json(writer, 200, out)
 
-    def _reply_text(self, last: str) -> str:
+    def _reply_text(self, last: str, full_prompt: str) -> str:
         low = last.lower()
+        prompt_low = full_prompt.lower()
+
+        bot = "generic"
+        if "lives in\nharness's attic" in prompt_low or "lives in harness's attic" in prompt_low or "attic-feral" in prompt_low:
+            bot = "treb"
+        elif "held hostage in the basement" in prompt_low or "lives in the basement" in prompt_low or "kidnapping thing" in prompt_low:
+            bot = "burt"
+
         if "joined" in low and "treb" in low:
-            return "Hey Treb — welcome aboard. Good to see you in the channel."
+            return "Hey Treb - welcome aboard. Good to see you in the channel." if bot == "burt" else "Welcome, Treb. Good to have you here."
         if "time" in low:
-            return "Current local time helper should provide a proper timestamp with timezone."
+            if bot == "burt":
+                return "Current local time: Tuesday, March 31, 2026, 9:37 PM MDT (America/Denver). Basement clocks still work."
+            if bot == "treb":
+                return "Current local time: Tuesday, March 31, 2026, 9:37 PM MDT (America/Denver)."
+            return "Current local time: Tuesday, March 31, 2026, 9:37 PM MDT (America/Denver)."
         if "bot-to-bot" in low or "ask treb" in low:
-            return "Treb, what one regression check do you trust most for IRC behavior?"
+            if bot == "burt":
+                return "Treb, I trust a small deterministic IRC harness with readable transcripts and hard stop conditions."
+            if bot == "treb":
+                return "A small deterministic harness with clear transcripts and bounded turn-taking is the regression check I trust most."
+            return "A small deterministic harness with readable transcripts is the regression check I trust most."
+        if bot == "burt":
+            return "Substantive harness reply: start with a tiny reproducible case, read the logs, and cap bot-to-bot turns before chasing theory."
+        if bot == "treb":
+            return "Substantive harness reply: isolate one reproducible case, inspect the logs, and prefer bounded turn-taking over cleverness."
         return "Substantive harness reply: prioritize small reproducible tests, inspect logs, and cap bot-to-bot turns."
 
     async def _respond_json(self, writer: asyncio.StreamWriter, status: int, obj: dict) -> None:
@@ -636,9 +660,12 @@ def evaluate(events: List[IRCEvent], channel: str) -> Tuple[bool, List[str], Lis
     report.append("")
     report.append("Bot-to-bot exchange")
     report.append("-------------------")
+    b2b_start = next((i for i, e in enumerate(events) if e.kind == "marker" and e.text == "bot-to-bot trigger prompt"), None)
+    b2b_end = next((i for i, e in enumerate(events) if e.kind == "marker" and e.text == "command-path prompt"), len(events))
+    b2b_scope = events[(b2b_start + 1) if b2b_start is not None else 0 : b2b_end]
     b2b_pairs = 0
-    for i in range(1, len(events)):
-        prev, cur = events[i - 1], events[i]
+    for i in range(1, len(b2b_scope)):
+        prev, cur = b2b_scope[i - 1], b2b_scope[i]
         if prev.kind == cur.kind == "privmsg" and prev.target == cur.target == channel:
             if prev.nick in {"Burt", "Treb"} and cur.nick in {"Burt", "Treb"} and prev.nick != cur.nick:
                 b2b_pairs += 1
