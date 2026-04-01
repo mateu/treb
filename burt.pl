@@ -866,6 +866,35 @@ sub _is_non_substantive_output {
   return Bot::OutputCleanup::is_non_substantive_output($text);
 }
 
+sub _is_repeated_parenthetical_output {
+  my ($self, $channel, $text) = @_;
+  return 0 unless defined $channel && length $channel;
+  return 0 unless defined $text;
+
+  my $t = $text;
+  $t =~ s/^\s+|\s+$//g;
+  return 0 unless length $t;
+  return 0 unless $t =~ /^\(.*\)$/s;
+
+  my $rows = eval {
+    $self->memory->_dbh->selectall_arrayref(
+      q{SELECT response FROM conversations
+         WHERE channel = ? AND response IS NOT NULL AND response != ''
+         ORDER BY id DESC LIMIT 3},
+      { Slice => {} }, $channel,
+    );
+  };
+  return 0 if $@ || ref($rows) ne 'ARRAY' || !@$rows;
+
+  my $last = $rows->[0]{response};
+  return 0 unless defined $last;
+  $last =~ s/^\s+|\s+$//g;
+  return 0 unless length $last;
+  return 0 unless $last =~ /^\(.*\)$/s;
+
+  return lc($last) eq lc($t) ? 1 : 0;
+}
+
 sub _send_to_channel {
   my ($self, $channel, $text) = @_;
   my @chunks;
@@ -1121,6 +1150,12 @@ sub _do_raid {
     return;
   }
 
+  if ($self->_is_repeated_parenthetical_output($channel, $answer)) {
+    $self->info("Suppressing repeated parenthetical output");
+    $self->_schedule_pending_buffers;
+    return;
+  }
+
   if ($self->_is_non_substantive_output($answer)) {
     my $non_substantive_allow_pct = $self->_persona_trait('non_substantive_allow_pct');
     if ($non_substantive_allow_pct > 0 && int(rand(100)) < $non_substantive_allow_pct) {
@@ -1259,7 +1294,7 @@ event irc_public => sub {
     return;
   }
 
-  if ($msg =~ /^([A-Za-z0-9_\-]+):\s+persona\s+set\s+(\S+)\s+(\S+)\s*$/i) {
+  if ($msg =~ /^([A-Za-z0-9_\-]+):\s+persona\s+set\s+(\S+)\s+(?:=\s*)?(\S+)\s*$/i) {
     return unless lc($1) eq lc($self->get_nickname);
     my ($ok, $line) = $self->_set_persona_trait($2, $3);
     $self->_send_to_channel($channel, $line);

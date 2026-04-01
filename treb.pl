@@ -1245,7 +1245,7 @@ event irc_public => sub {
     $self->info("Reset bert conversational turn count by human nick=$nick");
   }
 
-  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+)?(?:sum:\s*|:sum\s+)(https?:\/\/\S+)/i) {
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+sum\s+|sum:\s*|:sum\s+)(https?:\/\/\S+)/i) {
     return unless $self->_utility_command_matches_me($1);
     my $url = $2;
     my $result = $self->_summarize_url($url);
@@ -1253,13 +1253,13 @@ event irc_public => sub {
     return;
   }
 
-  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+)?(?::time\s*|time:\s*)$/i) {
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+time\s*|:time\s*|time:\s*)$/i) {
     return unless $self->_utility_command_matches_me($1);
     my $line = 'Current local time: ' . $self->_current_local_time_text . '.';
     $self->_send_to_channel($channel, $line);
     return;
   }
-  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+)?(?::dbstats\s*|dbstats:\s*)$/i) {
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+dbstats\s*|:dbstats\s*|dbstats:\s*)$/i) {
     return unless $self->_utility_command_matches_me($1);
     my $line = $self->_db_stats_text;
     $self->_send_to_channel($channel, $line);
@@ -1273,7 +1273,7 @@ event irc_public => sub {
     return;
   }
 
-  if ($msg =~ /^([A-Za-z0-9_\-]+):\s+persona\s+set\s+(\S+)\s+(\S+)\s*$/i) {
+  if ($msg =~ /^([A-Za-z0-9_\-]+):\s+persona\s+set\s+(\S+)\s+(?:=\s*)?(\S+)\s*$/i) {
     return unless lc($1) eq lc($self->get_nickname);
     my ($ok, $line) = $self->_set_persona_trait($2, $3);
     $self->_send_to_channel($channel, $line);
@@ -1318,7 +1318,7 @@ event irc_public => sub {
   }
 
 
-  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+)?(?::time\s+in\s+|time:\s*)([A-Za-z_]+\/[A-Za-z0-9_+\-]+(?:\/[A-Za-z0-9_+\-]+)*)\s*$/i) {
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+time\s+in\s+|:time\s+in\s+|time:\s*)([A-Za-z_]+\/[A-Za-z0-9_+\-]+(?:\/[A-Za-z0-9_+\-]+)*)\s*$/i) {
     return unless $self->_utility_command_matches_me($1);
     my $zone = $2;
     my $line = 'Current time in ' . $zone . ': ' . $self->_time_text_for_zone($zone) . '.';
@@ -1326,7 +1326,7 @@ event irc_public => sub {
     return;
   }
 
-  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+)?(?::cpan\s+recent(?:\s+(\d+))?\s*|cpan:\s*recent(?:\s+(\d+))?\s*)$/i) {
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+cpan\s+recent(?:\s+(\d+))?\s*|:cpan\s+recent(?:\s+(\d+))?\s*|cpan:\s*recent(?:\s+(\d+))?\s*)$/i) {
     return unless $self->_utility_command_matches_me($1);
     my $count = defined $2 ? $2 : (defined $3 ? $3 : 3);
     my $result = $self->_cpan_lookup('recent', $count);
@@ -1334,24 +1334,24 @@ event irc_public => sub {
     return;
   }
 
-  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+)?(?::cpan\s+(module|author|describe)\s+(.+)|cpan:\s*(module|author|describe)\s+(.+))$/i) {
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+cpan\s+(module|author|describe)\s+(.+)|:cpan\s+(module|author|describe)\s+(.+)|cpan:\s*(module|author|describe)\s+(.+))$/i) {
     return unless $self->_utility_command_matches_me($1);
-    my ($mode, $query) = defined $2 ? ($2, $3) : ($4, $5);
+    my ($mode, $query) = defined $2 ? ($2, $3) : (defined $4 ? ($4, $5) : ($6, $7));
     my $result = $self->_cpan_lookup($mode, $query);
     $self->_send_to_channel($channel, $result) if defined($result) && $result =~ /\S/;
     return;
   }
 
-  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+)?(?::cpan\s+(.+)|cpan:\s*(.+))$/i) {
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+cpan\s+(.+)|:cpan\s+(.+)|cpan:\s*(.+))$/i) {
     return unless $self->_utility_command_matches_me($1);
-    my $query = defined $2 ? $2 : $3;
+    my $query = defined $2 ? $2 : (defined $3 ? $3 : $4);
     $query =~ s/^\s+|\s+$//g;
     my $result = $self->_cpan_lookup('module', $query);
     $self->_send_to_channel($channel, $result) if defined($result) && $result =~ /\S/;
     return;
   }
 
-  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+)?(?::search\s+|search:\s+)(.+)/i) {
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+search\s+|:search\s+|search:\s+)(.+)/i) {
     return unless $self->_utility_command_matches_me($1);
     my $arg = $2;
     my ($count, $query) = (3, $arg);

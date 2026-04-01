@@ -1274,7 +1274,7 @@ event irc_public => sub {
     return;
   }
 
-  if ($msg =~ /^([A-Za-z0-9_\-]+):\s+persona\s+set\s+(\S+)\s+(\S+)\s*$/i) {
+  if ($msg =~ /^([A-Za-z0-9_\-]+):\s+persona\s+set\s+(\S+)\s+(?:=\s*)?(\S+)\s*$/i) {
     return unless lc($1) eq lc($self->get_nickname);
     my ($ok, $line) = $self->_set_persona_trait($2, $3);
     $self->_send_to_channel($channel, $line);
