@@ -920,6 +920,14 @@ sub _is_human_nick {
   return $self->_is_filtered_bot_nick($nick) ? 0 : 1;
 }
 
+sub _handles_bare_utility_commands { 1 }
+
+sub _utility_command_matches_me {
+  my ($self, $target) = @_;
+  return $self->_handles_bare_utility_commands unless defined $target && length $target;
+  return lc($target) eq lc($self->get_nickname);
+}
+
 sub _buffer_message {
   my ($self, $channel, $nick, $msg, $extra) = @_;
   return Bot::Runtime::Buffering::buffer_message(
@@ -1237,19 +1245,22 @@ event irc_public => sub {
     $self->info("Reset bert conversational turn count by human nick=$nick");
   }
 
-  if ($msg =~ /^(?::sum\s+|sum:\s*)(https?:\/\/\S+)/i) {
-    my $url = $1;
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+)?(?:sum:\s*|:sum\s+)(https?:\/\/\S+)/i) {
+    return unless $self->_utility_command_matches_me($1);
+    my $url = $2;
     my $result = $self->_summarize_url($url);
     $self->_send_to_channel($channel, $result) if defined($result) && $result =~ /\S/;
     return;
   }
 
-  if ($msg =~ /^(?::time\s*|time:\s*)$/i) {
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+)?(?::time\s*|time:\s*)$/i) {
+    return unless $self->_utility_command_matches_me($1);
     my $line = 'Current local time: ' . $self->_current_local_time_text . '.';
     $self->_send_to_channel($channel, $line);
     return;
   }
-  if ($msg =~ /^(?::dbstats\s*|dbstats:\s*)$/i) {
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+)?(?::dbstats\s*|dbstats:\s*)$/i) {
+    return unless $self->_utility_command_matches_me($1);
     my $line = $self->_db_stats_text;
     $self->_send_to_channel($channel, $line);
     return;
@@ -1298,45 +1309,51 @@ event irc_public => sub {
     return;
   }
 
-  if ($msg =~ /^(?::notes\s+|notes:\s*)(\S+)\s*$/i) {
-    my $nick = $1;
+  if ($msg =~ /^([A-Za-z0-9_\-]+):\s+notes\s+(\S+)\s*$/i) {
+    return unless lc($1) eq lc($self->get_nickname);
+    my $nick = $2;
     my $line = $self->_notes_text($nick);
     $self->_send_to_channel($channel, $line) if defined($line) && $line =~ /\S/;
     return;
   }
 
 
-  if ($msg =~ /^(?::time\s+in\s+|time:\s*)([A-Za-z_]+\/[A-Za-z0-9_+\-]+(?:\/[A-Za-z0-9_+\-]+)*)\s*$/i) {
-    my $zone = $1;
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+)?(?::time\s+in\s+|time:\s*)([A-Za-z_]+\/[A-Za-z0-9_+\-]+(?:\/[A-Za-z0-9_+\-]+)*)\s*$/i) {
+    return unless $self->_utility_command_matches_me($1);
+    my $zone = $2;
     my $line = 'Current time in ' . $zone . ': ' . $self->_time_text_for_zone($zone) . '.';
     $self->_send_to_channel($channel, $line);
     return;
   }
 
-  if ($msg =~ /^(?::cpan\s+recent(?:\s+(\d+))?\s*|cpan:\s*recent(?:\s+(\d+))?\s*)$/i) {
-    my $count = defined $1 ? $1 : (defined $2 ? $2 : 3);
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+)?(?::cpan\s+recent(?:\s+(\d+))?\s*|cpan:\s*recent(?:\s+(\d+))?\s*)$/i) {
+    return unless $self->_utility_command_matches_me($1);
+    my $count = defined $2 ? $2 : (defined $3 ? $3 : 3);
     my $result = $self->_cpan_lookup('recent', $count);
     $self->_send_to_channel($channel, $result) if defined($result) && $result =~ /\S/;
     return;
   }
 
-  if ($msg =~ /^(?::cpan\s+(module|author|describe)\s+(.+)|cpan:\s*(module|author|describe)\s+(.+))$/i) {
-    my ($mode, $query) = defined $1 ? ($1, $2) : ($3, $4);
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+)?(?::cpan\s+(module|author|describe)\s+(.+)|cpan:\s*(module|author|describe)\s+(.+))$/i) {
+    return unless $self->_utility_command_matches_me($1);
+    my ($mode, $query) = defined $2 ? ($2, $3) : ($4, $5);
     my $result = $self->_cpan_lookup($mode, $query);
     $self->_send_to_channel($channel, $result) if defined($result) && $result =~ /\S/;
     return;
   }
 
-  if ($msg =~ /^(?::cpan\s+(.+)|cpan:\s*(.+))$/i) {
-    my $query = defined $1 ? $1 : $2;
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+)?(?::cpan\s+(.+)|cpan:\s*(.+))$/i) {
+    return unless $self->_utility_command_matches_me($1);
+    my $query = defined $2 ? $2 : $3;
     $query =~ s/^\s+|\s+$//g;
     my $result = $self->_cpan_lookup('module', $query);
     $self->_send_to_channel($channel, $result) if defined($result) && $result =~ /\S/;
     return;
   }
 
-  if ($msg =~ /^(?::search\s+|search:\s+)(.+)/i) {
-    my $arg = $1;
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+)?(?::search\s+|search:\s+)(.+)/i) {
+    return unless $self->_utility_command_matches_me($1);
+    my $arg = $2;
     my ($count, $query) = (3, $arg);
     if ($arg =~ /^\s*(\d+)\s+(.+)\s*$/) {
       $count = $1;
