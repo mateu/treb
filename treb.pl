@@ -31,6 +31,11 @@ use Bot::OutputCleanup qw(
   cleanup_change_message
   cleanup_empty_message
 );
+use Bot::Runtime::Buffering qw(
+  buffer_message
+  split_priority_messages
+  schedule_pending_buffers
+);
 use Bot::Persona qw(
   persona_trait_meta
   persona_trait_order
@@ -916,24 +921,19 @@ sub _is_human_nick {
 
 sub _buffer_message {
   my ($self, $channel, $nick, $msg, $extra) = @_;
-  $extra ||= {};
-  push @{$self->_msg_buffer->{$channel} ||= []}, { channel => $channel, nick => $nick, msg => $msg, %$extra };
-  # Per-channel timer: cancel previous, set new
-  if (my $id = delete $self->_buffer_timers->{$channel}) {
-    POE::Kernel->alarm_remove($id);
-  }
-  my $id = POE::Kernel->alarm_set( _process_buffer => time() + $BUFFER_DELAY, $channel );
-  $self->_buffer_timers->{$channel} = $id;
+  return Bot::Runtime::Buffering::buffer_message(
+    self    => $self,
+    channel => $channel,
+    nick    => $nick,
+    msg     => $msg,
+    extra   => $extra,
+    delay   => $BUFFER_DELAY,
+  );
 }
 
 sub _split_priority_messages {
   my ($self, $messages) = @_;
-  my @messages = @{$messages || []};
-  my @conversation = grep { (($_->{source_kind} // '') eq 'conversation') } @messages;
-  return (\@messages, []) unless @conversation;
-
-  my @deferred = grep { (($_->{source_kind} // '') ne 'conversation') } @messages;
-  return (\@conversation, \@deferred);
+  return Bot::Runtime::Buffering::split_priority_messages(messages => $messages);
 }
 
 event _process_buffer => sub {
@@ -1009,12 +1009,10 @@ event _process_buffer => sub {
 
 sub _schedule_pending_buffers {
   my ($self) = @_;
-  for my $ch (keys %{$self->_msg_buffer}) {
-    next unless @{$self->_msg_buffer->{$ch} || []};
-    next if $self->_buffer_timers->{$ch};  # already scheduled
-    my $id = POE::Kernel->alarm_set( _process_buffer => time() + $BUFFER_DELAY, $ch );
-    $self->_buffer_timers->{$ch} = $id;
-  }
+  return Bot::Runtime::Buffering::schedule_pending_buffers(
+    self  => $self,
+    delay => $BUFFER_DELAY,
+  );
 }
 
 my @BRAINFREEZE = (
