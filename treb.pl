@@ -892,6 +892,16 @@ has _bert_reply_turn_count => (
   default => sub { 0 },
 );
 
+has _human_warm_reply_count => (
+  is => 'rw', traits => ['NoGetopt'],
+  default => sub { 0 },
+);
+
+has _human_warm_reply_expires_at => (
+  is => 'rw', traits => ['NoGetopt'],
+  default => sub { 0 },
+);
+
 has _persona_cache => (
   is => 'rw', traits => ['NoGetopt'],
   default => sub { {} },
@@ -916,15 +926,34 @@ sub _buffer_message {
   $self->_buffer_timers->{$channel} = $id;
 }
 
+sub _split_priority_messages {
+  my ($self, $messages) = @_;
+  my @messages = @{$messages || []};
+  my @conversation = grep { (($_->{source_kind} // '') eq 'conversation') } @messages;
+  return (\@messages, []) unless @conversation;
+
+  my @deferred = grep { (($_->{source_kind} // '') ne 'conversation') } @messages;
+  return (\@conversation, \@deferred);
+}
+
 event _process_buffer => sub {
   my ($self, $channel) = @_[OBJECT, ARG0];
   delete $self->_buffer_timers->{$channel};
 
   return if $self->_processing;
-  my @messages = @{$self->_msg_buffer->{$channel} || []};
-  return unless @messages;
+  my @incoming_messages = @{$self->_msg_buffer->{$channel} || []};
+  return unless @incoming_messages;
 
   $self->_msg_buffer->{$channel} = [];
+  my ($active_messages, $deferred_messages) = $self->_split_priority_messages(\@incoming_messages);
+  my @messages = @{$active_messages || []};
+  my @deferred = @{$deferred_messages || []};
+  if (@deferred) {
+    $self->info('Deferring lower-priority buffered messages while human conversation lane is active');
+    push @{$self->_msg_buffer->{$channel} ||= []}, @deferred;
+  }
+  return unless @messages;
+
   $self->_processing(1);
 
   # Auto-recall: gather notes about active nicks
@@ -1096,11 +1125,48 @@ sub _do_raid {
   }
 
   my $has_bert_conversation = 0;
+  my $has_warm_human_conversation = 0;
   for my $m (@$messages) {
-    next unless ($m->{source_kind} // '') eq 'bert_conversation';
-    next unless $m->{nick} && $self->_is_filtered_bot_nick($m->{nick});
-    $has_bert_conversation = 1;
-    last;
+    if (($m->{source_kind} // '') eq 'bert_conversation' && $m->{nick} && $self->_is_filtered_bot_nick($m->{nick})) {
+      $has_bert_conversation = 1;
+    }
+    if (($m->{source_kind} // '') eq 'conversation' && ($m->{warm_human} // 0)) {
+      $has_warm_human_conversation = 1;
+    }
+  }
+
+  if ($self->_is_non_substantive_output($answer)) {
+    if ($has_warm_human_conversation) {
+      $self->info("Retrying non-substantive output for warm human conversation lane");
+      my $retry = eval {
+        my $prompt = $input . "\n\nRespond directly to the addressed human now. Be brief, useful, and natural. Do not use stage directions, faux silence, ambient observation, or withdrawn asides.";
+        my $result = $self->_raider->raid($prompt);
+        "$result";
+      };
+      if (!$@ && defined $retry) {
+        my $retry_raw = $retry;
+        my $retry_before_strip = $retry;
+        $retry =~ s/<think\b[^>]*>.*?<\/think>\s*//gsi;
+        $retry =~ s/<thinking\b[^>]*>.*?<\/thinking>\s*//gsi;
+        $retry =~ s/^\s*(?:Thought|Reasoning|Chain[ -]?of[ -]?Thought|Internal Reasoning)\s*:\s*.*?(?=^\S|\z)//gims;
+        $self->_log_cleanup_change('warm_retry_strip_reasoning', $retry_before_strip, $retry);
+        my $retry_before_markup = $retry;
+        $retry =~ s/^<\s*\@?\s*(\w+)\s*>:?\s*/$1: /mg;
+        $retry =~ s/<\s*\@?\s*(\w+)\s*>/$1/g;
+        $retry =~ s/<\/?\w+>//g;
+        $retry =~ s/^\*?\s*(save_note|recall_notes|update_note|delete_note|recall_history|stay_silent|set_alarm|whois|send_private_message)\b[^\n]*\n?//mg;
+        $retry =~ s/^\s+//;
+        $retry =~ s/\s+$//;
+        $self->_log_cleanup_change('warm_retry_strip_markup', $retry_before_markup, $retry);
+        my $retry_before_normalize = $retry;
+        $retry = $self->_clean_text_for_irc($retry) if defined $retry;
+        $self->_log_cleanup_change('warm_retry_normalize_text', $retry_before_normalize, $retry);
+        if ($retry =~ /\S/ && !$self->_is_non_substantive_output($retry)) {
+          $answer = $retry;
+          $raw_answer = $retry_raw;
+        }
+      }
+    }
   }
 
   if ($self->_is_non_substantive_output($answer)) {
@@ -1347,7 +1413,16 @@ event irc_public => sub {
 
   return unless $direct_address;
 
-  $self->_buffer_message($channel, $nick, $msg, { source_kind => 'conversation' });
+  my $warm_limit = 3;
+  my $warm_window = 300;
+  if (!$self->_human_warm_reply_expires_at || time() > $self->_human_warm_reply_expires_at) {
+    $self->_human_warm_reply_count(0);
+  }
+  my $warm_human = ($self->_human_warm_reply_count < $warm_limit) ? 1 : 0;
+  $self->_human_warm_reply_count($self->_human_warm_reply_count + 1);
+  $self->_human_warm_reply_expires_at(time() + $warm_window);
+
+  $self->_buffer_message($channel, $nick, $msg, { source_kind => 'conversation', warm_human => $warm_human });
 };
 
 event irc_join => sub {
