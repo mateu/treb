@@ -948,15 +948,34 @@ sub _buffer_message {
   $self->_buffer_timers->{$channel} = $id;
 }
 
+sub _split_priority_messages {
+  my ($self, $messages) = @_;
+  my @messages = @{$messages || []};
+  my @conversation = grep { (($_->{source_kind} // '') eq 'conversation') } @messages;
+  return (\@messages, []) unless @conversation;
+
+  my @deferred = grep { (($_->{source_kind} // '') ne 'conversation') } @messages;
+  return (\@conversation, \@deferred);
+}
+
 event _process_buffer => sub {
   my ($self, $channel) = @_[OBJECT, ARG0];
   delete $self->_buffer_timers->{$channel};
 
   return if $self->_processing;
-  my @messages = @{$self->_msg_buffer->{$channel} || []};
-  return unless @messages;
+  my @incoming_messages = @{$self->_msg_buffer->{$channel} || []};
+  return unless @incoming_messages;
 
   $self->_msg_buffer->{$channel} = [];
+  my ($active_messages, $deferred_messages) = $self->_split_priority_messages(\@incoming_messages);
+  my @messages = @{$active_messages || []};
+  my @deferred = @{$deferred_messages || []};
+  if (@deferred) {
+    $self->info('Deferring lower-priority buffered messages while human conversation lane is active');
+    push @{$self->_msg_buffer->{$channel} ||= []}, @deferred;
+  }
+  return unless @messages;
+
   $self->_processing(1);
 
   # Auto-recall: gather notes about active nicks
@@ -1361,6 +1380,13 @@ event irc_public => sub {
   my $nick_re = quotemeta($bot_nick);
   my $direct_address = ($msg =~ /(?:^|\W)$nick_re(?:\W|$)/i) ? 1 : 0;
   my $thread_open = ($self->_public_thread_open_until && time() <= $self->_public_thread_open_until) ? 1 : 0;
+  my $addressed_other_human_turn = 0;
+  if ($self->_is_human_nick($nick) && !$direct_address) {
+    if ($msg =~ /^\s*([A-Za-z0-9_\-]+)\s*[:,]/) {
+      my $target = $1;
+      $addressed_other_human_turn = 1 if lc($target) ne lc($bot_nick);
+    }
+  }
 
   if ($speaker_is_filtered_bot) {
     return unless $direct_address;
@@ -1390,6 +1416,11 @@ event irc_public => sub {
       $self->info("Opened public thread window for ${public_thread_window_seconds}s (direct address)");
     }
     $self->_buffer_message($channel, $nick, $msg, { source_kind => 'conversation' });
+    return;
+  }
+
+  if ($addressed_other_human_turn) {
+    $self->info('Suppressing public conversational message: human addressed someone else');
     return;
   }
 

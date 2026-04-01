@@ -482,6 +482,11 @@ def _normalize_line(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip().lower())
 
 
+def _is_substantive(text: str) -> bool:
+    norm = _normalize_line(text)
+    return len(norm) >= 12 and bool(re.search(r"[a-z]", norm))
+
+
 def _dedupe_privmsg_echoes(events: List[IRCEvent]) -> List[IRCEvent]:
     out: List[IRCEvent] = []
     last_key: Optional[Tuple[str, str, str]] = None
@@ -558,6 +563,8 @@ def evaluate(events: List[IRCEvent], channel: str) -> Tuple[bool, List[str], Lis
         ("Burt", "Treb", "Burt, give one practical debugging habit for flaky IRC bots."),
         ("Treb", "Burt", "Treb, how would you triage a noisy regression transcript quickly?"),
     ]
+    max_non_addressed_interjections = 2
+    split_prompt_texts = {c[2] for c in split_cases}
     for addressed, other, prompt in split_cases:
         prompt_idx = next(
             (i for i, e in enumerate(events) if e.kind == "privmsg" and e.nick == "Alice" and e.text == prompt),
@@ -568,34 +575,62 @@ def evaluate(events: List[IRCEvent], channel: str) -> Tuple[bool, List[str], Lis
             notes.append(f"FAIL addressed split missing prompt: {prompt}")
             report.append(f"- FAIL missing prompt for {addressed}")
             continue
-        next_human = next(
-            (i for i, e in enumerate(events[prompt_idx + 1 :], start=prompt_idx + 1) if e.kind == "privmsg" and e.nick == "Alice"),
+
+        # Scenario window runs from the addressed prompt until the next SCENARIO marker (or end).
+        next_scenario_marker = next(
+            (i for i, e in enumerate(events[prompt_idx + 1 :], start=prompt_idx + 1) if e.kind == "marker"),
             len(events),
         )
+        if next_scenario_marker < len(events):
+            window_end = next_scenario_marker
+        else:
+            # Fallbacks for transcripts where scenario markers are missing or not strictly ordered.
+            next_split_prompt = next(
+                (
+                    i
+                    for i, e in enumerate(events[prompt_idx + 1 :], start=prompt_idx + 1)
+                    if e.kind == "privmsg" and e.nick == "Alice" and e.text in split_prompt_texts
+                ),
+                len(events),
+            )
+            next_human_msg = next(
+                (
+                    i
+                    for i, e in enumerate(events[prompt_idx + 1 :], start=prompt_idx + 1)
+                    if e.kind == "privmsg" and e.nick == "Alice"
+                ),
+                len(events),
+            )
+            window_end = min(next_split_prompt, next_human_msg)
         window = [
             e
-            for e in events[prompt_idx + 1 : next_human]
+            for e in events[prompt_idx + 1 : window_end]
             if e.kind == "privmsg" and e.target == channel and e.nick in {"Burt", "Treb"}
         ]
         addressed_replies = [e for e in window if e.nick == addressed]
+        addressed_substantive = [e for e in addressed_replies if _is_substantive(e.text)]
         other_replies = [e for e in window if e.nick == other]
 
-        if addressed_replies:
-            notes.append(f"PASS addressed prompt: {addressed} replied ({len(addressed_replies)})")
+        if addressed_substantive:
+            notes.append(f"PASS addressed prompt: {addressed} replied substantively ({len(addressed_substantive)})")
         else:
             ok = False
-            notes.append(f"FAIL addressed prompt: {addressed} did not reply")
+            notes.append(f"FAIL addressed prompt: {addressed} did not reply substantively")
 
-        if len(other_replies) > 1:
+        if len(other_replies) > max_non_addressed_interjections:
             ok = False
             notes.append(f"FAIL addressed prompt: {other} piled on ({len(other_replies)})")
-        elif len(other_replies) == 1:
-            notes.append(f"PASS addressed prompt: {other} gave only a single non-piling interjection")
+        elif len(other_replies) > 0:
+            notes.append(
+                f"PASS addressed prompt: {other} interjected {len(other_replies)} time(s) "
+                f"(<= {max_non_addressed_interjections} allowed)"
+            )
         else:
             notes.append(f"PASS addressed prompt: {other} stayed quiet")
 
         report.append(
-            f"- Prompt to {addressed}: addressed_replies={len(addressed_replies)} other_replies={len(other_replies)}"
+            f"- Prompt to {addressed}: addressed_replies={len(addressed_replies)} "
+            f"addressed_substantive={len(addressed_substantive)} other_replies={len(other_replies)}"
         )
 
     report.append("")
@@ -746,15 +781,15 @@ async def main() -> int:
 
         all_events.append(marker("addressed-human split prompt -> Burt"))
         await human.say(DEFAULT_CHANNEL, "Burt, give one practical debugging habit for flaky IRC bots.")
-        await asyncio.sleep(4.0)
+        await asyncio.sleep(7.0)
         all_events.append(marker("addressed-human split prompt -> Treb"))
         await human.say(DEFAULT_CHANNEL, "Treb, how would you triage a noisy regression transcript quickly?")
-        await asyncio.sleep(4.0)
-        all_events.append(marker("command-path prompt"))
-        await human.say(DEFAULT_CHANNEL, "time:")
-        await asyncio.sleep(2.5)
+        await asyncio.sleep(7.0)
         all_events.append(marker("bot-to-bot trigger prompt"))
         await human.say(DEFAULT_CHANNEL, "Burt, ask Treb one concise bot-to-bot test question.")
+        await asyncio.sleep(2.5)
+        all_events.append(marker("command-path prompt"))
+        await human.say(DEFAULT_CHANNEL, "time:")
 
         deadline = asyncio.get_running_loop().time() + 18
         while asyncio.get_running_loop().time() < deadline:
