@@ -10,25 +10,27 @@ Current baseline:
 
 This repo is the clean home for the bot, separate from the earlier Squirt/Koan testbed history.
 
-## Local IRC integration harness (Burt + Treb)
+## Local IRC integration harness (live + deterministic)
 
 A first-pass behavior-regression harness is available at:
 
-- `script/irc_harness.py`
+- runtime runner: `script/irc_harness.py`
 - wrapper: `script/run-local-irc-harness.sh`
+- deterministic integration test: `t/irc_harness_deterministic.t`
+- evaluator unit test: `test/irc_harness_evaluate.py`
 
 What it does:
 
 1. Starts a tiny local IRC server process on `127.0.0.1:6667`.
 2. In deterministic mode (default), starts a fake Ollama-compatible local HTTP endpoint for deterministic model replies.
    In real mode, skips the fake endpoint and uses a real model backend (configured via env).
-3. Launches **Burt** and **Treb** as real `perl` processes with dedicated harness env + sqlite DBs.
+3. Launches **burt_bot** and **treb_bot** as real `perl` processes with dedicated harness env + sqlite DBs.
 4. Launches a simulated human IRC client (`Alice`) in the same channel.
 5. Runs scripted scenarios:
-   - Burt joins first, then Treb joins.
-   - Human runs an addressed split prompt to Burt and Treb (addressed bot should reply; non-addressed should not pile on).
+   - burt_bot joins first, then treb_bot joins.
+   - Human runs an addressed split prompt to burt_bot and treb_bot (addressed bot should reply; non-addressed should not pile on).
    - Human issues `:time` command (command path check).
-   - Human asks Burt to prompt Treb (bounded bot-to-bot exchange).
+   - Human asks burt_bot to prompt treb_bot (bounded bot-to-bot exchange).
    - Evaluator checks explicit join order/greet expectation and repeated-line spam guardrail.
 6. Produces transcript + readable behavior artifacts with guardrail evaluation (shape checks, not exact prose matching).
 
@@ -69,6 +71,11 @@ Artifacts land under:
 - plus bot process logs: `burt.log`, `treb.log`
 
 The harness exits non-zero when evaluator checks fail.
+
+Notes:
+- `script/irc_harness.py` is the real harness runner for both deterministic and live/real mode.
+- `t/irc_harness_deterministic.t` is the Perl/TAP integration test that exercises deterministic mode.
+- `test/irc_harness_evaluate.py` is a Python unit test for the harness evaluator logic; it is not the live harness itself.
 
 - `search: 2 Olaf Alders`
 
