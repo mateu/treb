@@ -54,6 +54,7 @@ my @BOT_NAMES = qw(
   Sprocket Widget Noodle Bleep Chomp Dingle Wobble Clunk Zippy Quirk
 );
 my $BOT_NICK = $ENV{IRC_NICKNAME} || $BOT_NAMES[rand @BOT_NAMES] . int(rand(999));
+my $BOT_IDENTITY_SLUG = lc($ENV{BOT_IDENTITY_SLUG} || $BOT_NICK || 'bot');
 my $OWNER = $ENV{OWNER} || $ENV{USER} || 'unknown';
 
 my $MAX_LINE = $ENV{MAX_LINE_LENGTH} || 400;
@@ -146,7 +147,7 @@ sub _clamp_persona_value {
 
 sub _bot_name_slug {
   my ($self) = @_;
-  return lc($self->get_nickname // $BOT_NICK // 'bot');
+  return $BOT_IDENTITY_SLUG;
 }
 
 sub _default_persona_trait_value {

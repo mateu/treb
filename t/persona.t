@@ -7,7 +7,8 @@ my $db = 't/persona.sqlite';
 unlink $db if -f $db;
 
 local $ENV{DB_FILE} = $db;
-local $ENV{IRC_NICKNAME} = 'Treb';
+local $ENV{IRC_NICKNAME} = 'treb_bot';
+local $ENV{BOT_IDENTITY_SLUG} = 'treb';
 local $ENV{JOIN_GREET_PCT} = 88;
 local $ENV{PUBLIC_CHAT_ALLOW_PCT} = 12;
 local $ENV{PUBLIC_THREAD_WINDOW_SECONDS} = 7;

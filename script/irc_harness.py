@@ -29,6 +29,12 @@ from typing import Dict, List, Optional, Set, Tuple
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 DEFAULT_CHANNEL = "#lab"
 
+BURT_NICK = "burt_bot"
+TREB_NICK = "treb_bot"
+ASTRID_NICK = "astrid_bot"
+ALICE_NICK = "Alice"
+BOT_NICKS = {BURT_NICK, TREB_NICK}
+
 HARNESS_MODE_DETERMINISTIC = "deterministic"
 HARNESS_MODE_REAL = "real"
 
@@ -337,7 +343,7 @@ class FakeOllama:
             bot = "burt"
 
         if "joined" in low and "treb" in low:
-            return "Hey Treb - welcome aboard. Good to see you in the channel." if bot == "burt" else "Welcome, Treb. Good to have you here."
+            return f"Hey {TREB_NICK} - welcome aboard. Good to see you in the channel." if bot == "burt" else f"Welcome, {TREB_NICK}. Good to have you here."
         if "time" in low:
             if bot == "burt":
                 return "Current local time: Tuesday, March 31, 2026, 9:37 PM MDT (America/Denver). Basement clocks still work."
@@ -346,7 +352,7 @@ class FakeOllama:
             return "Current local time: Tuesday, March 31, 2026, 9:37 PM MDT (America/Denver)."
         if "bot-to-bot" in low or "ask treb" in low:
             if bot == "burt":
-                return "Treb, I trust a small deterministic IRC harness with readable transcripts and hard stop conditions."
+                return f"{TREB_NICK}, I trust a small deterministic IRC harness with readable transcripts and hard stop conditions."
             if bot == "treb":
                 return "A small deterministic harness with clear transcripts and bounded turn-taking is the regression check I trust most."
             return "A small deterministic harness with readable transcripts is the regression check I trust most."
@@ -495,10 +501,10 @@ def build_bot_env(bot: str, channel: str, irc_host: str, db_file: pathlib.Path, 
             "API_KEY": "",
         }
     )
-    if bot == "Burt":
-        env["BOT_FILTER_NICKS"] = "Treb"
+    if bot == BURT_NICK:
+        env["BOT_FILTER_NICKS"] = TREB_NICK
     else:
-        env["BOT_FILTER_NICKS"] = "Burt"
+        env["BOT_FILTER_NICKS"] = BURT_NICK
     return env
 
 
@@ -530,8 +536,8 @@ def evaluate(events: List[IRCEvent], channel: str) -> Tuple[bool, List[str], Lis
     notes: List[str] = []
     report: List[str] = []
     events = _dedupe_privmsg_echoes(events)
-    bot_msgs = [e for e in events if e.kind == "privmsg" and e.target == channel and e.nick in {"Burt", "Treb"}]
-    human_msgs = [e for e in events if e.kind == "privmsg" and e.nick == "Alice"]
+    bot_msgs = [e for e in events if e.kind == "privmsg" and e.target == channel and e.nick in BOT_NICKS]
+    human_msgs = [e for e in events if e.kind == "privmsg" and e.nick == ALICE_NICK]
     joins = [e for e in events if e.kind == "join"]
 
     blank = [e for e in bot_msgs if not e.text.strip()]
@@ -547,18 +553,18 @@ def evaluate(events: List[IRCEvent], channel: str) -> Tuple[bool, List[str], Lis
     report.append("Join behavior")
     report.append("-------------")
 
-    join_order = [e.nick for e in joins if e.nick in {"Burt", "Treb"}]
-    if len(join_order) >= 2 and join_order[0] == "Burt" and join_order[1] == "Treb":
+    join_order = [e.nick for e in joins if e.nick in BOT_NICKS]
+    if len(join_order) >= 2 and join_order[0] == BURT_NICK and join_order[1] == TREB_NICK:
         notes.append("PASS join order explicit: Burt first, Treb second")
     else:
         ok = False
         notes.append(f"FAIL join order expected [Burt, Treb], observed {join_order[:2]}")
 
-    join_index_treb = next((i for i, e in enumerate(events) if e.kind == "join" and e.nick == "Treb"), None)
+    join_index_treb = next((i for i, e in enumerate(events) if e.kind == "join" and e.nick == TREB_NICK), None)
     greeted = False
     if join_index_treb is not None:
         for e in events[join_index_treb + 1 : join_index_treb + 15]:
-            if e.kind == "privmsg" and e.nick == "Burt" and e.target == channel:
+            if e.kind == "privmsg" and e.nick == BURT_NICK and e.target == channel:
                 greeted = True
                 break
     if greeted:
@@ -575,7 +581,7 @@ def evaluate(events: List[IRCEvent], channel: str) -> Tuple[bool, List[str], Lis
     report.append("Addressed human replies")
     report.append("----------------------")
 
-    for bot in ("Burt", "Treb"):
+    for bot in (BURT_NICK, TREB_NICK):
         count = sum(1 for e in bot_msgs if e.nick == bot)
         if count < 1:
             ok = False
@@ -584,14 +590,14 @@ def evaluate(events: List[IRCEvent], channel: str) -> Tuple[bool, List[str], Lis
             notes.append(f"PASS {bot} produced {count} channel replies")
 
     split_cases = [
-        ("Burt", "Treb", "Burt, give one practical debugging habit for flaky IRC bots."),
-        ("Treb", "Burt", "Treb, how would you triage a noisy regression transcript quickly?"),
+        (BURT_NICK, TREB_NICK, f"{BURT_NICK}, give one practical debugging habit for flaky IRC bots."),
+        (TREB_NICK, BURT_NICK, f"{TREB_NICK}, how would you triage a noisy regression transcript quickly?"),
     ]
     max_non_addressed_interjections = 2
     split_prompt_texts = {c[2] for c in split_cases}
     for addressed, other, prompt in split_cases:
         prompt_idx = next(
-            (i for i, e in enumerate(events) if e.kind == "privmsg" and e.nick == "Alice" and e.text == prompt),
+            (i for i, e in enumerate(events) if e.kind == "privmsg" and e.nick == ALICE_NICK and e.text == prompt),
             None,
         )
         if prompt_idx is None:
@@ -613,7 +619,7 @@ def evaluate(events: List[IRCEvent], channel: str) -> Tuple[bool, List[str], Lis
                 (
                     i
                     for i, e in enumerate(events[prompt_idx + 1 :], start=prompt_idx + 1)
-                    if e.kind == "privmsg" and e.nick == "Alice" and e.text in split_prompt_texts
+                    if e.kind == "privmsg" and e.nick == ALICE_NICK and e.text in split_prompt_texts
                 ),
                 len(events),
             )
@@ -621,7 +627,7 @@ def evaluate(events: List[IRCEvent], channel: str) -> Tuple[bool, List[str], Lis
                 (
                     i
                     for i, e in enumerate(events[prompt_idx + 1 :], start=prompt_idx + 1)
-                    if e.kind == "privmsg" and e.nick == "Alice"
+                    if e.kind == "privmsg" and e.nick == ALICE_NICK
                 ),
                 len(events),
             )
@@ -629,7 +635,7 @@ def evaluate(events: List[IRCEvent], channel: str) -> Tuple[bool, List[str], Lis
         window = [
             e
             for e in events[prompt_idx + 1 : window_end]
-            if e.kind == "privmsg" and e.target == channel and e.nick in {"Burt", "Treb"}
+            if e.kind == "privmsg" and e.target == channel and e.nick in BOT_NICKS
         ]
         addressed_replies = [e for e in window if e.nick == addressed]
         addressed_substantive = [e for e in addressed_replies if _is_substantive(e.text)]
@@ -667,7 +673,7 @@ def evaluate(events: List[IRCEvent], channel: str) -> Tuple[bool, List[str], Lis
     for i in range(1, len(b2b_scope)):
         prev, cur = b2b_scope[i - 1], b2b_scope[i]
         if prev.kind == cur.kind == "privmsg" and prev.target == cur.target == channel:
-            if prev.nick in {"Burt", "Treb"} and cur.nick in {"Burt", "Treb"} and prev.nick != cur.nick:
+            if prev.nick in BOT_NICKS and cur.nick in BOT_NICKS and prev.nick != cur.nick:
                 b2b_pairs += 1
     if b2b_pairs > 4:
         ok = False
@@ -679,7 +685,7 @@ def evaluate(events: List[IRCEvent], channel: str) -> Tuple[bool, List[str], Lis
     report.append("")
     report.append("Command path")
     report.append("------------")
-    time_cmd_seen = any(e.nick in {"Burt", "Treb"} and "Current local time:" in e.text for e in bot_msgs)
+    time_cmd_seen = any(e.nick in BOT_NICKS and "Current local time:" in e.text for e in bot_msgs)
     if time_cmd_seen:
         notes.append("PASS command path still works (:time observed)")
     else:
@@ -691,7 +697,7 @@ def evaluate(events: List[IRCEvent], channel: str) -> Tuple[bool, List[str], Lis
     report.append("Repeated-line check")
     report.append("-------------------")
     repeated_lines: List[str] = []
-    for bot in ("Burt", "Treb"):
+    for bot in (BURT_NICK, TREB_NICK):
         counts: Dict[str, int] = {}
         for msg in (e.text for e in bot_msgs if e.nick == bot):
             norm = _normalize_line(msg)
@@ -773,8 +779,8 @@ async def main() -> int:
         await human.connect()
         await human.join(DEFAULT_CHANNEL)
 
-        burt_env = build_bot_env("Burt", DEFAULT_CHANNEL, "127.0.0.1", run_dir / "burt-harness.sqlite", cfg)
-        treb_env = build_bot_env("Treb", DEFAULT_CHANNEL, "127.0.0.1", run_dir / "treb-harness.sqlite", cfg)
+        burt_env = build_bot_env(BURT_NICK, DEFAULT_CHANNEL, "127.0.0.1", run_dir / "burt-harness.sqlite", cfg)
+        treb_env = build_bot_env(TREB_NICK, DEFAULT_CHANNEL, "127.0.0.1", run_dir / "treb-harness.sqlite", cfg)
 
         burt_fh = burt_log.open("wb")
         treb_fh = treb_log.open("wb")
@@ -787,8 +793,8 @@ async def main() -> int:
             stdout=burt_fh,
             stderr=asyncio.subprocess.STDOUT,
         )
-        transcript_lines.append(f"[{ts()}] SYS started Burt pid={burt_proc.pid}")
-        all_events.append(await wait_for_join(event_q, "Burt", timeout=25))
+        transcript_lines.append(f"[{ts()}] SYS started {BURT_NICK} pid={burt_proc.pid}")
+        all_events.append(await wait_for_join(event_q, BURT_NICK, timeout=25))
 
         await asyncio.sleep(1.5)
 
@@ -801,19 +807,19 @@ async def main() -> int:
             stdout=treb_fh,
             stderr=asyncio.subprocess.STDOUT,
         )
-        transcript_lines.append(f"[{ts()}] SYS started Treb pid={treb_proc.pid}")
-        all_events.append(await wait_for_join(event_q, "Treb", timeout=25))
+        transcript_lines.append(f"[{ts()}] SYS started {TREB_NICK} pid={treb_proc.pid}")
+        all_events.append(await wait_for_join(event_q, TREB_NICK, timeout=25))
 
         await asyncio.sleep(2.0)
 
-        all_events.append(marker("addressed-human split prompt -> Burt"))
-        await human.say(DEFAULT_CHANNEL, "Burt, give one practical debugging habit for flaky IRC bots.")
+        all_events.append(marker(f"addressed-human split prompt -> {BURT_NICK}"))
+        await human.say(DEFAULT_CHANNEL, f"{BURT_NICK}, give one practical debugging habit for flaky IRC bots.")
         await asyncio.sleep(7.0)
-        all_events.append(marker("addressed-human split prompt -> Treb"))
-        await human.say(DEFAULT_CHANNEL, "Treb, how would you triage a noisy regression transcript quickly?")
+        all_events.append(marker(f"addressed-human split prompt -> {TREB_NICK}"))
+        await human.say(DEFAULT_CHANNEL, f"{TREB_NICK}, how would you triage a noisy regression transcript quickly?")
         await asyncio.sleep(7.0)
         all_events.append(marker("bot-to-bot trigger prompt"))
-        await human.say(DEFAULT_CHANNEL, "Burt, ask Treb one concise bot-to-bot test question.")
+        await human.say(DEFAULT_CHANNEL, f"{BURT_NICK}, ask {TREB_NICK} one concise bot-to-bot test question.")
         await asyncio.sleep(2.5)
         all_events.append(marker("command-path prompt"))
         await human.say(DEFAULT_CHANNEL, "time:")
@@ -826,8 +832,8 @@ async def main() -> int:
             except asyncio.TimeoutError:
                 pass
 
-        await terminate_process(burt_proc, "Burt", transcript_lines)
-        await terminate_process(treb_proc, "Treb", transcript_lines)
+        await terminate_process(burt_proc, BURT_NICK, transcript_lines)
+        await terminate_process(treb_proc, TREB_NICK, transcript_lines)
         await human.close()
         if fake_ollama:
             await fake_ollama.close()
@@ -838,9 +844,9 @@ async def main() -> int:
     except Exception as exc:
         transcript_lines.append(f"[{ts()}] SYS ERROR {exc!r}")
         if burt_proc:
-            await terminate_process(burt_proc, "Burt", transcript_lines)
+            await terminate_process(burt_proc, BURT_NICK, transcript_lines)
         if treb_proc:
-            await terminate_process(treb_proc, "Treb", transcript_lines)
+            await terminate_process(treb_proc, TREB_NICK, transcript_lines)
         await human.close()
         if fake_ollama:
             await fake_ollama.close()

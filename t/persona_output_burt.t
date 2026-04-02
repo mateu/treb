@@ -4,7 +4,8 @@ use Test::More;
 
 local $ENV{DB_FILE} = 't/persona_output_burt.sqlite';
 unlink $ENV{DB_FILE} if -f $ENV{DB_FILE};
-local $ENV{IRC_NICKNAME} = 'Burt';
+local $ENV{IRC_NICKNAME} = 'burt_bot';
+local $ENV{BOT_IDENTITY_SLUG} = 'burt';
 local $ENV{JOIN_GREET_PCT} = 11;
 local $ENV{PUBLIC_CHAT_ALLOW_PCT} = 22;
 local $ENV{PUBLIC_THREAD_WINDOW_SECONDS} = 33;

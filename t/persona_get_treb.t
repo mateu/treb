@@ -4,7 +4,8 @@ use Test::More;
 
 local $ENV{DB_FILE} = 't/persona_get_treb.sqlite';
 unlink $ENV{DB_FILE} if -f $ENV{DB_FILE};
-local $ENV{IRC_NICKNAME} = 'Treb';
+local $ENV{IRC_NICKNAME} = 'treb_bot';
+local $ENV{BOT_IDENTITY_SLUG} = 'treb';
 local $ENV{JOIN_GREET_PCT} = 17;
 
 require './treb.pl';
