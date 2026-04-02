@@ -77,6 +77,30 @@ Notes:
 - `t/irc_harness_deterministic.t` is the Perl/TAP integration test that exercises deterministic mode.
 - `test/irc_harness_evaluate.py` is a Python unit test for the harness evaluator logic; it is not the live harness itself.
 
+### Autoresearch-style local evaluator
+
+Use this runner to score a repo state with strict gatekeepers + live green count:
+
+```bash
+python3 script/irc_autoresearch_eval.py
+```
+
+Options:
+
+- `--live-runs {1,3,5}` (default `3`)
+- `--jobs N` parallel live runs (default `3`; capped to live run count)
+- `--live-mode real|deterministic` (default `real`)
+- `--allow-dirty` to skip clean working-tree gate
+
+It writes outputs to `log/irc-autoresearch/<timestamp>/`:
+
+- `summary.json` (machine-readable)
+- `summary.txt` (compact human summary)
+- gatekeeper stdout/stderr logs for `test/irc_harness_evaluate.py`
+
+Primary score is `live_green_count` (green runs out of N).
+Near-miss/fail labels are secondary diagnostics only.
+
 - `search: 2 Olaf Alders`
 
 ## MetaCPAN
