@@ -7,6 +7,7 @@
 #   API_KEY=...                Optional API key for engines that require one
 #   OLLAMA_URL=http://127.0.0.1:11434  Local Ollama-compatible endpoint
 #   IRC_SERVER=irc.perl.org    IRC server
+#   IRC_PORT=6667              IRC server port (default: 6667)
 #   IRC_NICKNAME=Astrid        Bot nickname
 #   OWNER=mateu                Bot owner name for personality context
 #   IRC_CHANNELS=#ai           Channels to join
@@ -98,6 +99,7 @@ use Langertha::Raider;
 use Bot::Commands::CPAN ();
 
 server ( $ENV{IRC_SERVER} || 'irc.perl.org' );
+port ( $ENV{IRC_PORT} || 6667 );
 nickname ( $BOT_NICK );
 channels ( $ENV{IRC_CHANNELS} ? split(/,/, $ENV{IRC_CHANNELS}) : '#ai' );
 

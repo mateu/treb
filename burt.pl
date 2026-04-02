@@ -6,6 +6,7 @@
 #   MODEL=llama-3.3-70b-versatile  Model name
 #   API_KEY=gsk_...             API key (or LANGERTHA_<ENGINE>_API_KEY)
 #   IRC_SERVER=irc.perl.org     IRC server (default: irc.perl.org)
+#   IRC_PORT=6667               IRC server port (default: 6667)
 #   IRC_NICKNAME=Bert           Bot nickname (default: random from a fun list)
 #   OWNER=Getty                 Bot owner name for personality (default: $USER)
 #   IRC_CHANNELS=#ai            Channels to join
@@ -99,6 +100,7 @@ use Langertha::Raider;
 use Bot::Commands::CPAN ();
 
 server ( $ENV{IRC_SERVER} || 'irc.perl.org' );
+port ( $ENV{IRC_PORT} || 6667 );
 nickname ( $BOT_NICK );
 channels ( $ENV{IRC_CHANNELS} ? split(/,/, $ENV{IRC_CHANNELS}) : '#ai' );
 
