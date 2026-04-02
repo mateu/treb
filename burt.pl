@@ -924,6 +924,7 @@ sub _send_to_channel {
     $cumulative += $delay;
     POE::Kernel->delay_add( _send_line => $cumulative, $channel, $chunks[$i] );
   }
+  return $cumulative;
 }
 
 event _send_line => sub {
@@ -1157,6 +1158,47 @@ sub _do_raid {
     return;
   }
 
+  my $has_warm_human_conversation = 0;
+  for my $m (@$messages) {
+    if (($m->{source_kind} // '') eq 'conversation' && ($m->{warm_human} // 0)) {
+      $has_warm_human_conversation = 1;
+    }
+  }
+
+  if ($self->_is_non_substantive_output($answer)) {
+    if ($has_warm_human_conversation) {
+      $self->info("Retrying non-substantive output for warm human conversation lane");
+      my $retry = eval {
+        my $prompt = $input . "\n\nA human directly addressed you. Answer that human directly and promptly now. This overrides your default quietness. Be brief, useful, and natural. Answer the actual question first. Do not use stage directions, faux silence, ambient observation, withdrawn asides, roleplay garnish, or any text about staying quiet. If silence would be appropriate, output nothing instead of narrating silence.";
+        my $result = $self->_raider->raid($prompt);
+        "$result";
+      };
+      if (!$@ && defined $retry) {
+        my $retry_raw = $retry;
+        my $retry_before_strip = $retry;
+        $retry =~ s/<think\b[^>]*>.*?<\/think>\s*//gsi;
+        $retry =~ s/<thinking\b[^>]*>.*?<\/thinking>\s*//gsi;
+        $retry =~ s/^\s*(?:Thought|Reasoning|Chain[ -]?of[ -]?Thought|Internal Reasoning)\s*:\s*.*?(?=^\S|\z)//gims;
+        $self->_log_cleanup_change('warm_retry_strip_reasoning', $retry_before_strip, $retry);
+        my $retry_before_markup = $retry;
+        $retry =~ s/^<\s*\@?\s*(\w+)\s*>:?\s*/$1: /mg;
+        $retry =~ s/<\s*\@?\s*(\w+)\s*>/$1/g;
+        $retry =~ s/<\/?\w+>//g;
+        $retry =~ s/^\*?\s*(save_note|recall_notes|update_note|delete_note|recall_history|stay_silent|set_alarm|whois|send_private_message)\b[^\n]*\n?//mg;
+        $retry =~ s/^\s+//;
+        $retry =~ s/\s+$//;
+        $self->_log_cleanup_change('warm_retry_strip_markup', $retry_before_markup, $retry);
+        my $retry_before_normalize = $retry;
+        $retry = $self->_clean_text_for_irc($retry) if defined $retry;
+        $self->_log_cleanup_change('warm_retry_normalize_text', $retry_before_normalize, $retry);
+        if ($retry =~ /\S/ && !$self->_is_non_substantive_output($retry)) {
+          $answer = $retry;
+          $raw_answer = $retry_raw;
+        }
+      }
+    }
+  }
+
   if ($self->_is_non_substantive_output($answer)) {
     my $non_substantive_allow_pct = $self->_persona_trait('non_substantive_allow_pct');
     if ($non_substantive_allow_pct > 0 && int(rand(100)) < $non_substantive_allow_pct) {
@@ -1213,9 +1255,7 @@ sub _do_raid {
     next unless ($m->{source_kind} // '') eq 'bert_conversation';
     next unless $m->{nick} && $self->_is_filtered_bot_nick($m->{nick});
     $consumed_bert_reply = 1;
-    last;
   }
-
   $self->_send_to_channel($channel, $answer);
 
   if ($consumed_bert_reply) {
@@ -1429,7 +1469,10 @@ event irc_public => sub {
       $self->_public_thread_open_until(time() + $public_thread_window_seconds);
       $self->info("Opened public thread window for ${public_thread_window_seconds}s (direct address)");
     }
-    $self->_buffer_message($channel, $nick, $msg, { source_kind => 'conversation' });
+    $self->_buffer_message($channel, $nick, $msg, {
+      source_kind => 'conversation',
+      warm_human  => 1,
+    });
     return;
   }
 
