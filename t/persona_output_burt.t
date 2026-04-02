@@ -9,8 +9,8 @@ local $ENV{BOT_IDENTITY_SLUG} = 'burt';
 local $ENV{JOIN_GREET_PCT} = 11;
 local $ENV{PUBLIC_CHAT_ALLOW_PCT} = 22;
 local $ENV{PUBLIC_THREAD_WINDOW_SECONDS} = 33;
-local $ENV{BERT_REPLY_ALLOW_PCT} = 44;
-local $ENV{BERT_REPLY_MAX_TURNS} = 5;
+local $ENV{BOT_REPLY_PCT} = 44;
+local $ENV{BOT_REPLY_MAX_TURNS} = 5;
 local $ENV{NON_SUBSTANTIVE_ALLOW_PCT} = 6;
 
 require './burt.pl';

@@ -67,17 +67,17 @@ $NON_SUBSTANTIVE_ALLOW_PCT = 100 if $NON_SUBSTANTIVE_ALLOW_PCT > 100;
 my $PUBLIC_CHAT_ALLOW_PCT = exists $ENV{PUBLIC_CHAT_ALLOW_PCT} ? 0 + $ENV{PUBLIC_CHAT_ALLOW_PCT} : 65;
 $PUBLIC_CHAT_ALLOW_PCT = 0 if $PUBLIC_CHAT_ALLOW_PCT < 0;
 $PUBLIC_CHAT_ALLOW_PCT = 100 if $PUBLIC_CHAT_ALLOW_PCT > 100;
-my $BERT_REPLY_ALLOW_PCT = exists $ENV{BERT_REPLY_ALLOW_PCT} ? 0 + $ENV{BERT_REPLY_ALLOW_PCT} : 50;
-$BERT_REPLY_ALLOW_PCT = 0 if $BERT_REPLY_ALLOW_PCT < 0;
-$BERT_REPLY_ALLOW_PCT = 100 if $BERT_REPLY_ALLOW_PCT > 100;
+my $BOT_REPLY_PCT = exists $ENV{BOT_REPLY_PCT} ? 0 + $ENV{BOT_REPLY_PCT} : 50;
+$BOT_REPLY_PCT = 0 if $BOT_REPLY_PCT < 0;
+$BOT_REPLY_PCT = 100 if $BOT_REPLY_PCT > 100;
 my $PUBLIC_THREAD_WINDOW_SECONDS = exists $ENV{PUBLIC_THREAD_WINDOW_SECONDS} ? 0 + $ENV{PUBLIC_THREAD_WINDOW_SECONDS} : 45;
 $PUBLIC_THREAD_WINDOW_SECONDS = 0 if $PUBLIC_THREAD_WINDOW_SECONDS < 0;
 my %PERSONA_TRAIT_META = (
   join_greet_pct => { kind => 'pct', env => 'JOIN_GREET_PCT', default => 100 },
   ambient_public_reply_pct => { kind => 'pct', env => 'PUBLIC_CHAT_ALLOW_PCT', default => 50 },
   public_thread_window_seconds => { kind => 'int', env => 'PUBLIC_THREAD_WINDOW_SECONDS', default => 45 },
-  bot_reply_pct => { kind => 'pct', env => 'BERT_REPLY_ALLOW_PCT', default => 25 },
-  bot_reply_max_turns => { kind => 'int', env => 'BERT_REPLY_MAX_TURNS', default => 1 },
+  bot_reply_pct => { kind => 'pct', env => 'BOT_REPLY_PCT', default => 25 },
+  bot_reply_max_turns => { kind => 'int', env => 'BOT_REPLY_MAX_TURNS', default => 1 },
   non_substantive_allow_pct => { kind => 'pct', env => 'NON_SUBSTANTIVE_ALLOW_PCT', default => 0 },
 );
 my @PERSONA_TRAIT_ORDER = qw(join_greet_pct ambient_public_reply_pct public_thread_window_seconds bot_reply_pct bot_reply_max_turns non_substantive_allow_pct);

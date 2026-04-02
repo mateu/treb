@@ -12,8 +12,8 @@ local $ENV{BOT_IDENTITY_SLUG} = 'treb';
 local $ENV{JOIN_GREET_PCT} = 88;
 local $ENV{PUBLIC_CHAT_ALLOW_PCT} = 12;
 local $ENV{PUBLIC_THREAD_WINDOW_SECONDS} = 7;
-local $ENV{BERT_REPLY_ALLOW_PCT} = 66;
-local $ENV{BERT_REPLY_MAX_TURNS} = 3;
+local $ENV{BOT_REPLY_PCT} = 66;
+local $ENV{BOT_REPLY_MAX_TURNS} = 3;
 local $ENV{NON_SUBSTANTIVE_ALLOW_PCT} = 9;
 
 require './treb.pl';
