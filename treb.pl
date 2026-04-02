@@ -1109,7 +1109,7 @@ sub _do_raid {
     if ($has_warm_human_conversation) {
       $self->info("Retrying non-substantive output for warm human conversation lane");
       my $retry = eval {
-        my $prompt = $input . "\n\nRespond directly to the addressed human now. Be brief, useful, and natural. Do not use stage directions, faux silence, ambient observation, or withdrawn asides.";
+        my $prompt = $input . "\n\nA human directly addressed you. Answer that human directly and promptly now. This overrides your default quietness. Be brief, useful, and natural. Answer the actual question first. Do not use stage directions, faux silence, ambient observation, withdrawn asides, roleplay garnish, or any text about staying quiet. If silence would be appropriate, output nothing instead of narrating silence.";
         my $result = $self->_raider->raid($prompt);
         "$result";
       };
