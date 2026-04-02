@@ -47,6 +47,17 @@ sub build_context_and_input {
     }
   }
 
+  my $has_public_human_address = 0;
+  for my $m (@{$messages}) {
+    next unless (($m->{source_kind} // '') eq 'conversation');
+    next if (($m->{nick} // '') eq 'system');
+    $has_public_human_address = 1;
+    last;
+  }
+  if ($has_public_human_address) {
+    $context .= "[System note: You are replying in public channel $channel. If a human addresses you here, answer in-channel to $channel, not by private message. Use send_private_message only when someone explicitly asks for a PM.]\n";
+  }
+
   my $rendered = join("\n", map {
     my $prefix = $_->{nick};
     if (($prefix // '') ne 'system' && $self->irc->is_channel_operator($channel, $prefix)) {
