@@ -880,7 +880,7 @@ sub _is_filtered_bot_nick {
   my ($self, $nick) = @_;
   return unless defined $nick;
 
-  my $raw = $ENV{BOT_FILTER_NICKS} // 'Bert';
+  my $raw = $ENV{BOT_FILTER_NICKS} // 'burt_bot';
   my %blocked = map { lc($_) => 1 }
                 grep { length }
                 map  { s/^\s+|\s+$//gr }

@@ -7,8 +7,8 @@ require './treb.pl';
 { package TestBertPolicyBot; our @ISA = ('BertBot'); sub get_nickname { 'squirt' } }
 my $bot = bless {}, 'TestBertPolicyBot';
 
-ok($bot->_is_filtered_bot_nick('Bert'), 'Bert is filtered bot nick');
-ok(!$bot->_is_human_nick('Bert'), 'filtered bot is not human');
+ok($bot->_is_filtered_bot_nick('burt_bot'), 'burt_bot is filtered bot nick');
+ok(!$bot->_is_human_nick('burt_bot'), 'filtered bot is not human');
 ok($bot->_is_human_nick('mateu'), 'mateu counts as human');
 
 $bot->_bert_reply_turn_count(0);
