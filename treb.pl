@@ -39,6 +39,7 @@ use Bot::Runtime::Buffering qw(
 );
 use Bot::Runtime::Context qw(build_context_and_input);
 use Bot::Runtime::MCPServer ();
+use Bot::Runtime::PersonaTools ();
 use Bot::Persona qw(
   persona_trait_meta
   persona_trait_order
@@ -152,111 +153,57 @@ sub _bot_name_slug {
 
 sub _default_persona_trait_value {
   my ($self, $key) = @_;
-  my $cache = Bot::Persona::load_persona_cache(
-    memory     => $self->memory,
-    bot_name   => $self->_bot_name_slug,
-    trait_meta => \%PERSONA_TRAIT_META,
+  return Bot::Runtime::PersonaTools::default_persona_trait_value($self->_persona_runtime_args, key => $key);
+}
+
+sub _persona_runtime_args {
+  my ($self) = @_;
+  return (
+    self        => $self,
+    bot_name    => $self->_bot_name_slug,
+    trait_meta  => \%PERSONA_TRAIT_META,
     trait_order => \@PERSONA_TRAIT_ORDER,
   );
-  $self->_persona_cache($cache);
-  return $cache->{$key};
 }
 
 sub _load_persona_settings {
   my ($self) = @_;
-  my $cache = Bot::Persona::load_persona_cache(
-    memory      => $self->memory,
-    bot_name    => $self->_bot_name_slug,
-    trait_meta  => \%PERSONA_TRAIT_META,
-    trait_order => \@PERSONA_TRAIT_ORDER,
-  );
-  $self->_persona_cache($cache);
-  return $cache;
+  return Bot::Runtime::PersonaTools::load_persona_settings($self->_persona_runtime_args);
 }
 
 sub _persona_trait {
   my ($self, $key) = @_;
-  my $cache = $self->_persona_cache || {};
-  return $cache->{$key} if exists $cache->{$key};
-  $cache = $self->_load_persona_settings;
-  return $cache->{$key};
+  return Bot::Runtime::PersonaTools::persona_trait($self->_persona_runtime_args, key => $key);
 }
 
 sub _persona_stats_text {
   my ($self) = @_;
-  my $cache = $self->_persona_cache || {};
-  $cache = $self->_load_persona_settings unless %$cache;
-  return join('; ', map { $_ . '=' . $cache->{$_} } @PERSONA_TRAIT_ORDER);
+  return Bot::Runtime::PersonaTools::persona_stats_text($self->_persona_runtime_args);
 }
 
 sub _persona_text {
   my ($self) = @_;
-  my $cache = $self->_persona_cache || {};
-  $cache = $self->_load_persona_settings unless %$cache;
-  return Bot::Persona::persona_text(
-    bot_name    => $self->_bot_name_slug,
-    cache       => $cache,
-    full        => 1,
-    trait_meta  => \%PERSONA_TRAIT_META,
-    trait_order => \@PERSONA_TRAIT_ORDER,
-  );
+  return Bot::Runtime::PersonaTools::persona_text($self->_persona_runtime_args);
 }
 
 sub _persona_summary_text {
   my ($self) = @_;
-  my $cache = $self->_persona_cache || {};
-  $cache = $self->_load_persona_settings unless %$cache;
-  return Bot::Persona::persona_summary_text(
-    bot_name    => $self->_bot_name_slug,
-    cache       => $cache,
-    trait_meta  => \%PERSONA_TRAIT_META,
-    trait_order => \@PERSONA_TRAIT_ORDER,
-  );
+  return Bot::Runtime::PersonaTools::persona_summary_text($self->_persona_runtime_args);
 }
 
 sub _persona_trait_text {
   my ($self, $trait) = @_;
-  my $cache = $self->_persona_cache || {};
-  $cache = $self->_load_persona_settings unless %$cache;
-  return Bot::Persona::persona_trait_text(
-    trait       => $trait,
-    cache       => $cache,
-    trait_meta  => \%PERSONA_TRAIT_META,
-    trait_order => \@PERSONA_TRAIT_ORDER,
-  );
+  return Bot::Runtime::PersonaTools::persona_trait_text($self->_persona_runtime_args, trait => $trait);
 }
 
 sub _set_persona_trait {
   my ($self, $trait, $value) = @_;
-  my $cache = $self->_persona_cache || {};
-  $cache = $self->_load_persona_settings unless %$cache;
-  my ($ok, $msg) = Bot::Persona::set_persona_trait(
-    memory      => $self->memory,
-    bot_name    => $self->_bot_name_slug,
-    cache       => $cache,
-    trait       => $trait,
-    value       => $value,
-    trait_meta  => \%PERSONA_TRAIT_META,
-    trait_order => \@PERSONA_TRAIT_ORDER,
-  );
-  $self->_persona_cache($cache);
-  return ($ok, $ok ? "Set $msg for " . $self->_bot_name_slug . "." : $msg);
+  return Bot::Runtime::PersonaTools::set_persona_trait($self->_persona_runtime_args, trait => $trait, value => $value);
 }
 
 sub _apply_persona_preset {
   my ($self, $value) = @_;
-  my $cache = $self->_persona_cache || {};
-  $cache = $self->_load_persona_settings unless %$cache;
-  my ($ok, $msg) = Bot::Persona::apply_persona_preset(
-    memory      => $self->memory,
-    bot_name    => $self->_bot_name_slug,
-    cache       => $cache,
-    value       => $value,
-    trait_meta  => \%PERSONA_TRAIT_META,
-    trait_order => \@PERSONA_TRAIT_ORDER,
-  );
-  $self->_persona_cache($cache);
-  return ($ok, $msg);
+  return Bot::Runtime::PersonaTools::apply_persona_preset($self->_persona_runtime_args, value => $value);
 }
 
 sub _mcp_tool_logging_enabled {
@@ -315,34 +262,15 @@ sub _log_cleanup_empty {
   $self->info(Bot::OutputCleanup::cleanup_empty_message($before, $after));
 }
 
-
 sub _db_stats_text {
   my ($self) = @_;
-  my $dbh = $self->memory->_dbh;
-  my ($conv_count) = $dbh->selectrow_array('SELECT COUNT(*) FROM conversations');
-  my ($note_count) = $dbh->selectrow_array('SELECT COUNT(*) FROM notes');
-  my ($channel_count) = $dbh->selectrow_array('SELECT COUNT(DISTINCT channel) FROM conversations');
-  my ($latest) = $dbh->selectrow_array('SELECT MAX(created_at) FROM conversations');
-  my ($system_rows) = $dbh->selectrow_array(q{SELECT COUNT(*) FROM conversations WHERE nick = 'system'});
-  $conv_count ||= 0;
-  $note_count ||= 0;
-  $channel_count ||= 0;
-  $system_rows ||= 0;
-  $latest ||= 'n/a';
-  return sprintf('DB: %s | conversations: %d | notes: %d | channels: %d | system rows: %d | latest: %s | persona={%s}',
-    $self->memory->db_file, $conv_count, $note_count, $channel_count, $system_rows, $latest, $self->_persona_stats_text);
+  return Bot::Runtime::PersonaTools::db_stats_text($self->_persona_runtime_args);
 }
-
 
 sub _notes_text {
   my ($self, $nick) = @_;
-  $nick //= '';
-  $nick =~ s/^\s+|\s+$//g;
-  return 'Usage: :notes <nick>' unless length $nick;
-  my $notes = $self->memory->recall_notes($nick, '', 10);
-  return $notes && $notes =~ /\S/ ? $notes : "No notes for $nick.";
+  return Bot::Runtime::PersonaTools::notes_text(self => $self, nick => $nick);
 }
-
 sub _build_mcp_server {
   my ($self) = @_;
   return Bot::Runtime::MCPServer::build_mcp_server(self => $self, server_name => 'bert-tools');
