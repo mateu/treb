@@ -120,11 +120,42 @@ for my $name (qw(
 
 is($tools{stay_silent}{code}->($tool, { reason => 'n/a' }), '__SILENT__', 'stay_silent emits sentinel');
 
+my @alarm_events;
+{
+    no warnings 'redefine';
+    local *POE::Kernel::delay_add = sub {
+        my ($class, @args) = @_;
+        push @alarm_events, \@args;
+        return scalar @alarm_events;
+    };
+
+    is(
+        $tools{set_alarm}{code}->($tool, { reason => 'poke me', delay_seconds => 2 }),
+        'Alarm set for 10s: poke me',
+        'set_alarm clamps minimum delay'
+    );
+    is(
+        $tools{set_alarm}{code}->($tool, { reason => 'someday', delay_seconds => 99999 }),
+        'Alarm set for 3600s: someday',
+        'set_alarm clamps maximum delay'
+    );
+    is(
+        $tools{set_alarm}{code}->($tool, { reason => 'default', delay_seconds => 'bogus' }),
+        'Alarm set for 10s: default',
+        'set_alarm falls back to default on non-numeric delay'
+    );
+}
+is_deeply($alarm_events[0], ['_alarm_fired', 10, '#test', 'poke me'], 'set_alarm schedules POE alarm with normalized delay');
+is_deeply($alarm_events[1], ['_alarm_fired', 3600, '#test', 'someday'], 'set_alarm schedules clamped high delay');
+is_deeply($alarm_events[2], ['_alarm_fired', 10, '#test', 'default'], 'set_alarm schedules default delay on invalid numeric input');
+
 is($tools{cpan_module}{code}->($tool, { name => '  Moo  ' }), 'cpan:module:Moo', 'cpan_module delegates trimmed name');
 is_deeply($bot->{cpan}[0], ['module', 'Moo'], 'cpan lookup called with mode and module');
+is($tools{cpan_module}{code}->($tool, { name => '   ' }), 'Module name is required.', 'cpan_module rejects empty names');
 
 is($tools{summarize_url}{code}->($tool, { url => '  https://example.com  ' }), 'summary:https://example.com', 'summarize_url delegates trimmed URL');
 is_deeply($bot->{urls}, ['https://example.com'], 'summary delegate captured URL');
+is($tools{summarize_url}{code}->($tool, { url => '   ' }), 'URL is empty.', 'summarize_url rejects empty URL');
 
 $tools{search_web}{code}->($tool, { query => '  perl  ' });
 is_deeply($bot->{web}[0], ['perl', 2], 'search_web uses default MCP limit 2');
@@ -132,6 +163,9 @@ $tools{search_web}{code}->($tool, { query => 'perl', limit => 77 });
 is_deeply($bot->{web}[1], ['perl', 5], 'search_web clamps limit high bound');
 $tools{search_web}{code}->($tool, { query => 'perl', limit => 0 });
 is_deeply($bot->{web}[2], ['perl', 1], 'search_web clamps limit low bound');
+$tools{search_web}{code}->($tool, { query => 'perl', limit => 'bogus' });
+is_deeply($bot->{web}[3], ['perl', 2], 'search_web defaults to 2 on non-numeric limit');
+is($tools{search_web}{code}->($tool, { query => '   ' }), 'Search query is empty.', 'search_web rejects empty query');
 
 like($tools{current_time}{code}->($tool, {}), qr/^Current local time:/, 'current_time returns formatted line');
 like($tools{time_in}{code}->($tool, { zone => 'Europe/London' }), qr/Europe\/London/, 'time_in includes zone');
