@@ -33,7 +33,6 @@ use Bot::Runtime::MCPServer ();
 use Bot::Runtime::PersonaTools ();
 use Bot::Runtime::OutputPipeline ();
 use Bot::Runtime::MethodDelegates ();
-use Bot::Runtime::Presence ();
 use Bot::Runtime::PresenceEvents ();
 use Bot::Runtime::WebTools ();
 use Bot::Runtime::Policy ();
