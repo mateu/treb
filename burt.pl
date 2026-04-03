@@ -451,7 +451,7 @@ sub _build_mcp_server {
       $query =~ s/^\s+|\s+$//g;
       return $tool->text_result('Search query is empty.') unless length $query;
       my $limit = exists $args->{limit} ? $args->{limit} : 2;
-      $limit = 2 unless defined $limit && $limit =~ /^\d+(?:\.\d+)?$/;
+      $limit = 2 unless defined $limit && $limit =~ /^-?\d+(?:\.\d+)?$/;
       $limit = int($limit);
       $limit = 1 if $limit < 1;
       $limit = 5 if $limit > 5;

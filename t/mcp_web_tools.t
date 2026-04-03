@@ -64,6 +64,12 @@ subtest 'search_web clamps limits to 1..5' => sub {
 
     $search_tool->{code}->($tool, { query => 'x', limit => 99 });
     is_deeply($bot->{_last_search}, ['x', 5], 'upper bound enforced');
+
+    $search_tool->{code}->($tool, { query => 'x', limit => -1 });
+    is_deeply($bot->{_last_search}, ['x', 1], 'negative limit clamped to 1');
+
+    $search_tool->{code}->($tool, { query => 'x', limit => 'abc' });
+    is_deeply($bot->{_last_search}, ['x', 2], 'non-numeric limit defaults to 2');
 };
 
 done_testing;
