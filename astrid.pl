@@ -35,7 +35,7 @@ use Bot::Runtime::Buffering qw(
   split_priority_messages
   schedule_pending_buffers
 );
-use Bot::Runtime::Context qw(build_context_and_input);
+
 use Bot::Runtime::Dispatch ();
 use Bot::Runtime::MCPServer ();
 use Bot::Runtime::PersonaTools ();
@@ -448,35 +448,10 @@ sub _split_priority_messages {
 
 event _process_buffer => sub {
   my ($self, $channel) = @_[OBJECT, ARG0];
-  delete $self->_buffer_timers->{$channel};
-
-  return if $self->_processing;
-  my @incoming_messages = @{$self->_msg_buffer->{$channel} || []};
-  return unless @incoming_messages;
-
-  $self->_msg_buffer->{$channel} = [];
-  my ($active_messages, $deferred_messages) = $self->_split_priority_messages(\@incoming_messages);
-  my @messages = @{$active_messages || []};
-  my @deferred = @{$deferred_messages || []};
-  if (@deferred) {
-    $self->info('Deferring lower-priority buffered messages while human conversation lane is active');
-    push @{$self->_msg_buffer->{$channel} ||= []}, @deferred;
-  }
-  return unless @messages;
-
-  $self->_processing(1);
-
-  my $ctx = Bot::Runtime::Context::build_context_and_input(
-    self     => $self,
-    channel  => $channel,
-    messages => \@messages,
+  return Bot::Runtime::Buffering::process_buffer_event(
+    self    => $self,
+    channel => $channel,
   );
-  my $input = $ctx->{input};
-
-  $self->info("Processing buffer for $channel:\n$input");
-
-  $self->_pending_raid({ input => $input, channel => $channel, messages => \@messages });
-  $self->_do_raid;
 };
 
 sub _schedule_pending_buffers {
