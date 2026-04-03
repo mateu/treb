@@ -33,7 +33,6 @@ use Bot::Runtime::MCPServer ();
 use Bot::Runtime::PersonaTools ();
 use Bot::Runtime::OutputPipeline ();
 use Bot::Runtime::MethodDelegates ();
-use Bot::Runtime::UtilityCommands ();
 use Bot::Runtime::Presence ();
 use Bot::Runtime::WebTools ();
 use Bot::Runtime::Policy ();
@@ -463,13 +462,124 @@ event irc_public => sub {
     $self->info("Reset bert conversational turn count by human nick=$nick");
   }
 
-  if (Bot::Runtime::UtilityCommands::handle_public_utility_command(
-    self       => $self,
-    channel    => $channel,
-    msg        => $msg,
-    style      => q{strict},
-    notes_mode => q{direct_only},
-  )) {
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+sum\s+|sum:\s*|:sum\s+)(https?:\/\/\S+)/i) {
+    return unless $self->_utility_command_matches_me($1);
+    my $url = $2;
+    my $result = $self->_summarize_url($url);
+    $self->_send_to_channel($channel, $result) if defined($result) && $result =~ /\S/;
+    return;
+  }
+
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+time\s*|:time\s*|time:\s*)$/i) {
+    return unless $self->_utility_command_matches_me($1);
+    my $line = 'Current local time: ' . $self->_current_local_time_text . '.';
+    $self->_send_to_channel($channel, $line);
+    return;
+  }
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+dbstats\s*|:dbstats\s*|dbstats:\s*)$/i) {
+    return unless $self->_utility_command_matches_me($1);
+    my $line = $self->_db_stats_text;
+    $self->_send_to_channel($channel, $line);
+    return;
+  }
+
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+persona\s+full\s*)$/i) {
+    return unless lc($1) eq lc($self->get_nickname);
+    my $line = $self->_persona_text;
+    $self->_send_to_channel($channel, $line);
+    return;
+  }
+
+  if ($msg =~ /^([A-Za-z0-9_\-]+):\s+persona\s+set\s+(\S+)\s+(?:=\s*)?(\S+)\s*$/i) {
+    return unless lc($1) eq lc($self->get_nickname);
+    my ($ok, $line) = $self->_set_persona_trait($2, $3);
+    $self->_send_to_channel($channel, $line);
+    return;
+  }
+
+  if ($msg =~ /^([A-Za-z0-9_\-]+):\s+persona\s+get\s+(\S+)\s*$/i) {
+    return unless lc($1) eq lc($self->get_nickname);
+    my $line = $self->_persona_trait_text($2);
+    $self->_send_to_channel($channel, $line);
+    return;
+  }
+
+  if ($msg =~ /^([A-Za-z0-9_\-]+):\s+persona\s+(\S+)\s*$/i) {
+    my ($target_nick, $arg) = ($1, $2);
+    return unless lc($target_nick) eq lc($self->get_nickname);
+    my $token = lc($arg);
+    return if $token eq 'full' || $token eq 'set' || $token eq 'get';
+    if ($arg =~ /^\d+$/) {
+      my ($ok, $line) = $self->_apply_persona_preset($arg);
+      $self->_send_to_channel($channel, $line);
+      return;
+    }
+    my $line = $self->_persona_trait_text($arg);
+    $self->_send_to_channel($channel, $line);
+    return;
+  }
+
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+persona\s*)$/i) {
+    return unless lc($1) eq lc($self->get_nickname);
+    my $line = $self->_persona_summary_text;
+    $self->_send_to_channel($channel, $line);
+    return;
+  }
+
+  if ($msg =~ /^([A-Za-z0-9_\-]+):\s+notes\s+(\S+)\s*$/i) {
+    return unless lc($1) eq lc($self->get_nickname);
+    my $nick = $2;
+    my $line = $self->_notes_text($nick);
+    $self->_send_to_channel($channel, $line) if defined($line) && $line =~ /\S/;
+    return;
+  }
+
+
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+time\s+in\s+|:time\s+in\s+|time:\s*)([A-Za-z_]+\/[A-Za-z0-9_+\-]+(?:\/[A-Za-z0-9_+\-]+)*)\s*$/i) {
+    return unless $self->_utility_command_matches_me($1);
+    my $zone = $2;
+    my $line = 'Current time in ' . $zone . ': ' . $self->_time_text_for_zone($zone) . '.';
+    $self->_send_to_channel($channel, $line);
+    return;
+  }
+
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+cpan\s+recent(?:\s+(\d+))?\s*|:cpan\s+recent(?:\s+(\d+))?\s*|cpan:\s*recent(?:\s+(\d+))?\s*)$/i) {
+    return unless $self->_utility_command_matches_me($1);
+    my $count = defined $2 ? $2 : (defined $3 ? $3 : 3);
+    my $result = $self->_cpan_lookup('recent', $count);
+    $self->_send_to_channel($channel, $result) if defined($result) && $result =~ /\S/;
+    return;
+  }
+
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+cpan\s+(module|author|describe)\s+(.+)|:cpan\s+(module|author|describe)\s+(.+)|cpan:\s*(module|author|describe)\s+(.+))$/i) {
+    return unless $self->_utility_command_matches_me($1);
+    my ($mode, $query) = defined $2 ? ($2, $3) : (defined $4 ? ($4, $5) : ($6, $7));
+    my $result = $self->_cpan_lookup($mode, $query);
+    $self->_send_to_channel($channel, $result) if defined($result) && $result =~ /\S/;
+    return;
+  }
+
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+cpan\s+(.+)|:cpan\s+(.+)|cpan:\s*(.+))$/i) {
+    return unless $self->_utility_command_matches_me($1);
+    my $query = defined $2 ? $2 : (defined $3 ? $3 : $4);
+    $query =~ s/^\s+|\s+$//g;
+    my $result = $self->_cpan_lookup('module', $query);
+    $self->_send_to_channel($channel, $result) if defined($result) && $result =~ /\S/;
+    return;
+  }
+
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+search\s+|:search\s+|search:\s+)(.+)/i) {
+    return unless $self->_utility_command_matches_me($1);
+    my $arg = $2;
+    my ($count, $query) = (3, $arg);
+    if ($arg =~ /^\s*(\d+)\s+(.+)\s*$/) {
+      $count = $1;
+      $query = $2;
+    }
+    $count = 1 if $count < 1;
+    $count = 5 if $count > 5;
+    my $result = $self->_search_web($query, $count);
+    $self->_send_to_channel($channel, $result) if defined($result) && $result =~ /\S/;
     return;
   }
 
