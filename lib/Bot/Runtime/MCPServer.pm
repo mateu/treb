@@ -16,6 +16,15 @@ sub _trim {
   return $value;
 }
 
+sub _positive_int {
+  my ($value) = @_;
+  $value = _trim($value);
+  return undef unless length $value && $value =~ /^\d+$/;
+  my $int = int($value);
+  return undef if $int < 1;
+  return $int;
+}
+
 sub _clamp_numeric {
   my (%args) = @_;
   my $value   = $args{value};
@@ -70,13 +79,14 @@ sub _tool_specs {
       },
       code => sub {
         my ($tool, $tool_args) = @_;
+        my $reason = _trim($tool_args->{reason});
+        return $tool->text_result('Reason is required.') unless length $reason;
         my $delay = _clamp_numeric(
           value   => $tool_args->{delay_seconds},
           default => 10,
           min     => 10,
           max     => 3600,
         );
-        my $reason  = $tool_args->{reason};
         my $channel = $self->_default_channel;
         POE::Kernel->delay_add( _alarm_fired => $delay, $channel, $reason );
         return $tool->text_result("Alarm set for ${delay}s: $reason");
@@ -173,7 +183,8 @@ sub _tool_specs {
       },
       code => sub {
         my ($tool, $tool_args) = @_;
-        my $zone = $tool_args->{zone};
+        my $zone = _trim($tool_args->{zone});
+        return $tool->text_result('Timezone is required.') unless length $zone;
         my $line = 'Current time in ' . $zone . ': ' . $self->_time_text_for_zone($zone) . '.';
         _log_tool_call(self => $self, message => "MCP time_in called for $zone => $line");
         return $tool->text_result($line);
@@ -191,7 +202,9 @@ sub _tool_specs {
       },
       code => sub {
         my ($tool, $tool_args) = @_;
-        my $result = $self->memory->recall($tool_args->{query});
+        my $query = _trim($tool_args->{query});
+        return $tool->text_result('History query is required.') unless length $query;
+        my $result = $self->memory->recall($query);
         return $tool->text_result($result || 'No matching conversations found.');
       },
     },
@@ -208,8 +221,13 @@ sub _tool_specs {
       },
       code => sub {
         my ($tool, $tool_args) = @_;
-        $self->memory->save_note($tool_args->{nick}, $tool_args->{content});
-        return $tool->text_result("Note saved about $tool_args->{nick}.");
+        my $nick = _trim($tool_args->{nick});
+        return $tool->text_result('Nick is required.') unless length $nick;
+        my $content = _trim($tool_args->{content});
+        return $tool->text_result('Note content is required.') unless length $content;
+
+        $self->memory->save_note($nick, $content);
+        return $tool->text_result("Note saved about $nick.");
       },
     },
     {
@@ -224,7 +242,9 @@ sub _tool_specs {
       },
       code => sub {
         my ($tool, $tool_args) = @_;
-        my $result = $self->memory->recall_notes($tool_args->{nick}, $tool_args->{query} || '');
+        my $nick = _trim($tool_args->{nick});
+        my $query = _trim($tool_args->{query});
+        my $result = $self->memory->recall_notes((length $nick ? $nick : undef), $query);
         return $tool->text_result($result || 'No matching notes found.');
       },
     },
@@ -234,17 +254,22 @@ sub _tool_specs {
       input_schema => {
         type       => 'object',
         properties => {
-          id      => { type => 'number', description => 'The note ID (shown as #N in recall_notes output)' },
+          id      => { type => 'integer', minimum => 1, description => 'The note ID (shown as #N in recall_notes output)' },
           content => { type => 'string', description => 'The new content for this note' },
         },
         required => ['id', 'content'],
       },
       code => sub {
         my ($tool, $tool_args) = @_;
-        if ($self->memory->update_note($tool_args->{id}, $tool_args->{content})) {
-          return $tool->text_result("Note #$tool_args->{id} updated.");
+        my $id = _positive_int($tool_args->{id});
+        return $tool->text_result('Note id must be a positive integer.') unless defined $id;
+        my $content = _trim($tool_args->{content});
+        return $tool->text_result('Note content is required.') unless length $content;
+
+        if ($self->memory->update_note($id, $content)) {
+          return $tool->text_result("Note #$id updated.");
         }
-        return $tool->text_result("Note #$tool_args->{id} not found.");
+        return $tool->text_result("Note #$id not found.");
       },
     },
     {
@@ -253,16 +278,19 @@ sub _tool_specs {
       input_schema => {
         type       => 'object',
         properties => {
-          id => { type => 'number', description => 'The note ID to delete (shown as #N in recall_notes output)' },
+          id => { type => 'integer', minimum => 1, description => 'The note ID to delete (shown as #N in recall_notes output)' },
         },
         required => ['id'],
       },
       code => sub {
         my ($tool, $tool_args) = @_;
-        if ($self->memory->delete_note($tool_args->{id})) {
-          return $tool->text_result("Note #$tool_args->{id} deleted.");
+        my $id = _positive_int($tool_args->{id});
+        return $tool->text_result('Note id must be a positive integer.') unless defined $id;
+
+        if ($self->memory->delete_note($id)) {
+          return $tool->text_result("Note #$id deleted.");
         }
-        return $tool->text_result("Note #$tool_args->{id} not found.");
+        return $tool->text_result("Note #$id not found.");
       },
     },
     {
@@ -279,11 +307,16 @@ sub _tool_specs {
       },
       code => sub {
         my ($tool, $tool_args) = @_;
-        my $reason = $tool_args->{reason} || '';
-        $self->info("PM to $tool_args->{nick}: $tool_args->{message}" . ($reason ? " (reason: $reason)" : ''));
-        $self->privmsg($tool_args->{nick} => $tool_args->{message});
-        $self->privmsg($tool_args->{nick} => "(reason: $reason)") if $reason;
-        return $tool->text_result("Private message sent to $tool_args->{nick}.");
+        my $nick = _trim($tool_args->{nick});
+        return $tool->text_result('Nick is required.') unless length $nick;
+        my $message = _trim($tool_args->{message});
+        return $tool->text_result('Message is required.') unless length $message;
+        my $reason = _trim($tool_args->{reason});
+
+        $self->info("PM to $nick: $message" . ($reason ? " (reason: $reason)" : ''));
+        $self->privmsg($nick => $message);
+        $self->privmsg($nick => "(reason: $reason)") if $reason;
+        return $tool->text_result("Private message sent to $nick.");
       },
     },
     {
@@ -298,8 +331,10 @@ sub _tool_specs {
       },
       code => sub {
         my ($tool, $tool_args) = @_;
-        $self->irc->yield(whois => $tool_args->{nick});
-        return $tool->text_result("WHOIS request sent for $tool_args->{nick}. Results will arrive shortly as a system message.");
+        my $nick = _trim($tool_args->{nick});
+        return $tool->text_result('Nick is required.') unless length $nick;
+        $self->irc->yield(whois => $nick);
+        return $tool->text_result("WHOIS request sent for $nick. Results will arrive shortly as a system message.");
       },
     },
   ];

@@ -144,6 +144,11 @@ my @alarm_events;
         'Alarm set for 10s: default',
         'set_alarm falls back to default on non-numeric delay'
     );
+    is(
+        $tools{set_alarm}{code}->($tool, { reason => '   ', delay_seconds => 60 }),
+        'Reason is required.',
+        'set_alarm requires non-empty reason'
+    );
 }
 is_deeply($alarm_events[0], ['_alarm_fired', 10, '#test', 'poke me'], 'set_alarm schedules POE alarm with normalized delay');
 is_deeply($alarm_events[1], ['_alarm_fired', 3600, '#test', 'someday'], 'set_alarm schedules clamped high delay');
@@ -168,19 +173,30 @@ is_deeply($bot->{web}[3], ['perl', 2], 'search_web defaults to 2 on non-numeric 
 is($tools{search_web}{code}->($tool, { query => '   ' }), 'Search query is empty.', 'search_web rejects empty query');
 
 like($tools{current_time}{code}->($tool, {}), qr/^Current local time:/, 'current_time returns formatted line');
-like($tools{time_in}{code}->($tool, { zone => 'Europe/London' }), qr/Europe\/London/, 'time_in includes zone');
+like($tools{time_in}{code}->($tool, { zone => '  Europe/London  ' }), qr/Europe\/London/, 'time_in trims zone');
+is($tools{time_in}{code}->($tool, { zone => '   ' }), 'Timezone is required.', 'time_in rejects empty zone');
 
 is($tools{recall_history}{code}->($tool, { query => 'deploy' }), 'history:deploy', 'recall_history delegates to memory');
-is($tools{save_note}{code}->($tool, { nick => 'alice', content => 'likes perl' }), 'Note saved about alice.', 'save_note acknowledges write');
+is($tools{recall_history}{code}->($tool, { query => '   ' }), 'History query is required.', 'recall_history rejects empty query');
+is($tools{save_note}{code}->($tool, { nick => '  alice  ', content => '  likes perl  ' }), 'Note saved about alice.', 'save_note trims nick and content');
+is($tools{save_note}{code}->($tool, { nick => '  ', content => 'likes perl' }), 'Nick is required.', 'save_note requires nick');
+is($tools{save_note}{code}->($tool, { nick => 'alice', content => '   ' }), 'Note content is required.', 'save_note requires content');
 like($tools{recall_notes}{code}->($tool, { nick => 'alice' }), qr/likes perl/, 'recall_notes returns note content');
 is($tools{update_note}{code}->($tool, { id => 7, content => 'updated' }), 'Note #7 updated.', 'update_note success path');
+is($tools{update_note}{code}->($tool, { id => 0, content => 'updated' }), 'Note id must be a positive integer.', 'update_note validates id');
+is($tools{update_note}{code}->($tool, { id => 7, content => '   ' }), 'Note content is required.', 'update_note validates content');
 is($tools{delete_note}{code}->($tool, { id => 8 }), 'Note #8 deleted.', 'delete_note success path');
+is($tools{delete_note}{code}->($tool, { id => 'bogus' }), 'Note id must be a positive integer.', 'delete_note validates id');
 
-is($tools{send_private_message}{code}->($tool, { nick => 'alice', message => 'hello', reason => 'requested by bob' }), 'Private message sent to alice.', 'send_private_message acknowledges send');
+is($tools{send_private_message}{code}->($tool, { nick => '  alice  ', message => '  hello  ', reason => '  requested by bob  ' }), 'Private message sent to alice.', 'send_private_message trims fields');
 is(scalar @{ $bot->{pms} }, 2, 'send_private_message sends message and reason');
 is_deeply($bot->{pms}[0], ['alice', 'hello'], 'primary PM sent');
+is_deeply($bot->{pms}[1], ['alice', '(reason: requested by bob)'], 'reason PM sent to trimmed nick');
+is($tools{send_private_message}{code}->($tool, { nick => ' ', message => 'hello' }), 'Nick is required.', 'send_private_message requires nick');
+is($tools{send_private_message}{code}->($tool, { nick => 'alice', message => '   ' }), 'Message is required.', 'send_private_message requires message');
 
-like($tools{whois}{code}->($tool, { nick => 'alice' }), qr/WHOIS request sent/, 'whois acknowledges request');
+like($tools{whois}{code}->($tool, { nick => '  alice  ' }), qr/WHOIS request sent/, 'whois trims nick and acknowledges request');
 is_deeply($bot->{irc}{events}[0], ['whois', 'alice'], 'whois delegated to IRC client');
+is($tools{whois}{code}->($tool, { nick => '   ' }), 'Nick is required.', 'whois requires nick');
 
 done_testing;
