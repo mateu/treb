@@ -27,8 +27,8 @@ sub setup_raider {
   my $mcp = $mcp_class->new(server => $mcp_server);
   $loop->add($mcp);
   my $initialize = $mcp->initialize;
-  if (defined $initialize && ref($initialize) && $initialize->can('get')) {
-    $initialize->get;
+  if (defined $initialize && ref($initialize)) {
+    $loop->await($initialize);
   }
   $self->_mcp($mcp);
 
@@ -48,6 +48,7 @@ sub setup_raider {
   my $model = $engine->model;
   my $provider = ref($engine) =~ s/.*:://r;
   my $chan_list = join(', ', $self->get_channels);
+  use_module('Bot::Mission');
   my $mission = Bot::Mission::load_mission_for_script(
     script_file   => $script_file,
     nick          => $nick,

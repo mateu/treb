@@ -14,6 +14,10 @@ use Bot::Runtime::RaiderSetup (qw(setup_raider));
         push @{ $self->{added} }, $item;
         return 1;
     }
+    sub await {
+        my ($self, $future) = @_;
+        return 1;
+    }
 }
 
 {
@@ -161,6 +165,7 @@ subtest 'setup_raider wires mcp, mission, and raider with defaults' => sub {
             'IO::Async::Loop::POE',
             'Net::Async::MCP',
             'Langertha::Engine::Groq',
+            'Bot::Mission',
             'Langertha::Raider',
         ],
         'runtime classes loaded via use_module',
