@@ -50,13 +50,16 @@ sub install_shared_delegates {
     _search_web => sub { Bot::Runtime::WebTools::search_web(@_) },
   );
 
+  my @installed;
+
   no strict 'refs';
   for my $name (keys %delegates) {
     next if defined &{"${target_package}::${name}"};
     *{"${target_package}::${name}"} = $delegates{$name};
+    push @installed, $name;
   }
 
-  return sort keys %delegates;
+  return sort @installed;
 }
 
 1;
