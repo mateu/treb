@@ -410,6 +410,58 @@ sub _build_mcp_server {
   );
 
   $server->tool(
+    name         => 'summarize_url',
+    description  => 'Fetch and summarize an http(s) URL for IRC chat.',
+    input_schema => {
+      type       => 'object',
+      properties => {
+        url => { type => 'string', description => 'Absolute URL to summarize (http or https)' },
+      },
+      required => ['url'],
+    },
+    code => sub {
+      my ($tool, $args) = @_;
+      my $url = $args->{url} // '';
+      $url =~ s/^\s+|\s+$//g;
+      return $tool->text_result('URL is empty.') unless length $url;
+      my $line = $self->_summarize_url($url);
+      if ($self->_mcp_tool_logging_enabled) {
+        $self->info("MCP summarize_url called => $url");
+      }
+      return $tool->text_result($line);
+    },
+  );
+
+  $server->tool(
+    name         => 'search_web',
+    description  => 'Search the web and return compact result lines. Defaults to 2 results for tool use.',
+    input_schema => {
+      type       => 'object',
+      properties => {
+        query => { type => 'string', description => 'Search query text' },
+        limit => { type => 'number', description => 'How many results to return (1-5, default 2)' },
+      },
+      required => ['query'],
+    },
+    code => sub {
+      my ($tool, $args) = @_;
+      my $query = $args->{query} // '';
+      $query =~ s/^\s+|\s+$//g;
+      return $tool->text_result('Search query is empty.') unless length $query;
+      my $limit = exists $args->{limit} ? $args->{limit} : 2;
+      $limit = 2 unless defined $limit && $limit =~ /^\d+(?:\.\d+)?$/;
+      $limit = int($limit);
+      $limit = 1 if $limit < 1;
+      $limit = 5 if $limit > 5;
+      my $line = $self->_search_web($query, $limit);
+      if ($self->_mcp_tool_logging_enabled) {
+        $self->info("MCP search_web called => $query (limit=$limit)");
+      }
+      return $tool->text_result($line);
+    },
+  );
+
+  $server->tool(
     name         => 'current_time',
     description  => 'Get the current local date and time in America/Denver. Use this when you need exact time awareness instead of guessing.',
     input_schema => {
