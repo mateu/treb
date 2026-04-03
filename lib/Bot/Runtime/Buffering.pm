@@ -4,9 +4,11 @@ use strict;
 use warnings;
 
 use Exporter 'import';
+use Bot::Runtime::Context ();
 our @EXPORT_OK = qw(
   buffer_message
   split_priority_messages
+  process_buffer_event
   schedule_pending_buffers
 );
 
@@ -45,6 +47,43 @@ sub split_priority_messages {
 
   my @deferred = grep { (($_->{source_kind} // '') ne 'conversation') } @messages;
   return (\@conversation, \@deferred);
+}
+
+sub process_buffer_event {
+  my (%args) = @_;
+  my $self    = $args{self} or die 'process_buffer_event requires self';
+  my $channel = $args{channel};
+  die 'process_buffer_event requires channel' unless defined $channel;
+
+  delete $self->_buffer_timers->{$channel};
+
+  return if $self->_processing;
+  my @incoming_messages = @{$self->_msg_buffer->{$channel} || []};
+  return unless @incoming_messages;
+
+  $self->_msg_buffer->{$channel} = [];
+  my ($active_messages, $deferred_messages) = $self->_split_priority_messages(\@incoming_messages);
+  my @messages = @{$active_messages || []};
+  my @deferred = @{$deferred_messages || []};
+  if (@deferred) {
+    $self->info('Deferring lower-priority buffered messages while human conversation lane is active');
+    push @{$self->_msg_buffer->{$channel} ||= []}, @deferred;
+  }
+  return unless @messages;
+
+  $self->_processing(1);
+
+  my $ctx = Bot::Runtime::Context::build_context_and_input(
+    self     => $self,
+    channel  => $channel,
+    messages => \@messages,
+  );
+  my $input = $ctx->{input};
+
+  $self->info("Processing buffer for $channel:\n$input");
+
+  $self->_pending_raid({ input => $input, channel => $channel, messages => \@messages });
+  $self->_do_raid;
 }
 
 sub schedule_pending_buffers {
