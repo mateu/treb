@@ -28,6 +28,9 @@
   - `script/with-treb-env.sh env | rg 'IRC_|BOT_|MODEL|ENGINE'`
 - Run a one-off command inside a bot's env:
   - `script/with-treb-env.sh perl -E 'say $ENV{IRC_NICKNAME}'`
+- Run repo-safe syntax + test checks with the intended local::lib/bootstrap env:
+  - `script/check-all.sh`
+  - or individually: `script/with-burt-env.sh perl -c burt.pl`
 
 ## Rule of thumb
 Use `run-*.sh` as the default human-facing entrypoint.
