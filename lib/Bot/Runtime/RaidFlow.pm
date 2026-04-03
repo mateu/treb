@@ -27,8 +27,36 @@ sub do_raid {
   my $channel  = $pending->{channel};
   my $messages = $pending->{messages};
 
+  my $raider = $self->_raider;
+  if (!$raider && $self->can('_setup_raider')) {
+    $self->info('Raider missing; attempting runtime setup');
+    my $setup_ok = eval {
+      my $setup = $self->_setup_raider;
+      $setup->get if defined $setup && ref($setup) && $setup->can('get');
+      1;
+    };
+    if (!$setup_ok) {
+      my $err = "$@";
+      $err =~ s/\s+$//;
+      $self->error("Raider setup retry failed: $err");
+    }
+    $raider = $self->_raider;
+  }
+
+  unless ($raider) {
+    $self->error('Raider unavailable: no active raider instance');
+    $self->_send_to_channel(
+      $channel || $self->_default_channel,
+      'My brain is still booting. Try again in a moment.',
+    );
+    $self->_pending_raid(undef);
+    $self->_processing(0);
+    $self->_schedule_pending_buffers;
+    return;
+  }
+
   my $answer = eval {
-    my $result = $self->_raider->raid($input);
+    my $result = $raider->raid($input);
     "$result";
   };
 
@@ -65,7 +93,7 @@ sub do_raid {
   }
 
   eval {
-    my $engine = $self->_raider->active_engine;
+    my $engine = $raider->active_engine;
     if ($engine->has_rate_limit) {
       my $rl = $engine->rate_limit;
       $self->info(
@@ -113,7 +141,7 @@ sub do_raid {
       $self->info('Retrying non-substantive output for warm human conversation lane');
       my $retry = eval {
         my $prompt = $input . "\n\nA human directly addressed you. Answer that human directly and promptly now. This overrides your default quietness. Be brief, useful, and natural. Answer the actual question first. Do not use stage directions, faux silence, ambient observation, withdrawn asides, roleplay garnish, or any text about staying quiet. If silence would be appropriate, output nothing instead of narrating silence.";
-        my $result = $self->_raider->raid($prompt);
+        my $result = $raider->raid($prompt);
         "$result";
       };
       if (!$@ && defined $retry) {
@@ -145,7 +173,7 @@ sub do_raid {
   if ($too_long) {
     $self->info('Response too long, asking to shorten');
     $answer = eval {
-      my $retry = $self->_raider->raid(
+      my $retry = $raider->raid(
         "Your last response had lines over $max_line characters. "
         . "Rewrite it shorter. Every line must be under $max_line chars."
       );

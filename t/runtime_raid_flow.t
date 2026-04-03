@@ -31,6 +31,13 @@ use Bot::Runtime::RaidFlow qw(do_raid);
 }
 
 {
+  package Local::RaidFlowFuture;
+
+  sub new { bless {}, shift }
+  sub get { return 1 }
+}
+
+{
   package Local::RaidFlowRaider;
 
   sub new {
@@ -57,6 +64,9 @@ use Bot::Runtime::RaidFlow qw(do_raid);
 
   sub new {
     my ($class, %args) = @_;
+    my $raider = exists $args{raider}
+      ? $args{raider}
+      : Local::RaidFlowRaider->new(replies => $args{replies} || []);
     return bless {
       _pending_raid                 => $args{pending},
       _rate_limit_wait              => 0,
@@ -73,7 +83,10 @@ use Bot::Runtime::RaidFlow qw(do_raid);
       scheduled                     => 0,
       cleanup_log                   => [],
       memory                        => Local::RaidFlowMemory->new,
-      raider                        => Local::RaidFlowRaider->new(replies => $args{replies} || []),
+      raider                        => $raider,
+      setup_calls                   => 0,
+      setup_fail                    => $args{setup_fail},
+      setup_replies                 => $args{setup_replies} || [],
     }, $class;
   }
 
@@ -95,7 +108,22 @@ use Bot::Runtime::RaidFlow qw(do_raid);
     return $self->{_processing};
   }
 
-  sub _raider { return $_[0]->{raider} }
+  sub _raider {
+    my ($self, $value) = @_;
+    $self->{raider} = $value if @_ > 1;
+    return $self->{raider};
+  }
+
+  sub _setup_raider {
+    my ($self) = @_;
+    $self->{setup_calls}++;
+    die $self->{setup_fail} if defined $self->{setup_fail};
+    if (!$self->{raider}) {
+      $self->{raider} = Local::RaidFlowRaider->new(replies => $self->{setup_replies});
+    }
+    return Local::RaidFlowFuture->new;
+  }
+
   sub _default_channel { return '#ai' }
 
   sub _send_to_channel {
@@ -274,6 +302,57 @@ use Bot::Runtime::RaidFlow qw(do_raid);
 
   is($bot->{sent}[0]{msg}, '...', 'bert lane allows borderline non-substantive output');
   like(join("\n", @{$bot->{info}}), qr/Allowing borderline non-substantive output/, 'bert lane allowance logged');
+}
+
+{
+  my $bot = Local::RaidFlowBot->new(
+    pending => {
+      input => 'prompt',
+      channel => '#ai',
+      messages => [
+        { nick => 'mateu', channel => '#ai', msg => 'question', source_kind => 'conversation' },
+      ],
+    },
+    raider => undef,
+    setup_replies => ['hello after setup'],
+  );
+
+  do_raid(
+    self => $bot,
+    max_line => 400,
+    brainfreeze => ['*brainfreeze*'],
+  );
+
+  is($bot->{setup_calls}, 1, 'missing raider triggers setup retry');
+  is($bot->{sent}[0]{msg}, 'hello after setup', 'setup retry provides usable raider response');
+  is($bot->_pending_raid, undef, 'pending raid cleared after setup retry success');
+}
+
+{
+  my $bot = Local::RaidFlowBot->new(
+    pending => {
+      input => 'prompt',
+      channel => '#ai',
+      messages => [
+        { nick => 'mateu', channel => '#ai', msg => 'question', source_kind => 'conversation' },
+      ],
+    },
+    raider => undef,
+    setup_fail => 'boom',
+  );
+
+  do_raid(
+    self => $bot,
+    max_line => 400,
+    brainfreeze => ['*brainfreeze*'],
+  );
+
+  is($bot->{setup_calls}, 1, 'setup retry attempted when missing raider has no instance');
+  is($bot->{sent}[0]{msg}, 'My brain is still booting. Try again in a moment.', 'fallback reply sent when raider remains unavailable');
+  is($bot->_pending_raid, undef, 'pending raid cleared when raider is unavailable');
+  is($bot->_processing, 0, 'processing flag reset when raider is unavailable');
+  is($bot->{scheduled}, 1, 'pending buffers scheduled after missing raider fallback');
+  like(join("\n", @{$bot->{errors}}), qr/Raider setup retry failed: boom/, 'setup retry failure is logged');
 }
 
 {

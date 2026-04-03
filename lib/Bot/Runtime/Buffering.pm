@@ -70,6 +70,29 @@ sub process_buffer_event {
   }
   return unless @messages;
 
+  my $raider = $self->can('_raider') ? $self->_raider : undef;
+  if (!$raider && $self->can('_setup_raider')) {
+    $self->info('Raider unavailable while processing buffer; attempting setup');
+    my $setup_ok = eval {
+      my $setup = $self->_setup_raider;
+      $setup->get if defined $setup && ref($setup) && $setup->can('get');
+      1;
+    };
+    if (!$setup_ok && $self->can('error')) {
+      my $err = "$@";
+      $err =~ s/\s+$//;
+      $self->error("Raider setup retry failed in buffering: $err");
+    }
+    $raider = $self->can('_raider') ? $self->_raider : undef;
+  }
+
+  unless ($raider) {
+    $self->info('Raider unavailable; deferring buffered messages');
+    unshift @{$self->_msg_buffer->{$channel} ||= []}, @messages;
+    $self->_schedule_pending_buffers if $self->can('_schedule_pending_buffers');
+    return;
+  }
+
   $self->_processing(1);
 
   my $ctx = Bot::Runtime::Context::build_context_and_input(
