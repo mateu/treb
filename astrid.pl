@@ -23,12 +23,6 @@ use warnings;
 use lib 'lib';
 
 use Bot::MemoryStore;
-use Bot::Commands::Time qw(time_text_for_zone current_local_time_text);
-use Bot::OutputCleanup qw(
-  repair_mojibake_text
-  clean_text_for_irc
-  is_non_substantive_output
-);
 use Bot::Runtime::Buffering qw(
   buffer_message
   split_priority_messages
@@ -39,6 +33,7 @@ use Bot::Runtime::Dispatch ();
 use Bot::Runtime::MCPServer ();
 use Bot::Runtime::PersonaTools ();
 use Bot::Runtime::OutputPipeline ();
+use Bot::Runtime::MethodDelegates ();
 use Bot::Runtime::Presence ();
 use Bot::Runtime::WebTools ();
 use Bot::Runtime::Policy ();
@@ -97,6 +92,8 @@ use Encode ();
 use Future::AsyncAwait;
 use Bot::Commands::CPAN ();
 
+Bot::Runtime::MethodDelegates::install_shared_delegates(__PACKAGE__);
+
 server ( $ENV{IRC_SERVER} || 'irc.perl.org' );
 port ( $ENV{IRC_PORT} || 6667 );
 nickname ( $BOT_NICK );
@@ -129,16 +126,6 @@ has _rate_limit_wait => (
   is => 'rw', traits => ['NoGetopt'],
   default => 0,
 );
-
-sub _time_text_for_zone {
-  my ($self, $zone) = @_;
-  return Bot::Commands::Time::time_text_for_zone($zone);
-}
-
-sub _current_local_time_text {
-  my ($self) = @_;
-  return Bot::Commands::Time::current_local_time_text();
-}
 
 sub _clamp_persona_value {
   my ($self, $key, $value) = @_;
@@ -295,36 +282,6 @@ before 'START' => sub {
   POE::Kernel->delay( _idle_check => $IDLE_PING );
 };
 
-
-sub _repair_mojibake_text {
-  my ($self, $text) = @_;
-  return Bot::OutputCleanup::repair_mojibake_text($text);
-}
-
-sub _clean_text_for_irc {
-  my ($self, $text) = @_;
-  return Bot::OutputCleanup::clean_text_for_irc($text);
-}
-
-sub _metacpan_get_json { Bot::Commands::CPAN::_metacpan_get_json(@_) }
-sub _metacpan_get_text { Bot::Commands::CPAN::_metacpan_get_text(@_) }
-sub _extract_pod_section { Bot::Commands::CPAN::_extract_pod_section(@_) }
-sub _format_cpan_module_result { Bot::Commands::CPAN::_format_cpan_module_result(@_) }
-sub _format_cpan_describe_result { Bot::Commands::CPAN::_format_cpan_describe_result(@_) }
-sub _format_cpan_author_result { Bot::Commands::CPAN::_format_cpan_author_result(@_) }
-sub _format_cpan_recent_results { Bot::Commands::CPAN::_format_cpan_recent_results(@_) }
-sub _cpan_lookup { Bot::Commands::CPAN::_cpan_lookup(@_) }
-sub _summarize_special_url { Bot::Commands::CPAN::_summarize_special_url(@_) }
-sub _summarize_metacpan_pod { Bot::Commands::CPAN::_summarize_metacpan_pod(@_) }
-
-sub _format_search_results { Bot::Runtime::WebTools::format_search_results(@_) }
-sub _summarize_url { Bot::Runtime::WebTools::summarize_url(@_) }
-sub _search_web { Bot::Runtime::WebTools::search_web(@_) }
-
-sub _is_non_substantive_output {
-  my ($self, $text) = @_;
-  return Bot::OutputCleanup::is_non_substantive_output($text);
-}
 
 sub _send_to_channel {
   my ($self, $channel, $text) = @_;
