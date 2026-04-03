@@ -29,25 +29,15 @@ use Bot::Runtime::Buffering qw(
 );
 
 use Bot::Runtime::Dispatch ();
-use Bot::Runtime::MCPServer ();
-use Bot::Runtime::PersonaTools ();
 use Bot::Runtime::OutputPipeline ();
 use Bot::Runtime::MethodDelegates ();
 use Bot::Runtime::Presence ();
 use Bot::Runtime::WebTools ();
-use Bot::Runtime::Policy ();
 use Bot::Runtime::RaidFlow ();
 use Bot::Runtime::RaiderSetup ();
 use Bot::Persona qw(
   persona_trait_meta
   persona_trait_order
-  clamp_persona_value
-  load_persona_cache
-  persona_text
-  persona_summary_text
-  persona_trait_text
-  set_persona_trait
-  apply_persona_preset
 );
 
 my @BOT_NAMES = qw(
@@ -126,19 +116,9 @@ has _rate_limit_wait => (
   default => 0,
 );
 
-sub _clamp_persona_value {
-  my ($self, $key, $value) = @_;
-  return Bot::Persona::clamp_persona_value($key, $value, trait_meta => \%PERSONA_TRAIT_META, trait_order => \@PERSONA_TRAIT_ORDER);
-}
-
 sub _bot_name_slug {
   my ($self) = @_;
   return $BOT_IDENTITY_SLUG;
-}
-
-sub _default_persona_trait_value {
-  my ($self, $key) = @_;
-  return Bot::Runtime::PersonaTools::default_persona_trait_value($self->_persona_runtime_args, key => $key);
 }
 
 sub _persona_runtime_args {
@@ -151,107 +131,9 @@ sub _persona_runtime_args {
   );
 }
 
-sub _load_persona_settings {
+sub _mcp_server_name {
   my ($self) = @_;
-  return Bot::Runtime::PersonaTools::load_persona_settings($self->_persona_runtime_args);
-}
-
-sub _persona_trait {
-  my ($self, $key) = @_;
-  return Bot::Runtime::PersonaTools::persona_trait($self->_persona_runtime_args, key => $key);
-}
-
-sub _persona_stats_text {
-  my ($self) = @_;
-  return Bot::Runtime::PersonaTools::persona_stats_text($self->_persona_runtime_args);
-}
-
-sub _persona_text {
-  my ($self) = @_;
-  return Bot::Runtime::PersonaTools::persona_text($self->_persona_runtime_args);
-}
-
-sub _persona_summary_text {
-  my ($self) = @_;
-  return Bot::Runtime::PersonaTools::persona_summary_text($self->_persona_runtime_args);
-}
-
-sub _persona_trait_text {
-  my ($self, $trait) = @_;
-  return Bot::Runtime::PersonaTools::persona_trait_text($self->_persona_runtime_args, trait => $trait);
-}
-
-sub _set_persona_trait {
-  my ($self, $trait, $value) = @_;
-  return Bot::Runtime::PersonaTools::set_persona_trait($self->_persona_runtime_args, trait => $trait, value => $value);
-}
-
-sub _apply_persona_preset {
-  my ($self, $value) = @_;
-  return Bot::Runtime::PersonaTools::apply_persona_preset($self->_persona_runtime_args, value => $value);
-}
-
-sub _mcp_tool_logging_enabled {
-  return Bot::Runtime::Policy::mcp_tool_logging_enabled();
-}
-
-sub _env_flag_enabled {
-  my ($self, $name, $default) = @_;
-  return Bot::Runtime::Policy::env_flag_enabled($name, $default);
-}
-
-sub _store_system_rows_enabled {
-  return Bot::Runtime::Policy::store_system_rows_enabled();
-}
-
-sub _store_non_substantive_rows_enabled {
-  return Bot::Runtime::Policy::store_non_substantive_rows_enabled();
-}
-
-sub _store_empty_response_rows_enabled {
-  return Bot::Runtime::Policy::store_empty_response_rows_enabled();
-}
-
-sub _cleanup_logging_enabled {
-  return Bot::Runtime::Policy::cleanup_logging_enabled();
-}
-
-sub _cleanup_log_preview {
-  my ($self, $text) = @_;
-  return Bot::Runtime::Policy::cleanup_log_preview_text($text);
-}
-
-sub _log_cleanup_change {
-  my ($self, $label, $before, $after) = @_;
-  return Bot::Runtime::Policy::log_cleanup_change(
-    self   => $self,
-    label  => $label,
-    before => $before,
-    after  => $after,
-  );
-}
-
-sub _log_cleanup_empty {
-  my ($self, $before, $after) = @_;
-  return Bot::Runtime::Policy::log_cleanup_empty(
-    self   => $self,
-    before => $before,
-    after  => $after,
-  );
-}
-
-sub _db_stats_text {
-  my ($self) = @_;
-  return Bot::Runtime::PersonaTools::db_stats_text($self->_persona_runtime_args);
-}
-
-sub _notes_text {
-  my ($self, $nick) = @_;
-  return Bot::Runtime::PersonaTools::notes_text(self => $self, nick => $nick);
-}
-sub _build_mcp_server {
-  my ($self) = @_;
-  return Bot::Runtime::MCPServer::build_mcp_server(self => $self, server_name => 'bert-tools');
+  return 'bert-tools';
 }
 
 async sub _setup_raider {
