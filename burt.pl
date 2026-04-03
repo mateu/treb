@@ -28,9 +28,6 @@ use Bot::OutputCleanup qw(
   repair_mojibake_text
   clean_text_for_irc
   is_non_substantive_output
-  cleanup_log_preview
-  cleanup_change_message
-  cleanup_empty_message
 );
 use Bot::Runtime::Buffering qw(
   buffer_message

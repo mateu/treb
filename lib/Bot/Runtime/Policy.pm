@@ -23,10 +23,7 @@ our @EXPORT_OK = qw(
 );
 
 sub mcp_tool_logging_enabled {
-  my $raw = $ENV{MCP_TOOL_LOGGING};
-  return 1 if !defined $raw || $raw eq '';
-  return 0 if $raw =~ /^(?:0|false|off|no)$/i;
-  return 1;
+  return env_flag_enabled('MCP_TOOL_LOGGING', 1);
 }
 
 sub env_flag_enabled {
