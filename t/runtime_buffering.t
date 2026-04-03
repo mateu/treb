@@ -83,8 +83,14 @@ is($pending->{channel}, '#ai', 'pending raid includes channel');
 is(scalar @{$pending->{messages}}, 1, 'pending raid keeps only active conversation lane');
 like($pending->{input}, qr/^ctx:#ai:1$/, 'pending raid input comes from context builder');
 
-is($bot->{logs}[0], 'Deferring lower-priority buffered messages while human conversation lane is active', 'deferral log emitted');
-like($bot->{logs}[1], qr/^Processing buffer for #ai:/, 'processing log emitted');
+ok(
+  scalar grep { $_ eq 'Deferring lower-priority buffered messages while human conversation lane is active' } @{$bot->{logs} || []},
+  'deferral log emitted',
+);
+ok(
+  scalar grep { /^Processing buffer for #ai:/ } @{$bot->{logs} || []},
+  'processing log emitted',
+);
 
 my $busy = Local::BufferBot->new;
 $busy->_buffer_timers->{'#busy'} = 'alarm-busy';

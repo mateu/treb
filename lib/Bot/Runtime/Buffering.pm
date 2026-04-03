@@ -52,8 +52,7 @@ sub split_priority_messages {
 sub process_buffer_event {
   my (%args) = @_;
   my $self    = $args{self} or die 'process_buffer_event requires self';
-  my $channel = $args{channel};
-  die 'process_buffer_event requires channel' unless defined $channel;
+  my $channel = $args{channel} or die 'process_buffer_event requires channel';
 
   delete $self->_buffer_timers->{$channel};
 

@@ -35,7 +35,7 @@ use Bot::Runtime::Buffering qw(
   split_priority_messages
   schedule_pending_buffers
 );
-use Bot::Runtime::Context qw(build_context_and_input);
+
 use Bot::Runtime::Dispatch ();
 use Bot::Runtime::MCPServer ();
 use Bot::Runtime::PersonaTools ();
