@@ -35,10 +35,7 @@ use Bot::Runtime::Presence ();
 use Bot::Runtime::WebTools ();
 use Bot::Runtime::RaidFlow ();
 use Bot::Runtime::RaiderSetup ();
-use Bot::Persona qw(
-  persona_trait_meta
-  persona_trait_order
-);
+use Bot::Persona ();
 
 my @BOT_NAMES = qw(
   Botsworth Clanky Sparky Fizz Gizmo Pixel Blip Rusty Ziggy Turbo
