@@ -22,7 +22,6 @@ use warnings;
 use lib 'lib';
 
 use Bot::MemoryStore;
-use Bot::Mission qw(load_mission_for_script);
 use Bot::Commands::Time qw(time_text_for_zone current_local_time_text);
 use Bot::OutputCleanup qw(
   repair_mojibake_text
@@ -43,6 +42,7 @@ use Bot::Runtime::Presence ();
 use Bot::Runtime::WebTools ();
 use Bot::Runtime::Policy ();
 use Bot::Runtime::RaidFlow ();
+use Bot::Runtime::RaiderSetup ();
 use Bot::Persona qw(
   persona_trait_meta
   persona_trait_order
@@ -93,11 +93,7 @@ use Moses;
 use namespace::autoclean;
 use HTML::Entities ();
 use Encode ();
-use IO::Async::Loop::POE;
 use Future::AsyncAwait;
-use Net::Async::MCP;
-use Module::Runtime qw( use_module );
-use Langertha::Raider;
 use Bot::Commands::CPAN ();
 
 server ( $ENV{IRC_SERVER} || 'irc.perl.org' );
@@ -273,49 +269,12 @@ sub _build_mcp_server {
 
 async sub _setup_raider {
   my ($self) = @_;
-
-  my $mcp_server = $self->_build_mcp_server;
-  my $loop = IO::Async::Loop::POE->new;
-  my $mcp = Net::Async::MCP->new(server => $mcp_server);
-  $loop->add($mcp);
-  await $mcp->initialize;
-  $self->_mcp($mcp);
-
-  my $engine_class = 'Langertha::Engine::' . ($ENV{ENGINE} || 'Groq');
-  use_module($engine_class);
-
-  my %engine_args = ( mcp_servers => [$mcp] );
-  $engine_args{model} = $ENV{MODEL} || 'llama-3.3-70b-versatile';
-  $engine_args{api_key} = $ENV{API_KEY} if $ENV{API_KEY};
-  if (($ENV{ENGINE} || 'Groq') eq 'Ollama' && $ENV{OLLAMA_URL}) {
-    $engine_args{url} = $ENV{OLLAMA_URL};
-  }
-
-  my $engine = $engine_class->new(%engine_args);
-
-  my $nick = $self->get_nickname;
-  my $model = $engine->model;
-  my $provider = ref($engine) =~ s/.*:://r;
-  my $chan_list = join(', ', $self->get_channels);
-  my $mission = Bot::Mission::load_mission_for_script(
-    script_file   => __FILE__,
-    nick          => $nick,
-    owner         => $OWNER,
-    model         => $model,
-    provider      => $provider,
-    channels      => $chan_list,
-    max_line      => $MAX_LINE,
-    mission_extra => $ENV{SYSTEM_PROMPT},
+  Bot::Runtime::RaiderSetup::setup_raider(
+    self        => $self,
+    owner       => $OWNER,
+    max_line    => $MAX_LINE,
+    script_file => __FILE__,
   );
-
-  my $raider = Langertha::Raider->new(
-    engine             => $engine,
-    max_context_tokens => 8192,
-    mission            => $mission,
-  );
-
-  $self->_raider($raider);
-  $self->info("Raider ready: $engine_class / " . ($engine->model));
 }
 
 has _last_activity => (
