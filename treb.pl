@@ -39,6 +39,7 @@ use Bot::Runtime::Dispatch ();
 use Bot::Runtime::MCPServer ();
 use Bot::Runtime::PersonaTools ();
 use Bot::Runtime::OutputPipeline ();
+use Bot::Runtime::Presence ();
 use Bot::Runtime::WebTools ();
 use Bot::Runtime::Policy ();
 use Bot::Runtime::RaidFlow ();
@@ -710,8 +711,15 @@ event irc_join => sub {
   return if $nick eq $self->get_nickname;
   $self->info("$channel $nick ($host) joined");
   $self->_last_activity(time());
-  $self->_buffer_message($channel, 'system',
-    "$nick ($host) has joined the channel. join_greet_pct=" . $self->_persona_trait('join_greet_pct') . ". Greet them if you like!");
+  $self->_buffer_message(
+    $channel,
+    'system',
+    Bot::Runtime::Presence::join_message(
+      nick           => $nick,
+      host           => $host,
+      join_greet_pct => $self->_persona_trait('join_greet_pct'),
+    ),
+  );
 };
 
 event irc_part => sub {
@@ -720,17 +728,13 @@ event irc_part => sub {
   return if $nick eq $self->get_nickname;
   $self->info("$channel $nick ($host) parted" . ($reason ? ": $reason" : ''));
   $self->_last_activity(time());
-  my $msg = "$nick ($host) has left the channel";
-  $msg .= ": $reason" if $reason;
+  my $msg = Bot::Runtime::Presence::part_message(
+    nick   => $nick,
+    host   => $host,
+    reason => $reason,
+  );
   $self->_buffer_message($channel, 'system', $msg);
 };
-
-sub _is_netsplit_reason {
-  my ($self, $reason) = @_;
-  return 0 unless $reason;
-  # Netsplit quit reasons look like "server1.network.org server2.network.org"
-  return $reason =~ /^\S+\.\S+ \S+\.\S+$/ ? 1 : 0;
-}
 
 event irc_quit => sub {
   my ( $self, $nickstr, $reason ) = @_[ OBJECT, ARG0, ARG1 ];
@@ -740,15 +744,18 @@ event irc_quit => sub {
   $self->_last_activity(time());
   my $channel = $self->_default_channel;
 
-  if ($self->_is_netsplit_reason($reason)) {
+  if (Bot::Runtime::Presence::is_netsplit_reason(reason => $reason)) {
     push @{$self->_netsplit_quits}, $nick;
     # Delay reporting — collect all netsplit quits in a short window
     POE::Kernel->delay( _netsplit_report => 3, $channel, $reason );
     return;
   }
 
-  my $msg = "$nick ($host) has quit IRC";
-  $msg .= ": $reason" if $reason;
+  my $msg = Bot::Runtime::Presence::quit_message(
+    nick   => $nick,
+    host   => $host,
+    reason => $reason,
+  );
   $self->_buffer_message($channel, 'system', $msg);
 };
 
@@ -757,10 +764,14 @@ event _netsplit_report => sub {
   my @nicks = @{$self->_netsplit_quits};
   return unless @nicks;
   $self->_netsplit_quits([]);
-  my $nick_list = join(', ', @nicks);
-  $self->_buffer_message($channel, 'system',
-    "NETSPLIT detected ($split_reason) — "
-    . scalar(@nicks) . " user(s) lost: $nick_list");
+  $self->_buffer_message(
+    $channel,
+    'system',
+    Bot::Runtime::Presence::netsplit_report_message(
+      split_reason => $split_reason,
+      nicks        => \@nicks,
+    ),
+  );
 };
 
 event irc_msg => sub {
@@ -770,28 +781,24 @@ event irc_msg => sub {
   $self->info("PM <$nick> ($host) $msg");
   $self->_last_activity(time());
   my $channel = $self->_default_channel;
-  $self->_buffer_message($channel, 'system',
-    "PRIVATE MESSAGE from $nick ($host): $msg — You can reply using send_private_message.");
+  $self->_buffer_message(
+    $channel,
+    'system',
+    Bot::Runtime::Presence::private_message_message(
+      nick => $nick,
+      host => $host,
+      msg  => $msg,
+    ),
+  );
 };
 
 event irc_whois => sub {
   my ( $self, $info ) = @_[ OBJECT, ARG0 ];
-  my @parts;
-  push @parts, "WHOIS $info->{nick}:";
-  push @parts, "  Real name: $info->{real}" if $info->{real};
-  push @parts, "  Host: $info->{user}\@$info->{host}" if $info->{user};
-  push @parts, "  Server: $info->{server}" if $info->{server};
-  push @parts, "  Channels: " . join(' ', @{$info->{channels}}) if $info->{channels};
-  push @parts, "  Idle: $info->{idle}s" if defined $info->{idle};
-  push @parts, "  Signed on: " . localtime($info->{signon}) if $info->{signon};
-  push @parts, "  Account: $info->{account}" if $info->{account};
-  # Check if we have notes about this nick
   my $notes = $self->memory->recall_notes($info->{nick}, '', 100);
-  if ($notes) {
-    my $count = scalar(split /\n/, $notes);
-    push @parts, "  You have $count saved note(s) about this user. Use recall_notes to review them.";
-  }
-  my $result = join("\n", @parts);
+  my $result = Bot::Runtime::Presence::whois_text(
+    info  => $info,
+    notes => $notes,
+  );
   $self->info($result);
   my $channel = $self->_default_channel;
   $self->_buffer_message($channel, 'system', $result);
