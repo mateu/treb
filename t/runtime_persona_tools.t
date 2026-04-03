@@ -31,7 +31,13 @@ use Bot::Runtime::PersonaTools ();
     }
     if ($sql eq 'SELECT MAX(created_at) FROM conversations') {
       my @timestamps = map { $_->{created_at} } grep { defined $_->{created_at} } @{$memory->{conversations}};
-      return @timestamps ? $timestamps[-1] : undef;
+      return undef unless @timestamps;
+
+      my $max = $timestamps[0];
+      for my $timestamp (@timestamps[1 .. $#timestamps]) {
+        $max = $timestamp if $timestamp gt $max;
+      }
+      return $max;
     }
     if ($sql eq q{SELECT COUNT(*) FROM conversations WHERE nick = 'system'}) {
       my $count = scalar grep { ($_->{nick} // '') eq 'system' } @{$memory->{conversations}};
