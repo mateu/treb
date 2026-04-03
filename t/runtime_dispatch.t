@@ -103,4 +103,16 @@ my @scheduled;
   is($scheduled[0][0], '_custom_send', 'send_to_channel respects custom event name');
 }
 
+# Validate max_line guards against infinite-loop-inducing values
+for my $bad_max_line (0, -1, 'abc') {
+  eval {
+    send_to_channel(
+      channel  => '#test',
+      text     => 'hello',
+      max_line => $bad_max_line,
+    );
+  };
+  like($@, qr/positive integer/, "send_to_channel dies on invalid max_line: '$bad_max_line'");
+}
+
 done_testing;
