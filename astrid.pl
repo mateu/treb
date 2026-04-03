@@ -36,6 +36,7 @@ use Bot::Runtime::Buffering qw(
   schedule_pending_buffers
 );
 use Bot::Runtime::Context qw(build_context_and_input);
+use Bot::Runtime::Dispatch ();
 use Bot::Runtime::MCPServer ();
 use Bot::Runtime::PersonaTools ();
 use Bot::Runtime::WebTools ();
@@ -365,32 +366,11 @@ sub _is_non_substantive_output {
 
 sub _send_to_channel {
   my ($self, $channel, $text) = @_;
-  my @chunks;
-  for my $line (split(/\n/, $text)) {
-    $line =~ s/^\s+//;
-    $line =~ s/\s+$//;
-    next unless length $line;
-    while (length($line) > $MAX_LINE) {
-      my $chunk = substr($line, 0, $MAX_LINE);
-      if ($chunk =~ /^(.{1,$MAX_LINE})\s/) {
-        $chunk = $1;
-      }
-      push @chunks, $chunk;
-      $line = substr($line, length($chunk));
-      $line =~ s/^\s+//;
-    }
-    push @chunks, $line if length $line;
-  }
-  # Send each line with a delay BEFORE it, simulating typing time
-  # ~30 chars/sec typing speed, minimum 1.5s delay
-  my $cumulative = 0;
-  for my $i (0 .. $#chunks) {
-    my $delay = length($chunks[$i]) / 30;
-    $delay = 1.5 if $delay < 1.5;
-    $delay += 5 if $i > 0 && $chunks[$i - 1] =~ /\.{3}\s*\*?\s*$/;
-    $cumulative += $delay;
-    POE::Kernel->delay_add( _send_line => $cumulative, $channel, $chunks[$i] );
-  }
+  return Bot::Runtime::Dispatch::send_to_channel(
+    channel  => $channel,
+    text     => $text,
+    max_line => $MAX_LINE,
+  );
 }
 
 event _send_line => sub {
@@ -400,21 +380,15 @@ event _send_line => sub {
 
 sub _is_filtered_bot_nick {
   my ($self, $nick) = @_;
-  return unless defined $nick;
-
-  my $raw = $ENV{BOT_FILTER_NICKS} // 'burt_bot';
-  my %blocked = map { lc($_) => 1 }
-                grep { length }
-                map  { s/^\s+|\s+$//gr }
-                split /,/, $raw;
-
-  return $blocked{ lc $nick };
+  return Bot::Runtime::Dispatch::is_filtered_bot_nick(
+    nick => $nick,
+    default_filter_nicks => 'burt_bot',
+  );
 }
 
 sub _default_channel {
   my ($self) = @_;
-  my $channels = $self->get_channels;
-  return ref $channels ? $channels->[0] : $channels;
+  return Bot::Runtime::Dispatch::default_channel(self => $self);
 }
 
 has _bert_reply_turn_count => (
@@ -448,8 +422,11 @@ sub _handles_bare_utility_commands { 0 }
 
 sub _utility_command_matches_me {
   my ($self, $target) = @_;
-  return $self->_handles_bare_utility_commands unless defined $target && length $target;
-  return lc($target) eq lc($self->get_nickname);
+  return Bot::Runtime::Dispatch::utility_command_matches_me(
+    self       => $self,
+    target     => $target,
+    allow_bare => $self->_handles_bare_utility_commands,
+  );
 }
 
 sub _buffer_message {
