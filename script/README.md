@@ -20,6 +20,8 @@
   - `script/run-treb.sh`
   - `script/run-burt.sh`
   - `script/run-astrid.sh`
+- Start all three in one tmux session:
+  - `script/tmux-agents.sh`
 - Start a bot in sandbox mode:
   - `script/run-treb-sandbox.sh`
 - Inspect a bot's effective environment:
@@ -31,3 +33,4 @@
 Use `run-*.sh` as the default human-facing entrypoint.
 Use `run-*-sandbox.sh` when you explicitly want the extra sandbox wrapper.
 Use `with-*-env.sh` for debugging, inspection, or one-off commands.
+Use `tmux-agents.sh` when you want one attachable session with Burt, Treb, and Astrid ready in separate panes.
