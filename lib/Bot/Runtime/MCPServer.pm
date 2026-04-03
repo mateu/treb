@@ -18,7 +18,8 @@ sub _trim {
 
 sub _positive_int {
   my ($value) = @_;
-  return undef unless defined $value && $value =~ /^\d+$/;
+  $value = _trim($value);
+  return undef unless length $value && $value =~ /^\d+$/;
   my $int = int($value);
   return undef if $int < 1;
   return $int;
@@ -253,7 +254,7 @@ sub _tool_specs {
       input_schema => {
         type       => 'object',
         properties => {
-          id      => { type => 'number', description => 'The note ID (shown as #N in recall_notes output)' },
+          id      => { type => 'integer', minimum => 1, description => 'The note ID (shown as #N in recall_notes output)' },
           content => { type => 'string', description => 'The new content for this note' },
         },
         required => ['id', 'content'],
@@ -277,7 +278,7 @@ sub _tool_specs {
       input_schema => {
         type       => 'object',
         properties => {
-          id => { type => 'number', description => 'The note ID to delete (shown as #N in recall_notes output)' },
+          id => { type => 'integer', minimum => 1, description => 'The note ID to delete (shown as #N in recall_notes output)' },
         },
         required => ['id'],
       },
