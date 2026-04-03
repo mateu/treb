@@ -4,6 +4,8 @@ use strict;
 use warnings;
 
 use Exporter 'import';
+use POE::Kernel ();
+use Bot::Runtime::OutputPipeline 'clean_ai_output';
 
 our @EXPORT_OK = qw(do_raid);
 
@@ -82,24 +84,7 @@ sub do_raid {
   }
 
   my $raw_answer = $answer;
-  my $answer_before_strip = $answer;
-  $answer =~ s/<think\b[^>]*>.*?<\/think>\s*//gsi;
-  $answer =~ s/<thinking\b[^>]*>.*?<\/thinking>\s*//gsi;
-  $answer =~ s/^\s*(?:Thought|Reasoning|Chain[ -]?of[ -]?Thought|Internal Reasoning)\s*:\s*.*?(?=^\S|\z)//gims;
-  $self->_log_cleanup_change('strip_reasoning', $answer_before_strip, $answer);
-
-  my $answer_before_markup = $answer;
-  $answer =~ s/^<\s*\@?\s*(\w+)\s*>:?\s*/$1: /mg;
-  $answer =~ s/<\s*\@?\s*(\w+)\s*>/$1/g;
-  $answer =~ s/<\/?\w+>//g;
-  $answer =~ s/^\*?\s*(save_note|recall_notes|update_note|delete_note|recall_history|stay_silent|set_alarm|whois|send_private_message)\b[^\n]*\n?//mg;
-  $answer =~ s/^\s+//;
-  $answer =~ s/\s+$//;
-  $self->_log_cleanup_change('strip_markup', $answer_before_markup, $answer);
-
-  my $answer_before_normalize = $answer;
-  $answer = $self->_clean_text_for_irc($answer) if defined $answer;
-  $self->_log_cleanup_change('normalize_text', $answer_before_normalize, $answer);
+  $answer = clean_ai_output(self => $self, text => $answer);
 
   if ($answer !~ /\S/) {
     $self->_log_cleanup_empty($raw_answer, $answer);
@@ -133,22 +118,7 @@ sub do_raid {
       };
       if (!$@ && defined $retry) {
         my $retry_raw = $retry;
-        my $retry_before_strip = $retry;
-        $retry =~ s/<think\b[^>]*>.*?<\/think>\s*//gsi;
-        $retry =~ s/<thinking\b[^>]*>.*?<\/thinking>\s*//gsi;
-        $retry =~ s/^\s*(?:Thought|Reasoning|Chain[ -]?of[ -]?Thought|Internal Reasoning)\s*:\s*.*?(?=^\S|\z)//gims;
-        $self->_log_cleanup_change('warm_retry_strip_reasoning', $retry_before_strip, $retry);
-        my $retry_before_markup = $retry;
-        $retry =~ s/^<\s*\@?\s*(\w+)\s*>:?\s*/$1: /mg;
-        $retry =~ s/<\s*\@?\s*(\w+)\s*>/$1/g;
-        $retry =~ s/<\/?\w+>//g;
-        $retry =~ s/^\*?\s*(save_note|recall_notes|update_note|delete_note|recall_history|stay_silent|set_alarm|whois|send_private_message)\b[^\n]*\n?//mg;
-        $retry =~ s/^\s+//;
-        $retry =~ s/\s+$//;
-        $self->_log_cleanup_change('warm_retry_strip_markup', $retry_before_markup, $retry);
-        my $retry_before_normalize = $retry;
-        $retry = $self->_clean_text_for_irc($retry) if defined $retry;
-        $self->_log_cleanup_change('warm_retry_normalize_text', $retry_before_normalize, $retry);
+        $retry = clean_ai_output(self => $self, text => $retry, log_prefix => 'warm_retry_');
         if ($retry =~ /\S/ && !$self->_is_non_substantive_output($retry)) {
           $answer = $retry;
           $raw_answer = $retry_raw;

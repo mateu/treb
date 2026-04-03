@@ -3,6 +3,12 @@ use warnings;
 use Test::More;
 
 use lib 'lib';
+
+# Stub POE::Kernel so the rate-limit retry path can be exercised without
+# requiring the full POE distribution.
+BEGIN { $INC{'POE/Kernel.pm'} = 1 }
+{ package POE::Kernel; our @delayed; sub delay { push @POE::Kernel::delayed, [ @_[1..$#_] ]; 1 } }
+
 use Bot::Runtime::RaidFlow qw(do_raid);
 
 {
@@ -268,6 +274,33 @@ use Bot::Runtime::RaidFlow qw(do_raid);
 
   is($bot->{sent}[0]{msg}, '...', 'bert lane allows borderline non-substantive output');
   like(join("\n", @{$bot->{info}}), qr/Allowing borderline non-substantive output/, 'bert lane allowance logged');
+}
+
+{
+  @POE::Kernel::delayed = ();
+
+  my $bot = Local::RaidFlowBot->new(
+    pending => {
+      input    => 'prompt',
+      channel  => '#ai',
+      messages => [
+        { nick => 'mateu', channel => '#ai', msg => 'hello', source_kind => 'conversation' },
+      ],
+    },
+    replies => [{ die => '429 Too Many Requests: rate limit exceeded' }],
+  );
+
+  do_raid(
+    self        => $bot,
+    max_line    => 400,
+    brainfreeze => ['*brainfreeze*'],
+  );
+
+  isnt($bot->_pending_raid, undef, '429: pending raid is retained');
+  ok($bot->_rate_limit_wait > 0, '429: rate_limit_wait is increased');
+  is($bot->{sent}[0]{msg}, '*brainfreeze*', '429: brainfreeze message sent on first rate-limit hit');
+  is(scalar @POE::Kernel::delayed, 1, '429: exactly one retry delay is scheduled');
+  is($POE::Kernel::delayed[0][0], '_retry_raid', '429: scheduled event is _retry_raid');
 }
 
 done_testing;
