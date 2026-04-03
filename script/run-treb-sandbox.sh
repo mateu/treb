@@ -3,7 +3,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-exec systemd-run --user --pty \
+systemctl --user reset-failed treb-sandbox.service >/dev/null 2>&1 || true
+
+exec systemd-run --user --pty --collect \
   --unit=treb-sandbox \
   --description="treb sandbox" \
   --property=NoNewPrivileges=yes \
