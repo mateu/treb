@@ -9,8 +9,8 @@ our @EXPORT_OK = qw(clean_ai_output);
 
 sub clean_ai_output {
   my (%args) = @_;
-  my $self = $args{self};
-  my $text = $args{text};
+  my $self = $args{self} or die 'clean_ai_output requires self';
+  my $text = $args{text} // '';
   my $prefix = $args{log_prefix} // '';
 
   my $before_strip = $text;
