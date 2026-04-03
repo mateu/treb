@@ -38,7 +38,7 @@ use Bot::Runtime::Buffering qw(
   schedule_pending_buffers
 );
 use Bot::Runtime::Context qw(build_context_and_input);
-use Bot::Runtime::MCPServer qw(build_mcp_server);
+use Bot::Runtime::MCPServer ();
 use Bot::Persona qw(
   persona_trait_meta
   persona_trait_order

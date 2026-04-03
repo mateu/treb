@@ -5,6 +5,7 @@ use warnings;
 
 use Exporter 'import';
 use MCP::Server;
+use POE::Kernel ();
 
 our @EXPORT_OK = qw(build_mcp_server);
 
