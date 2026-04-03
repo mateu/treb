@@ -34,7 +34,7 @@ use Bot::Runtime::MCPServer ();
 use Bot::Runtime::PersonaTools ();
 use Bot::Runtime::OutputPipeline ();
 use Bot::Runtime::MethodDelegates ();
-use Bot::Runtime::Presence ();
+use Bot::Runtime::PresenceEvents ();
 use Bot::Runtime::WebTools ();
 use Bot::Runtime::Policy ();
 use Bot::Runtime::RaidFlow ();
@@ -608,101 +608,56 @@ event irc_public => sub {
 
 event irc_join => sub {
   my ( $self, $nickstr, $channel ) = @_[ OBJECT, ARG0, ARG1 ];
-  my ( $nick, $host ) = split /!/, $nickstr, 2;
-  return if $nick eq $self->get_nickname;
-  $self->info("$channel $nick ($host) joined");
-  $self->_last_activity(time());
-  $self->_buffer_message(
-    $channel,
-    'system',
-    Bot::Runtime::Presence::join_message(
-      nick           => $nick,
-      host           => $host,
-      join_greet_pct => $self->_persona_trait('join_greet_pct'),
-    ),
+  Bot::Runtime::PresenceEvents::handle_irc_join(
+    self    => $self,
+    nickstr => $nickstr,
+    channel => $channel,
   );
 };
 
 event irc_part => sub {
   my ( $self, $nickstr, $channel, $reason ) = @_[ OBJECT, ARG0, ARG1, ARG2 ];
-  my ( $nick, $host ) = split /!/, $nickstr, 2;
-  return if $nick eq $self->get_nickname;
-  $self->info("$channel $nick ($host) parted" . ($reason ? ": $reason" : ''));
-  $self->_last_activity(time());
-  my $msg = Bot::Runtime::Presence::part_message(
-    nick   => $nick,
-    host   => $host,
-    reason => $reason,
+  Bot::Runtime::PresenceEvents::handle_irc_part(
+    self    => $self,
+    nickstr => $nickstr,
+    channel => $channel,
+    reason  => $reason,
   );
-  $self->_buffer_message($channel, 'system', $msg);
 };
 
 event irc_quit => sub {
   my ( $self, $nickstr, $reason ) = @_[ OBJECT, ARG0, ARG1 ];
-  my ( $nick, $host ) = split /!/, $nickstr, 2;
-  return if $nick eq $self->get_nickname;
-  $self->info("$nick ($host) quit" . ($reason ? ": $reason" : ''));
-  $self->_last_activity(time());
-  my $channel = $self->_default_channel;
-
-  if (Bot::Runtime::Presence::is_netsplit_reason(reason => $reason)) {
-    push @{$self->_netsplit_quits}, $nick;
-    # Delay reporting — collect all netsplit quits in a short window
-    POE::Kernel->delay( _netsplit_report => 3, $channel, $reason );
-    return;
-  }
-
-  my $msg = Bot::Runtime::Presence::quit_message(
-    nick   => $nick,
-    host   => $host,
-    reason => $reason,
+  Bot::Runtime::PresenceEvents::handle_irc_quit(
+    self    => $self,
+    nickstr => $nickstr,
+    reason  => $reason,
   );
-  $self->_buffer_message($channel, 'system', $msg);
 };
 
 event _netsplit_report => sub {
   my ( $self, $channel, $split_reason ) = @_[ OBJECT, ARG0, ARG1 ];
-  my @nicks = @{$self->_netsplit_quits};
-  return unless @nicks;
-  $self->_netsplit_quits([]);
-  $self->_buffer_message(
-    $channel,
-    'system',
-    Bot::Runtime::Presence::netsplit_report_message(
-      split_reason => $split_reason,
-      nicks        => \@nicks,
-    ),
+  Bot::Runtime::PresenceEvents::handle_netsplit_report(
+    self         => $self,
+    channel      => $channel,
+    split_reason => $split_reason,
   );
 };
 
 event irc_msg => sub {
   my ( $self, $nickstr, $recipients, $msg ) = @_[ OBJECT, ARG0, ARG1, ARG2 ];
-  my ( $nick, $host ) = split /!/, $nickstr, 2;
-  return if $nick eq $self->get_nickname;
-  $self->info("PM <$nick> ($host) $msg");
-  $self->_last_activity(time());
-  my $channel = $self->_default_channel;
-  $self->_buffer_message(
-    $channel,
-    'system',
-    Bot::Runtime::Presence::private_message_message(
-      nick => $nick,
-      host => $host,
-      msg  => $msg,
-    ),
+  Bot::Runtime::PresenceEvents::handle_irc_msg(
+    self    => $self,
+    nickstr => $nickstr,
+    msg     => $msg,
   );
 };
 
 event irc_whois => sub {
   my ( $self, $info ) = @_[ OBJECT, ARG0 ];
-  my $notes = $self->memory->recall_notes($info->{nick}, '', 100);
-  my $result = Bot::Runtime::Presence::whois_text(
-    info  => $info,
-    notes => $notes,
+  Bot::Runtime::PresenceEvents::handle_irc_whois(
+    self => $self,
+    info => $info,
   );
-  $self->info($result);
-  my $channel = $self->_default_channel;
-  $self->_buffer_message($channel, 'system', $result);
 };
 
 __PACKAGE__->run unless caller;
