@@ -13,4 +13,4 @@ if [ -f "$ROOT/burt.env" ]; then
   source "$ROOT/burt.env"
 fi
 
-exec "$@"
+exec perl "$ROOT/burt.pl"

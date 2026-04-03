@@ -8,9 +8,9 @@ if [ -d "$HOME/perl5" ]; then
   eval "$(perl -I"$HOME/perl5/lib/perl5" -Mlocal::lib="$HOME/perl5")"
 fi
 
-if [ -f "$ROOT/burt.env" ]; then
+if [ -f "$ROOT/astrid.env" ]; then
   # shellcheck disable=SC1091
-  source "$ROOT/burt.env"
+  source "$ROOT/astrid.env"
 fi
 
-exec "$@"
+exec perl "$ROOT/astrid.pl"
