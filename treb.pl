@@ -842,6 +842,28 @@ sub _is_non_substantive_output {
   return Bot::OutputCleanup::is_non_substantive_output($text);
 }
 
+sub _parse_public_addressee {
+  my ($self, $msg) = @_;
+  return (undef, undef) unless defined $msg;
+
+  if ($msg =~ /^\s*([A-Za-z0-9_\-]+)\s*[:,]\s*(.+?)\s*$/s) {
+    return ($1, $2);
+  }
+
+  if ($msg =~ /^\s*hey\s+([A-Za-z0-9_\-]+)\s*[:,]?\s*(.+?)\s*$/si) {
+    return ($1, $2);
+  }
+
+  return (undef, undef);
+}
+
+sub _is_public_message_addressed_to_self {
+  my ($self, $msg) = @_;
+  my ($target, $body) = $self->_parse_public_addressee($msg);
+  return 0 unless defined $target && defined $body && $body =~ /\S/;
+  return lc($target) eq lc($self->get_nickname) ? 1 : 0;
+}
+
 sub _send_to_channel {
   my ($self, $channel, $text) = @_;
   my @chunks;
@@ -1373,10 +1395,11 @@ event irc_public => sub {
 
   my $bot_nick = $self->get_nickname;
   my $nick_re = quotemeta($bot_nick);
-  my $direct_address = ($msg =~ /(?:^|\W)$nick_re(?:\W|$)/i) ? 1 : 0;
+  my $direct_mention = ($msg =~ /(?:^|\W)$nick_re(?:\W|$)/i) ? 1 : 0;
+  my $direct_address = $self->_is_public_message_addressed_to_self($msg);
 
   if ($speaker_is_filtered_bot) {
-    return unless $direct_address;
+    return unless $direct_mention;
     my $bot_reply_max_turns = $self->_persona_trait('bot_reply_max_turns');
     if ($bot_reply_max_turns > 0 && $self->_bert_reply_turn_count >= $bot_reply_max_turns) {
       $self->info("Suppressing Bert conversational message: turn cap reached bot_reply_max_turns=$bot_reply_max_turns");
