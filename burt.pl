@@ -347,7 +347,7 @@ sub _notes_text {
 
 sub _build_mcp_server {
   my ($self) = @_;
-  return build_mcp_server(self => $self, server_name => 'burt-tools');
+  return Bot::Runtime::MCPServer::build_mcp_server(self => $self, server_name => 'burt-tools');
 }
 
 async sub _setup_raider {
