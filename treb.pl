@@ -41,6 +41,7 @@ use Bot::Runtime::PersonaTools ();
 use Bot::Runtime::OutputPipeline ();
 use Bot::Runtime::WebTools ();
 use Bot::Runtime::Policy ();
+use Bot::Runtime::RaidFlow ();
 use Bot::Persona qw(
   persona_trait_meta
   persona_trait_order
@@ -487,185 +488,22 @@ my @BRAINFREEZE = (
 
 sub _do_raid {
   my ($self) = @_;
-  my $pending = $self->_pending_raid;
-  return unless $pending;
-
-  my $input    = $pending->{input};
-  my $channel  = $pending->{channel};
-  my $messages = $pending->{messages};
-
-  my $answer = eval {
-    my $result = $self->_raider->raid($input);
-    "$result";
-  };
-
-  if ($@ && $@ =~ /429|rate.limit/i) {
-    my $total_wait = $self->_rate_limit_wait;
-    my $err_channel = $self->_default_channel;
-    if ($total_wait == 0) {
-      # First hit — show brainfreeze (only in main channel)
-      my $msg = $BRAINFREEZE[rand @BRAINFREEZE];
-      $self->_send_to_channel($err_channel, $msg);
-    }
-    my $wait = $total_wait < 70 ? (70 - $total_wait) : 60;
-    $self->_rate_limit_wait($total_wait + $wait);
-    $self->info("Rate limited, total wait: " . $self->_rate_limit_wait . "s, next retry in ${wait}s");
-    # Show another message every ~3 minutes of waiting
-    if ($total_wait > 0 && int($total_wait / 180) != int($self->_rate_limit_wait / 180)) {
-      my $msg = $BRAINFREEZE[rand @BRAINFREEZE];
-      $self->_send_to_channel($err_channel, $msg);
-    }
-    POE::Kernel->delay( _retry_raid => $wait );
-    return;
-  }
-
-  # Reset rate limit state
-  $self->_rate_limit_wait(0);
-  $self->_pending_raid(undef);
-
-  if ($@) {
-    $self->error("Raider error: $@");
-    # Show error only in main channel
-    $self->_send_to_channel($self->_default_channel,
-      "My brain is fried. Someone forgot to feed the gerbils that power my CPU.");
-    $self->_processing(0);
-    $self->_schedule_pending_buffers;
-    return;
-  }
-
-  # Log rate limit info
-  eval {
-    my $engine = $self->_raider->active_engine;
-    if ($engine->has_rate_limit) {
-      my $rl = $engine->rate_limit;
-      $self->info(sprintf "Rate limit: %s requests remaining, %s tokens remaining",
-        $rl->requests_remaining // '?', $rl->tokens_remaining // '?');
-    }
-  };
-
-  $self->_processing(0);
-
-  # Check for silence
-  if ($answer =~ /__SILENT__/) {
-    $self->info("Bert chose to stay silent");
-    $self->_schedule_pending_buffers;
-    return;
-  }
-
-  # Clean up AI output
-  my $raw_answer = $answer;
-  $answer = Bot::Runtime::OutputPipeline::clean_ai_output(
+  return Bot::Runtime::RaidFlow::do_raid(
     self => $self,
-    text => $answer,
+    max_line => $MAX_LINE,
+    brainfreeze => \@BRAINFREEZE,
+    silent_name => "Bert",
+    allow_bert_non_substantive => 1,
+    on_bert_reply_consumed => sub {
+      my ($bot) = @_;
+      my $next = $bot->_bert_reply_turn_count + 1;
+      $bot->_bert_reply_turn_count($next);
+      $bot->info("Bert conversational reply consumed; turn count=$next");
+    },
   );
-
-  if ($answer !~ /\S/) {
-    $self->_log_cleanup_empty($raw_answer, $answer);
-    $self->info("Answer empty after cleanup; staying silent");
-    $self->_schedule_pending_buffers;
-    return;
-  }
-
-  my $has_bert_conversation = 0;
-  my $has_warm_human_conversation = 0;
-  for my $m (@$messages) {
-    if (($m->{source_kind} // '') eq 'bert_conversation' && $m->{nick} && $self->_is_filtered_bot_nick($m->{nick})) {
-      $has_bert_conversation = 1;
-    }
-    if (($m->{source_kind} // '') eq 'conversation' && ($m->{warm_human} // 0)) {
-      $has_warm_human_conversation = 1;
-    }
-  }
-
-  if ($self->_is_non_substantive_output($answer)) {
-    if ($has_warm_human_conversation) {
-      $self->info("Retrying non-substantive output for warm human conversation lane");
-      my $retry = eval {
-        my $prompt = $input . "\n\nA human directly addressed you. Answer that human directly and promptly now. This overrides your default quietness. Be brief, useful, and natural. Answer the actual question first. Do not use stage directions, faux silence, ambient observation, withdrawn asides, roleplay garnish, or any text about staying quiet. If silence would be appropriate, output nothing instead of narrating silence.";
-        my $result = $self->_raider->raid($prompt);
-        "$result";
-      };
-      if (!$@ && defined $retry) {
-        my $retry_raw = $retry;
-        $retry = Bot::Runtime::OutputPipeline::clean_ai_output(
-          self => $self,
-          text => $retry,
-          log_prefix => 'warm_retry_',
-        );
-        if ($retry =~ /\S/ && !$self->_is_non_substantive_output($retry)) {
-          $answer = $retry;
-          $raw_answer = $retry_raw;
-        }
-      }
-    }
-  }
-
-  if ($self->_is_non_substantive_output($answer)) {
-    my $non_substantive_allow_pct = $self->_persona_trait('non_substantive_allow_pct');
-    if ($has_bert_conversation) {
-      $self->info("Allowing borderline non-substantive output for bert_conversation lane");
-    } elsif ($non_substantive_allow_pct > 0 && int(rand(100)) < $non_substantive_allow_pct) {
-      $self->info("Allowing non-substantive output due to non_substantive_allow_pct=$non_substantive_allow_pct");
-    } else {
-      $self->info("Suppressing non-substantive output");
-      $self->_schedule_pending_buffers;
-      return;
-    }
-  }
-
-  # Check for lines too long
-  my @lines = grep { length } map { s/^\s+//r =~ s/\s+$//r } split(/\n/, $answer);
-  my $too_long = grep { length($_) > $MAX_LINE } @lines;
-  if ($too_long) {
-    $self->info("Response too long, asking to shorten");
-    $answer = eval {
-      my $retry = $self->_raider->raid(
-        "Your last response had lines over $MAX_LINE characters. "
-        . "Rewrite it shorter. Every line must be under $MAX_LINE chars."
-      );
-      "$retry";
-    } || $answer;
-  }
-
-  # Store conversations (subject to configurable storage hygiene)
-  my $answer_is_empty_artifact = ($answer =~ /^\(Empty response:/s) ? 1 : 0;
-  my $answer_is_non_substantive = $self->_is_non_substantive_output($answer) ? 1 : 0;
-  my $store_system_rows = $self->_store_system_rows_enabled;
-  my $store_non_substantive_rows = $self->_store_non_substantive_rows_enabled;
-  my $store_empty_response_rows = $self->_store_empty_response_rows_enabled;
-
-  for my $m (@$messages) {
-    if ($m->{nick} eq 'system' && !$store_system_rows) {
-      $self->info('Skipping storage for system row');
-      next;
-    }
-    if ($answer_is_empty_artifact && !$store_empty_response_rows) {
-      $self->info('Skipping storage for empty-response artifact');
-      next;
-    }
-    if ($answer_is_non_substantive && !$store_non_substantive_rows) {
-      $self->info('Skipping storage for non-substantive response');
-      next;
-    }
-    $self->memory->store_conversation(
-      nick => $m->{nick}, message => $m->{msg},
-      response => $answer, channel => $m->{channel},
-    );
-  }
-
-  my $consumed_bert_reply = $has_bert_conversation ? 1 : 0;
-
-  $self->_send_to_channel($channel, $answer);
-
-  if ($consumed_bert_reply) {
-    my $next = $self->_bert_reply_turn_count + 1;
-    $self->_bert_reply_turn_count($next);
-    $self->info("Bert conversational reply consumed; turn count=$next");
-  }
-
-  # Process any messages that arrived while we were thinking
-  $self->_schedule_pending_buffers;
 }
+
+
 
 event _retry_raid => sub {
   my ($self) = $_[OBJECT];
