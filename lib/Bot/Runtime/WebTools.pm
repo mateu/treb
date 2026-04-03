@@ -17,6 +17,7 @@ sub format_search_results {
   $limit //= 3;
   $limit = 1 if $limit < 1;
   $limit = 5 if $limit > 5;
+  return "No useful web results found for: $query" unless ref($data) eq 'HASH';
   my $results = $data->{web}{results};
   return "No useful web results found for: $query" unless ref($results) eq 'ARRAY' && @$results;
 
@@ -65,9 +66,11 @@ sub summarize_url {
 
   my @cmd = (
     'curl', '-fsSL',
+    '--proto', 'https,http',
+    '--proto-redir', 'https,http',
     '--max-time', '15',
     '--max-filesize', '786432',
-    '-A', 'treb-url-summarizer/1.0',
+    '-A', 'bot-url-summarizer/1.0',
     $url,
   );
 
@@ -160,6 +163,7 @@ sub search_web {
 
   my @cmd = (
     'curl', '-fsS',
+    '--max-time', '15',
     '-H', "X-Subscription-Token: $api_key",
     '--get',
     '--data-urlencode', "q=$query",
