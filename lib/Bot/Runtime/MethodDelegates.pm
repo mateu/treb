@@ -6,8 +6,12 @@ use Exporter 'import';
 our @EXPORT_OK = qw(install_shared_delegates);
 
 use Bot::Commands::CPAN ();
+use Bot::Persona ();
 use Bot::Commands::Time ();
 use Bot::OutputCleanup ();
+use Bot::Runtime::MCPServer ();
+use Bot::Runtime::PersonaTools ();
+use Bot::Runtime::Policy ();
 use Bot::Runtime::WebTools ();
 
 sub install_shared_delegates {
@@ -48,6 +52,107 @@ sub install_shared_delegates {
     _format_search_results => sub { Bot::Runtime::WebTools::format_search_results(@_) },
     _summarize_url => sub { Bot::Runtime::WebTools::summarize_url(@_) },
     _search_web => sub { Bot::Runtime::WebTools::search_web(@_) },
+    _clamp_persona_value => sub {
+      my ($self, $key, $value) = @_;
+      my %runtime_args = $self->_persona_runtime_args;
+      return Bot::Persona::clamp_persona_value(
+        $key,
+        $value,
+        trait_meta  => $runtime_args{trait_meta},
+        trait_order => $runtime_args{trait_order},
+      );
+    },
+    _default_persona_trait_value => sub {
+      my ($self, $key) = @_;
+      return Bot::Runtime::PersonaTools::default_persona_trait_value($self->_persona_runtime_args, key => $key);
+    },
+    _load_persona_settings => sub {
+      my ($self) = @_;
+      return Bot::Runtime::PersonaTools::load_persona_settings($self->_persona_runtime_args);
+    },
+    _persona_trait => sub {
+      my ($self, $key) = @_;
+      return Bot::Runtime::PersonaTools::persona_trait($self->_persona_runtime_args, key => $key);
+    },
+    _persona_stats_text => sub {
+      my ($self) = @_;
+      return Bot::Runtime::PersonaTools::persona_stats_text($self->_persona_runtime_args);
+    },
+    _persona_text => sub {
+      my ($self) = @_;
+      return Bot::Runtime::PersonaTools::persona_text($self->_persona_runtime_args);
+    },
+    _persona_summary_text => sub {
+      my ($self) = @_;
+      return Bot::Runtime::PersonaTools::persona_summary_text($self->_persona_runtime_args);
+    },
+    _persona_trait_text => sub {
+      my ($self, $trait) = @_;
+      return Bot::Runtime::PersonaTools::persona_trait_text($self->_persona_runtime_args, trait => $trait);
+    },
+    _set_persona_trait => sub {
+      my ($self, $trait, $value) = @_;
+      return Bot::Runtime::PersonaTools::set_persona_trait($self->_persona_runtime_args, trait => $trait, value => $value);
+    },
+    _apply_persona_preset => sub {
+      my ($self, $value) = @_;
+      return Bot::Runtime::PersonaTools::apply_persona_preset($self->_persona_runtime_args, value => $value);
+    },
+    _db_stats_text => sub {
+      my ($self) = @_;
+      return Bot::Runtime::PersonaTools::db_stats_text($self->_persona_runtime_args);
+    },
+    _notes_text => sub {
+      my ($self, $nick) = @_;
+      return Bot::Runtime::PersonaTools::notes_text(self => $self, nick => $nick);
+    },
+    _mcp_tool_logging_enabled => sub {
+      return Bot::Runtime::Policy::mcp_tool_logging_enabled();
+    },
+    _env_flag_enabled => sub {
+      my ($self, $name, $default) = @_;
+      return Bot::Runtime::Policy::env_flag_enabled($name, $default);
+    },
+    _store_system_rows_enabled => sub {
+      return Bot::Runtime::Policy::store_system_rows_enabled();
+    },
+    _store_non_substantive_rows_enabled => sub {
+      return Bot::Runtime::Policy::store_non_substantive_rows_enabled();
+    },
+    _store_empty_response_rows_enabled => sub {
+      return Bot::Runtime::Policy::store_empty_response_rows_enabled();
+    },
+    _cleanup_logging_enabled => sub {
+      return Bot::Runtime::Policy::cleanup_logging_enabled();
+    },
+    _cleanup_log_preview => sub {
+      my ($self, $text) = @_;
+      return Bot::Runtime::Policy::cleanup_log_preview_text($text);
+    },
+    _log_cleanup_change => sub {
+      my ($self, $label, $before, $after) = @_;
+      return Bot::Runtime::Policy::log_cleanup_change(
+        self   => $self,
+        label  => $label,
+        before => $before,
+        after  => $after,
+      );
+    },
+    _log_cleanup_empty => sub {
+      my ($self, $before, $after) = @_;
+      return Bot::Runtime::Policy::log_cleanup_empty(
+        self   => $self,
+        before => $before,
+        after  => $after,
+      );
+    },
+    _build_mcp_server => sub {
+      my ($self) = @_;
+      return Bot::Runtime::MCPServer::build_mcp_server(
+        self        => $self,
+        server_name => $self->_mcp_server_name,
+      );
+    },
   );
 
   my @installed;

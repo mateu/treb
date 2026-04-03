@@ -9,6 +9,16 @@ use Bot::Runtime::MethodDelegates qw(install_shared_delegates);
   package TestDelegateBot;
 
   sub new { bless {}, shift }
+  sub _persona_runtime_args {
+    my ($self) = @_;
+    return (
+      self        => $self,
+      bot_name    => 'testbot',
+      trait_meta  => { kindness => 1 },
+      trait_order => ['kindness'],
+    );
+  }
+  sub _mcp_server_name { 'delegate-tools' }
 }
 
 my @installed = install_shared_delegates('TestDelegateBot');
@@ -47,6 +57,35 @@ my $bot = TestDelegateBot->new;
     my ($self, $query, $limit) = @_;
     return join(':', 'web', ref($self), $query, $limit);
   };
+  local *Bot::Persona::clamp_persona_value = sub {
+    my ($key, $value, %args) = @_;
+    return join(':', 'clamp', $key, $value, ref($args{trait_meta}), ref($args{trait_order}));
+  };
+  local *Bot::Runtime::PersonaTools::default_persona_trait_value = sub {
+    my (%args) = @_;
+    return join(':', 'default', $args{key}, $args{bot_name});
+  };
+  local *Bot::Runtime::PersonaTools::persona_text = sub {
+    my (%args) = @_;
+    return join(':', 'persona', $args{bot_name}, ref($args{self}));
+  };
+  local *Bot::Runtime::PersonaTools::notes_text = sub {
+    my (%args) = @_;
+    return join(':', 'notes', $args{nick}, ref($args{self}));
+  };
+  local *Bot::Runtime::Policy::mcp_tool_logging_enabled = sub { 1 };
+  local *Bot::Runtime::Policy::env_flag_enabled = sub {
+    my ($name, $default) = @_;
+    return join(':', 'env', $name, $default);
+  };
+  local *Bot::Runtime::Policy::cleanup_log_preview_text = sub {
+    my ($text) = @_;
+    return "preview:$text";
+  };
+  local *Bot::Runtime::MCPServer::build_mcp_server = sub {
+    my (%args) = @_;
+    return join(':', 'mcp', $args{server_name}, ref($args{self}));
+  };
 
   is($bot->_time_text_for_zone('Europe/London'), 'zone:Europe/London', 'time delegate strips invocant');
   is($bot->_current_local_time_text, 'now', 'current_local_time delegate strips invocant');
@@ -63,12 +102,49 @@ my $bot = TestDelegateBot->new;
     'web:TestDelegateBot:perl:2',
     'web delegate forwards invocant and args',
   );
+  is(
+    $bot->_clamp_persona_value('kindness', 120),
+    'clamp:kindness:120:HASH:ARRAY',
+    'persona clamp delegate forwards runtime trait metadata',
+  );
+  is(
+    $bot->_default_persona_trait_value('kindness'),
+    'default:kindness:testbot',
+    'persona default delegate forwards runtime args',
+  );
+  is(
+    $bot->_persona_text(),
+    'persona:testbot:TestDelegateBot',
+    'persona text delegate forwards runtime args',
+  );
+  is(
+    $bot->_notes_text('alice'),
+    'notes:alice:TestDelegateBot',
+    'notes delegate forwards nick and invocant',
+  );
+  ok($bot->_mcp_tool_logging_enabled, 'policy delegate forwards zero-arg call');
+  is(
+    $bot->_env_flag_enabled('FLAG', 0),
+    'env:FLAG:0',
+    'policy delegate strips invocant',
+  );
+  is(
+    $bot->_cleanup_log_preview('line'),
+    'preview:line',
+    'cleanup preview delegate strips invocant',
+  );
+  is(
+    $bot->_build_mcp_server(),
+    'mcp:delegate-tools:TestDelegateBot',
+    'mcp builder delegate uses bot server-name hook',
+  );
 }
 
 {
   package TestDelegateBurtBot;
 
   sub _is_non_substantive_output { return 'custom' }
+  sub _build_mcp_server { return 'custom-mcp' }
 }
 
 install_shared_delegates('TestDelegateBurtBot');
@@ -76,6 +152,11 @@ is(
   TestDelegateBurtBot->_is_non_substantive_output('meh'),
   'custom',
   'existing methods are not overwritten by shared delegates',
+);
+is(
+  TestDelegateBurtBot->_build_mcp_server(),
+  'custom-mcp',
+  'existing mcp builder method is not overwritten by shared delegates',
 );
 
 done_testing;
