@@ -14,16 +14,17 @@ use Bot::Runtime::MethodDelegates qw(install_shared_delegates);
   sub _buffer_delay_seconds { 17 }
   sub _send_to_channel_max_line { 321 }
   sub _handles_bare_utility_commands { 1 }
-  sub _persona_runtime_args {
-    my ($self) = @_;
-    return (
-      self        => $self,
-      bot_name    => 'testbot',
-      trait_meta  => { kindness => 1 },
-      trait_order => ['kindness'],
-    );
+  sub _entrypoint_runtime_config {
+    return {
+      bot_name_slug   => 'testbot',
+      trait_meta      => { kindness => 1 },
+      trait_order     => ['kindness'],
+      mcp_server_name => 'delegate-tools',
+      owner           => 'Getty',
+      max_line        => 400,
+      script_file     => '/tmp/testbot.pl',
+    };
   }
-  sub _mcp_server_name { 'delegate-tools' }
 }
 
 my @installed = install_shared_delegates('TestDelegateBot');
@@ -129,6 +130,21 @@ my $bot = TestDelegateBot->new;
     my (%args) = @_;
     return join(':', 'mcp', $args{server_name}, ref($args{self}));
   };
+  local *Bot::Runtime::RaiderSetup::setup_raider = sub {
+    my (%args) = @_;
+    return join(':', 'raider', $args{owner}, $args{max_line}, $args{script_file}, ref($args{self}));
+  };
+
+  is($bot->_bot_name_slug, 'testbot', 'bot slug delegate reads runtime config');
+  my %runtime_args = $bot->_persona_runtime_args;
+  is($runtime_args{bot_name}, 'testbot', 'persona runtime args include bot slug');
+  is_deeply($runtime_args{trait_order}, ['kindness'], 'persona runtime args include trait order');
+  is($bot->_mcp_server_name, 'delegate-tools', 'mcp server-name delegate reads runtime config');
+  is(
+    $bot->_setup_raider->get,
+    'raider:Getty:400:/tmp/testbot.pl:TestDelegateBot',
+    'setup_raider delegate forwards runtime config payload',
+  );
 
   is($bot->_time_text_for_zone('Europe/London'), 'zone:Europe/London', 'time delegate strips invocant');
   is($bot->_current_local_time_text, 'now', 'current_local_time delegate strips invocant');

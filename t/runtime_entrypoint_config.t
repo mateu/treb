@@ -8,6 +8,8 @@ use Bot::Runtime::EntrypointConfig qw(
   load_entrypoint_config
   persona_trait_order
   persona_trait_meta
+  build_persona_trait_config
+  build_runtime_delegate_config
 );
 
 my @names = default_bot_names();
@@ -133,5 +135,80 @@ is($normalized_meta->{non_substantive_allow_pct}{default}, 100, 'non-substantive
   my $cfg = load_entrypoint_config();
   is($cfg->{max_line}, 1, 'negative MAX_LINE_LENGTH is clamped to minimum of 1');
 }
+
+{
+  my $config = build_runtime_delegate_config(
+    bot_name_slug   => 'testbot',
+    trait_meta      => { trait => 1 },
+    trait_order     => ['trait'],
+    mcp_server_name => 'test-tools',
+    owner           => 'mateu',
+    max_line        => 320,
+    script_file     => '/tmp/testbot.pl',
+  );
+
+  is($config->{bot_name_slug}, 'testbot', 'runtime config stores bot slug');
+  is($config->{mcp_server_name}, 'test-tools', 'runtime config stores mcp server name');
+  is($config->{owner}, 'mateu', 'runtime config stores owner');
+  is($config->{max_line}, 320, 'runtime config stores max line');
+  is($config->{script_file}, '/tmp/testbot.pl', 'runtime config stores script path');
+}
+
+{
+  my $config = build_runtime_delegate_config(
+    max_line    => 400,
+    script_file => '/tmp/defaults.pl',
+  );
+
+  is($config->{bot_name_slug}, 'bot', 'runtime config defaults bot slug');
+  is($config->{mcp_server_name}, 'bot-tools', 'runtime config defaults mcp server name from slug');
+  is($config->{owner}, 'unknown', 'runtime config defaults owner');
+  is_deeply($config->{trait_meta}, {}, 'runtime config defaults trait meta');
+  is_deeply($config->{trait_order}, [], 'runtime config defaults trait order');
+}
+
+# Error path: missing/invalid max_line
+for my $bad_max_line (undef, 0, -5, 'abc', 1.5) {
+  my $label = defined $bad_max_line ? "'$bad_max_line'" : 'undef';
+  eval {
+    build_runtime_delegate_config(
+      max_line    => $bad_max_line,
+      script_file => '/tmp/x.pl',
+    );
+  };
+  like($@, qr/max_line/, "build_runtime_delegate_config dies on invalid max_line: $label");
+}
+
+# Error path: missing script_file
+for my $bad_script (undef, '') {
+  my $label = defined $bad_script ? "'$bad_script'" : 'undef';
+  eval {
+    build_runtime_delegate_config(
+      max_line    => 400,
+      script_file => $bad_script,
+    );
+  };
+  like($@, qr/script_file/, "build_runtime_delegate_config dies on invalid script_file: $label");
+}
+
+# Error path: invalid trait_meta type
+eval {
+  build_runtime_delegate_config(
+    max_line    => 400,
+    script_file => '/tmp/x.pl',
+    trait_meta  => 'not-a-hashref',
+  );
+};
+like($@, qr/trait_meta.*hashref/i, 'build_runtime_delegate_config dies when trait_meta is not a hashref');
+
+# Error path: invalid trait_order type
+eval {
+  build_runtime_delegate_config(
+    max_line    => 400,
+    script_file => '/tmp/x.pl',
+    trait_order => 'not-an-arrayref',
+  );
+};
+like($@, qr/trait_order.*arrayref/i, 'build_runtime_delegate_config dies when trait_order is not an arrayref');
 
 done_testing;

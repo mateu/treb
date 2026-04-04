@@ -14,13 +14,83 @@ use Bot::Runtime::Dispatch ();
 use Bot::Runtime::MCPServer ();
 use Bot::Runtime::PersonaTools ();
 use Bot::Runtime::Policy ();
+use Bot::Runtime::RaiderSetup ();
 use Bot::Runtime::WebTools ();
+
+{
+  package Bot::Runtime::MethodDelegates::ImmediateFuture;
+
+  sub new {
+    my ($class, $value) = @_;
+    return bless { value => $value }, $class;
+  }
+
+  sub get {
+    my ($self) = @_;
+    return $self->{value};
+  }
+}
 
 sub install_shared_delegates {
   my ($target_package) = @_;
   die "install_shared_delegates requires a target package" unless $target_package;
 
+  my @_required_config_keys = qw(
+    bot_name_slug mcp_server_name owner max_line script_file
+  );
+
+  my $runtime_config_for = sub {
+    my ($self) = @_;
+    die ref($self) . ' must define _entrypoint_runtime_config'
+      unless $self->can('_entrypoint_runtime_config');
+    my $config = $self->_entrypoint_runtime_config;
+    die ref($self) . ' _entrypoint_runtime_config must return a hashref'
+      unless ref($config) eq 'HASH';
+    for my $key (@_required_config_keys) {
+      die ref($self) . " _entrypoint_runtime_config missing required key: $key"
+        unless exists $config->{$key} && defined $config->{$key};
+    }
+    die ref($self) . ' _entrypoint_runtime_config script_file must not be empty'
+      unless length($config->{script_file} // '');
+    return $config;
+  };
+
   my %delegates = (
+    _bot_name_slug => sub {
+      my ($self) = @_;
+      my $config = $runtime_config_for->($self);
+      return $config->{bot_name_slug};
+    },
+    _persona_runtime_args => sub {
+      my ($self) = @_;
+      my $config = $runtime_config_for->($self);
+      return (
+        self        => $self,
+        bot_name    => $config->{bot_name_slug},
+        trait_meta  => $config->{trait_meta},
+        trait_order => $config->{trait_order},
+      );
+    },
+    _mcp_server_name => sub {
+      my ($self) = @_;
+      my $config = $runtime_config_for->($self);
+      return $config->{mcp_server_name};
+    },
+    _setup_raider => sub {
+      my ($self) = @_;
+      my $config = $runtime_config_for->($self);
+      my %args = (
+        self        => $self,
+        owner       => $config->{owner},
+        max_line    => $config->{max_line},
+        script_file => $config->{script_file},
+      );
+      if (defined $config->{max_context_tokens}) {
+        $args{max_context_tokens} = $config->{max_context_tokens};
+      }
+      my $raider = Bot::Runtime::RaiderSetup::setup_raider(%args);
+      return Bot::Runtime::MethodDelegates::ImmediateFuture->new($raider);
+    },
     _time_text_for_zone => sub {
       my ($self, $zone) = @_;
       return Bot::Commands::Time::time_text_for_zone($zone);

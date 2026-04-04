@@ -35,11 +35,10 @@ use Bot::Runtime::PresenceEvents ();
 use Bot::Runtime::UtilityCommands ();
 use Bot::Runtime::WebTools ();
 use Bot::Runtime::RaidFlow ();
-use Bot::Runtime::RaiderSetup ();
 use Bot::Runtime::EntrypointConfig qw(
   load_entrypoint_config
-  persona_trait_meta
-  persona_trait_order
+  build_persona_trait_config
+  build_runtime_delegate_config
 );
 use Bot::Persona ();
 
@@ -53,14 +52,24 @@ my $BUFFER_DELAY = $CONFIG->{buffer_delay};
 my $LINE_DELAY = $CONFIG->{line_delay};
 my $IDLE_PING = $CONFIG->{idle_ping};
 
-my %PERSONA_TRAIT_META = %{ persona_trait_meta(defaults => {
-  ambient_public_reply_pct     => 0,
-  public_thread_window_seconds => 0,
-  bot_reply_pct                => 50,
-  bot_reply_max_turns          => 1,
-  non_substantive_allow_pct    => 0,
-}) };
-my @PERSONA_TRAIT_ORDER = persona_trait_order();
+my ($PERSONA_TRAIT_META, $PERSONA_TRAIT_ORDER) = build_persona_trait_config(
+  defaults => {
+    ambient_public_reply_pct   => 0,
+    public_thread_window_seconds => 0,
+    bot_reply_pct              => 50,
+    bot_reply_max_turns        => 1,
+    non_substantive_allow_pct  => 0,
+  },
+);
+my $ENTRYPOINT_RUNTIME_CONFIG = build_runtime_delegate_config(
+  bot_name_slug   => $BOT_IDENTITY_SLUG,
+  trait_meta      => $PERSONA_TRAIT_META,
+  trait_order     => $PERSONA_TRAIT_ORDER,
+  mcp_server_name => 'bert-tools',
+  owner           => $OWNER,
+  max_line        => $MAX_LINE,
+  script_file     => __FILE__,
+);
 
 # --- The IRC Bot ---
 
@@ -107,34 +116,9 @@ has _rate_limit_wait => (
   default => 0,
 );
 
-sub _bot_name_slug {
+sub _entrypoint_runtime_config {
   my ($self) = @_;
-  return $BOT_IDENTITY_SLUG;
-}
-
-sub _persona_runtime_args {
-  my ($self) = @_;
-  return (
-    self        => $self,
-    bot_name    => $self->_bot_name_slug,
-    trait_meta  => \%PERSONA_TRAIT_META,
-    trait_order => \@PERSONA_TRAIT_ORDER,
-  );
-}
-
-sub _mcp_server_name {
-  my ($self) = @_;
-  return 'bert-tools';
-}
-
-async sub _setup_raider {
-  my ($self) = @_;
-  Bot::Runtime::RaiderSetup::setup_raider(
-    self        => $self,
-    owner       => $OWNER,
-    max_line    => $MAX_LINE,
-    script_file => __FILE__,
-  );
+  return $ENTRYPOINT_RUNTIME_CONFIG;
 }
 
 has _last_activity => (
