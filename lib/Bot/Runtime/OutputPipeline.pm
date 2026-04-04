@@ -31,6 +31,9 @@ sub clean_ai_output {
   $text =~ s/^\s*I am staying silent\b[^\n]*\n?//img;
   $text =~ s/^\s*\(No response\s*-\s*staying silent\)\s*\n?//img;
   $text =~ s/^\s*\[No response needed\s*-\s*I chose silence\]\s*\n?//img;
+  $text =~ s/^\s*[^\n]*doesn't require a response from me\.[^\n]*\n?//img;
+  $text =~ s/^\s*[^\n]*we don't banter unprompted\.[^\n]*\n?//img;
+  $text =~ s/^\s*[^\n]*I'll continue lurking quietly\.?\s*\n?//img;
   $text =~ s/^\s+//;
   $text =~ s/\s+$//;
   $self->_log_cleanup_change($prefix . 'strip_markup', $before_markup, $text);

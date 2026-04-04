@@ -70,6 +70,7 @@ sub is_non_substantive_output {
   return 1 if $lc =~ /^system \(untrusted\):/;
   return 1 if $lc =~ /^system:\s*(?:stop further tool use until new messages arrive\.|you see messages from burt_bot in \#mateu-test\. do not reply to this system message\.|you will now receive messages\. stay quiet unless directly addressed\.)$/;
   return 1 if $lc =~ /^\[no response needed\s*-\s*i chose silence\]$/;
+  return 1 if $lc =~ /doesn't require a response from me/ && $lc =~ /lurking quietly|banter unprompted|housemate/;
   return 1 if $lc =~ /\b(?:bot-to-bot banter|no human involved|continuing .* without human involvement|staying quiet|remain(?:ing)? quiet|stays quiet|stays silent|without comment|notes the pattern|not speaking)\b/ && length($lc) < 240;
   return 1 if $lc =~ /^(?:silently|quietly|softly|calmly|gently|watchfully|wordlessly|still|silent|quiet)\b/ && length($lc) < 120;
   return 1 if $lc =~ /\b(?:watch(?:ing)?|listen(?:ing)?|lurking|observ(?:e|ing)|waiting|standing by)\b/ && length($lc) < 120 && $lc !~ /https?:\/\//;
