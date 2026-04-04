@@ -37,6 +37,7 @@ use Bot::Runtime::UtilityCommands ();
 use Bot::Runtime::WebTools ();
 use Bot::Runtime::RaidFlow ();
 use Bot::Runtime::RaiderSetup ();
+use Bot::Runtime::EntrypointConfig qw(build_persona_trait_config);
 use Bot::Persona ();
 
 my @BOT_NAMES = qw(
@@ -51,24 +52,15 @@ my $MAX_LINE = $ENV{MAX_LINE_LENGTH} || 400;
 my $BUFFER_DELAY = $ENV{BUFFER_DELAY} || 1.5;
 my $LINE_DELAY = $ENV{LINE_DELAY} || 3;
 my $IDLE_PING = $ENV{IDLE_PING} || 1800;
-my $NON_SUBSTANTIVE_ALLOW_PCT = exists $ENV{NON_SUBSTANTIVE_ALLOW_PCT} ? 0 + $ENV{NON_SUBSTANTIVE_ALLOW_PCT} : 0;
-$NON_SUBSTANTIVE_ALLOW_PCT = 0 if $NON_SUBSTANTIVE_ALLOW_PCT < 0;
-$NON_SUBSTANTIVE_ALLOW_PCT = 100 if $NON_SUBSTANTIVE_ALLOW_PCT > 100;
-my $BOT_REPLY_PCT = exists $ENV{BOT_REPLY_PCT} ? 0 + $ENV{BOT_REPLY_PCT} : 25;
-$BOT_REPLY_PCT = 0 if $BOT_REPLY_PCT < 0;
-$BOT_REPLY_PCT = 100 if $BOT_REPLY_PCT > 100;
-my $BOT_REPLY_MAX_TURNS = exists $ENV{BOT_REPLY_MAX_TURNS} ? 0 + $ENV{BOT_REPLY_MAX_TURNS} : 1;
-$BOT_REPLY_MAX_TURNS = 0 if $BOT_REPLY_MAX_TURNS < 0;
-
-my %PERSONA_TRAIT_META = (
-  join_greet_pct => { kind => 'pct', env => 'JOIN_GREET_PCT', default => 100 },
-  ambient_public_reply_pct => { kind => 'pct', env => 'PUBLIC_CHAT_ALLOW_PCT', default => 0 },
-  public_thread_window_seconds => { kind => 'int', env => 'PUBLIC_THREAD_WINDOW_SECONDS', default => 0 },
-  bot_reply_pct => { kind => 'pct', env => 'BOT_REPLY_PCT', default => 50 },
-  bot_reply_max_turns => { kind => 'int', env => 'BOT_REPLY_MAX_TURNS', default => 1 },
-  non_substantive_allow_pct => { kind => 'pct', env => 'NON_SUBSTANTIVE_ALLOW_PCT', default => 0 },
+my ($PERSONA_TRAIT_META, $PERSONA_TRAIT_ORDER) = build_persona_trait_config(
+  defaults => {
+    ambient_public_reply_pct   => 0,
+    public_thread_window_seconds => 0,
+    bot_reply_pct              => 25,
+    bot_reply_max_turns        => 1,
+    non_substantive_allow_pct  => 0,
+  },
 );
-my @PERSONA_TRAIT_ORDER = qw(join_greet_pct ambient_public_reply_pct public_thread_window_seconds bot_reply_pct bot_reply_max_turns non_substantive_allow_pct);
 
 # --- The IRC Bot ---
 
@@ -125,8 +117,8 @@ sub _persona_runtime_args {
   return (
     self        => $self,
     bot_name    => $self->_bot_name_slug,
-    trait_meta  => \%PERSONA_TRAIT_META,
-    trait_order => \@PERSONA_TRAIT_ORDER,
+    trait_meta  => $PERSONA_TRAIT_META,
+    trait_order => $PERSONA_TRAIT_ORDER,
   );
 }
 
