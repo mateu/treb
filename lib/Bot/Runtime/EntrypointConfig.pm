@@ -155,15 +155,35 @@ sub build_persona_trait_config {
   return ($trait_meta, $trait_order);
 }
 
+sub _normalize_positive_int {
+  my ($value, $name) = @_;
+
+  die "$name is required" unless defined $value;
+  die "$name must be a number"
+    unless looks_like_number($value);
+
+  my $normalized = int($value);
+  die "$name must be a positive integer"
+    unless $normalized >= 1 && $normalized == $value;
+
+  return $normalized;
+}
+
 sub build_runtime_delegate_config {
   my (%args) = @_;
 
   my $bot_name_slug = defined $args{bot_name_slug} ? $args{bot_name_slug} : 'bot';
-  my $trait_meta = $args{trait_meta} || {};
-  my $trait_order = $args{trait_order} || [];
-  my $max_line = $args{max_line};
+  my $trait_meta = $args{trait_meta} // {};
+  my $trait_order = $args{trait_order} // [];
+  my $max_line = _normalize_positive_int(
+    $args{max_line},
+    'build_runtime_delegate_config max_line',
+  );
   my $script_file = $args{script_file};
-  die 'build_runtime_delegate_config requires max_line' unless defined $max_line;
+  die 'build_runtime_delegate_config requires trait_meta to be a hashref'
+    if ref($trait_meta) ne 'HASH';
+  die 'build_runtime_delegate_config requires trait_order to be an arrayref'
+    if ref($trait_order) ne 'ARRAY';
   die 'build_runtime_delegate_config requires script_file' unless defined $script_file && length $script_file;
 
   my %config = (

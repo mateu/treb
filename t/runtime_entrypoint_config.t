@@ -167,4 +167,48 @@ is($normalized_meta->{non_substantive_allow_pct}{default}, 100, 'non-substantive
   is_deeply($config->{trait_order}, [], 'runtime config defaults trait order');
 }
 
+# Error path: missing/invalid max_line
+for my $bad_max_line (undef, 0, -5, 'abc', 1.5) {
+  my $label = defined $bad_max_line ? "'$bad_max_line'" : 'undef';
+  eval {
+    build_runtime_delegate_config(
+      max_line    => $bad_max_line,
+      script_file => '/tmp/x.pl',
+    );
+  };
+  like($@, qr/max_line/, "build_runtime_delegate_config dies on invalid max_line: $label");
+}
+
+# Error path: missing script_file
+for my $bad_script (undef, '') {
+  my $label = defined $bad_script ? "'$bad_script'" : 'undef';
+  eval {
+    build_runtime_delegate_config(
+      max_line    => 400,
+      script_file => $bad_script,
+    );
+  };
+  like($@, qr/script_file/, "build_runtime_delegate_config dies on invalid script_file: $label");
+}
+
+# Error path: invalid trait_meta type
+eval {
+  build_runtime_delegate_config(
+    max_line    => 400,
+    script_file => '/tmp/x.pl',
+    trait_meta  => 'not-a-hashref',
+  );
+};
+like($@, qr/trait_meta.*hashref/i, 'build_runtime_delegate_config dies when trait_meta is not a hashref');
+
+# Error path: invalid trait_order type
+eval {
+  build_runtime_delegate_config(
+    max_line    => 400,
+    script_file => '/tmp/x.pl',
+    trait_order => 'not-an-arrayref',
+  );
+};
+like($@, qr/trait_order.*arrayref/i, 'build_runtime_delegate_config dies when trait_order is not an arrayref');
+
 done_testing;

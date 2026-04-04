@@ -35,6 +35,10 @@ sub install_shared_delegates {
   my ($target_package) = @_;
   die "install_shared_delegates requires a target package" unless $target_package;
 
+  my @_required_config_keys = qw(
+    bot_name_slug mcp_server_name owner max_line script_file
+  );
+
   my $runtime_config_for = sub {
     my ($self) = @_;
     die ref($self) . ' must define _entrypoint_runtime_config'
@@ -42,6 +46,12 @@ sub install_shared_delegates {
     my $config = $self->_entrypoint_runtime_config;
     die ref($self) . ' _entrypoint_runtime_config must return a hashref'
       unless ref($config) eq 'HASH';
+    for my $key (@_required_config_keys) {
+      die ref($self) . " _entrypoint_runtime_config missing required key: $key"
+        unless exists $config->{$key} && defined $config->{$key};
+    }
+    die ref($self) . ' _entrypoint_runtime_config script_file must not be empty'
+      unless length($config->{script_file} // '');
     return $config;
   };
 
