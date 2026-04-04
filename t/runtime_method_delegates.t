@@ -266,5 +266,16 @@ is(
   1,
   'bot-specific send-to-channel cumulative policy override is preserved',
 );
+{
+  local *Bot::Runtime::Dispatch::send_to_channel = sub {
+    my (%args) = @_;
+    return join(':', 'send', $args{channel}, $args{text}, $args{max_line}, ($args{return_cumulative} ? 1 : 0));
+  };
+  is(
+    TestDelegateBurtBot->_send_to_channel('#burt', 'hi'),
+    'send:#burt:hi:400:1',
+    '_send_to_channel delegate forwards return_cumulative=1 for burt bot',
+  );
+}
 
 done_testing;
