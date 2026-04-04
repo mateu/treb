@@ -9,6 +9,8 @@ use Bot::Commands::CPAN ();
 use Bot::Persona ();
 use Bot::Commands::Time ();
 use Bot::OutputCleanup ();
+use Bot::Runtime::Buffering ();
+use Bot::Runtime::Dispatch ();
 use Bot::Runtime::MCPServer ();
 use Bot::Runtime::PersonaTools ();
 use Bot::Runtime::Policy ();
@@ -52,6 +54,53 @@ sub install_shared_delegates {
     _format_search_results => sub { Bot::Runtime::WebTools::format_search_results(@_) },
     _summarize_url => sub { Bot::Runtime::WebTools::summarize_url(@_) },
     _search_web => sub { Bot::Runtime::WebTools::search_web(@_) },
+    _default_channel => sub {
+      my ($self) = @_;
+      return Bot::Runtime::Dispatch::default_channel(self => $self);
+    },
+    _is_filtered_bot_nick => sub {
+      my ($self, $nick) = @_;
+      return Bot::Runtime::Dispatch::is_filtered_bot_nick(
+        nick                 => $nick,
+        default_filter_nicks => $self->_default_filtered_bot_nicks,
+      );
+    },
+    _is_human_nick => sub {
+      my ($self, $nick) = @_;
+      return 0 unless defined $nick && length $nick;
+      return 0 if $nick eq $self->get_nickname;
+      return $self->_is_filtered_bot_nick($nick) ? 0 : 1;
+    },
+    _utility_command_matches_me => sub {
+      my ($self, $target) = @_;
+      return Bot::Runtime::Dispatch::utility_command_matches_me(
+        self       => $self,
+        target     => $target,
+        allow_bare => $self->_handles_bare_utility_commands,
+      );
+    },
+    _buffer_message => sub {
+      my ($self, $channel, $nick, $msg, $extra) = @_;
+      return Bot::Runtime::Buffering::buffer_message(
+        self    => $self,
+        channel => $channel,
+        nick    => $nick,
+        msg     => $msg,
+        extra   => $extra,
+        delay   => $self->_buffer_delay_seconds,
+      );
+    },
+    _split_priority_messages => sub {
+      my ($self, $messages) = @_;
+      return Bot::Runtime::Buffering::split_priority_messages(messages => $messages);
+    },
+    _schedule_pending_buffers => sub {
+      my ($self) = @_;
+      return Bot::Runtime::Buffering::schedule_pending_buffers(
+        self  => $self,
+        delay => $self->_buffer_delay_seconds,
+      );
+    },
     _clamp_persona_value => sub {
       my ($self, $key, $value) = @_;
       my %runtime_args = $self->_persona_runtime_args;

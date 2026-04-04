@@ -9,6 +9,10 @@ use Bot::Runtime::MethodDelegates qw(install_shared_delegates);
   package TestDelegateBot;
 
   sub new { bless {}, shift }
+  sub get_nickname { 'testbot' }
+  sub _default_filtered_bot_nicks { 'rude_bot' }
+  sub _buffer_delay_seconds { 17 }
+  sub _handles_bare_utility_commands { 1 }
   sub _persona_runtime_args {
     my ($self) = @_;
     return (
@@ -57,6 +61,32 @@ my $bot = TestDelegateBot->new;
     my ($self, $query, $limit) = @_;
     return join(':', 'web', ref($self), $query, $limit);
   };
+  local *Bot::Runtime::Dispatch::default_channel = sub {
+    my (%args) = @_;
+    return join(':', 'default-channel', ref($args{self}));
+  };
+  local *Bot::Runtime::Dispatch::is_filtered_bot_nick = sub {
+    my (%args) = @_;
+    return ($args{nick} eq 'rude_bot' && $args{default_filter_nicks} eq 'rude_bot') ? 1 : 0;
+  };
+  local *Bot::Runtime::Dispatch::utility_command_matches_me = sub {
+    my (%args) = @_;
+    return join(':', 'utility', ref($args{self}), $args{target}, $args{allow_bare});
+  };
+  local *Bot::Runtime::Buffering::buffer_message = sub {
+    my (%args) = @_;
+    return join(':', 'buffer', ref($args{self}), $args{channel}, $args{nick}, $args{msg}, ($args{delay} // 'undef'));
+  };
+  local *Bot::Runtime::Buffering::split_priority_messages = sub {
+    my (%args) = @_;
+    my $active_messages   = [reverse @{ $args{messages} || [] }];
+    my $deferred_messages = [];
+    return ($active_messages, $deferred_messages);
+  };
+  local *Bot::Runtime::Buffering::schedule_pending_buffers = sub {
+    my (%args) = @_;
+    return join(':', 'schedule', ref($args{self}), ($args{delay} // 'undef'));
+  };
   local *Bot::Persona::clamp_persona_value = sub {
     my ($key, $value, %args) = @_;
     return join(':', 'clamp', $key, $value, ref($args{trait_meta}), ref($args{trait_order}));
@@ -101,6 +131,50 @@ my $bot = TestDelegateBot->new;
     $bot->_search_web('perl', 2),
     'web:TestDelegateBot:perl:2',
     'web delegate forwards invocant and args',
+  );
+  is(
+    $bot->_default_channel(),
+    'default-channel:TestDelegateBot',
+    'default channel delegate forwards invocant in named args',
+  );
+  ok(
+    $bot->_is_filtered_bot_nick('rude_bot'),
+    'filtered nick delegate uses bot-specific default filter hook',
+  );
+  ok(
+    !$bot->_is_human_nick('rude_bot'),
+    'human nick delegate excludes filtered bot nicks',
+  );
+  ok(
+    !$bot->_is_human_nick('testbot'),
+    'human nick delegate excludes self nick',
+  );
+  is(
+    $bot->_utility_command_matches_me('treb'),
+    'utility:TestDelegateBot:treb:1',
+    'utility command delegate forwards allow_bare policy hook',
+  );
+  is(
+    $bot->_buffer_message('#chan', 'alice', 'hello'),
+    'buffer:TestDelegateBot:#chan:alice:hello:17',
+    'buffer delegate forwards payload and bot delay hook',
+  );
+  my ($active_messages, $deferred_messages) =
+    $bot->_split_priority_messages([qw(one two)]);
+  is_deeply(
+    $active_messages,
+    [qw(two one)],
+    'split-priority delegate forwards active list payload',
+  );
+  is_deeply(
+    $deferred_messages,
+    [],
+    'split-priority delegate forwards deferred list payload',
+  );
+  is(
+    $bot->_schedule_pending_buffers(),
+    'schedule:TestDelegateBot:17',
+    'schedule delegate forwards bot delay hook',
   );
   is(
     $bot->_clamp_persona_value('kindness', 120),

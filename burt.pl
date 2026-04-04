@@ -238,17 +238,14 @@ event _send_line => sub {
   $self->privmsg($channel => $line);
 };
 
-sub _is_filtered_bot_nick {
-  my ($self, $nick) = @_;
-  return Bot::Runtime::Dispatch::is_filtered_bot_nick(
-    nick => $nick,
-    default_filter_nicks => '',
-  );
+sub _default_filtered_bot_nicks {
+  my ($self) = @_;
+  return '';
 }
 
-sub _default_channel {
+sub _buffer_delay_seconds {
   my ($self) = @_;
-  return Bot::Runtime::Dispatch::default_channel(self => $self);
+  return $BUFFER_DELAY;
 }
 
 has _bert_reply_lock => (
@@ -266,40 +263,7 @@ has _persona_cache => (
   default => sub { {} },
 );
 
-sub _is_human_nick {
-  my ($self, $nick) = @_;
-  return 0 unless defined $nick && length $nick;
-  return 0 if $nick eq $self->get_nickname;
-  return $self->_is_filtered_bot_nick($nick) ? 0 : 1;
-}
-
 sub _handles_bare_utility_commands { 0 }
-
-sub _utility_command_matches_me {
-  my ($self, $target) = @_;
-  return Bot::Runtime::Dispatch::utility_command_matches_me(
-    self       => $self,
-    target     => $target,
-    allow_bare => $self->_handles_bare_utility_commands,
-  );
-}
-
-sub _buffer_message {
-  my ($self, $channel, $nick, $msg, $extra) = @_;
-  return Bot::Runtime::Buffering::buffer_message(
-    self    => $self,
-    channel => $channel,
-    nick    => $nick,
-    msg     => $msg,
-    extra   => $extra,
-    delay   => $BUFFER_DELAY,
-  );
-}
-
-sub _split_priority_messages {
-  my ($self, $messages) = @_;
-  return Bot::Runtime::Buffering::split_priority_messages(messages => $messages);
-}
 
 event _process_buffer => sub {
   my ($self, $channel) = @_[OBJECT, ARG0];
@@ -308,14 +272,6 @@ event _process_buffer => sub {
     channel => $channel,
   );
 };
-
-sub _schedule_pending_buffers {
-  my ($self) = @_;
-  return Bot::Runtime::Buffering::schedule_pending_buffers(
-    self  => $self,
-    delay => $BUFFER_DELAY,
-  );
-}
 
 my @BRAINFREEZE = (
   '*brainfreeze*',
