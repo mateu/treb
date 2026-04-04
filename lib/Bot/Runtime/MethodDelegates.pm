@@ -90,6 +90,21 @@ sub install_shared_delegates {
         allow_bare => $self->_handles_bare_utility_commands,
       );
     },
+    _send_to_channel_max_line => sub {
+      return $ENV{MAX_LINE_LENGTH} || 400;
+    },
+    _send_to_channel_return_cumulative => sub {
+      return 0;
+    },
+    _send_to_channel => sub {
+      my ($self, $channel, $text) = @_;
+      return Bot::Runtime::Dispatch::send_to_channel(
+        channel           => $channel,
+        text              => $text,
+        max_line          => $self->_send_to_channel_max_line,
+        return_cumulative => $self->_send_to_channel_return_cumulative,
+      );
+    },
     _buffer_message => sub {
       my ($self, $channel, $nick, $msg, $extra) = @_;
       return Bot::Runtime::Buffering::buffer_message(

@@ -12,6 +12,7 @@ use Bot::Runtime::MethodDelegates qw(install_shared_delegates);
   sub get_nickname { 'testbot' }
   sub _default_filtered_bot_nicks { 'rude_bot' }
   sub _buffer_delay_seconds { 17 }
+  sub _send_to_channel_max_line { 321 }
   sub _handles_bare_utility_commands { 1 }
   sub _persona_runtime_args {
     my ($self) = @_;
@@ -80,6 +81,10 @@ my $bot = TestDelegateBot->new;
   local *Bot::Runtime::Dispatch::utility_command_matches_me = sub {
     my (%args) = @_;
     return join(':', 'utility', ref($args{self}), $args{target}, $args{allow_bare});
+  };
+  local *Bot::Runtime::Dispatch::send_to_channel = sub {
+    my (%args) = @_;
+    return join(':', 'send', $args{channel}, $args{text}, $args{max_line}, ($args{return_cumulative} ? 1 : 0));
   };
   local *Bot::Runtime::Buffering::buffer_message = sub {
     my (%args) = @_;
@@ -173,6 +178,11 @@ my $bot = TestDelegateBot->new;
     'utility command delegate forwards allow_bare policy hook',
   );
   is(
+    $bot->_send_to_channel('#chan', 'hello'),
+    'send:#chan:hello:321:0',
+    'send_to_channel delegate forwards max-line hook and default cumulative policy',
+  );
+  is(
     $bot->_buffer_message('#chan', 'alice', 'hello'),
     'buffer:TestDelegateBot:#chan:alice:hello:17',
     'buffer delegate forwards payload and bot delay hook',
@@ -235,6 +245,7 @@ my $bot = TestDelegateBot->new;
 {
   package TestDelegateBurtBot;
 
+  sub _send_to_channel_return_cumulative { 1 }
   sub _is_non_substantive_output { return 'custom' }
   sub _build_mcp_server { return 'custom-mcp' }
 }
@@ -249,6 +260,11 @@ is(
   TestDelegateBurtBot->_build_mcp_server(),
   'custom-mcp',
   'existing mcp builder method is not overwritten by shared delegates',
+);
+is(
+  TestDelegateBurtBot->_send_to_channel_return_cumulative(),
+  1,
+  'bot-specific send-to-channel cumulative policy override is preserved',
 );
 
 done_testing;
