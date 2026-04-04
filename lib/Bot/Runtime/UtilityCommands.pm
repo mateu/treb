@@ -135,7 +135,7 @@ sub _handle_strict_style {
 
   if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+cpan\s+recent(?:\s+(\d+))?\s*|:cpan\s+recent(?:\s+(\d+))?\s*|cpan:\s*recent(?:\s+(\d+))?\s*)$/i) {
     return 0 unless $self->_utility_command_matches_me($1);
-    my $count = defined $2 ? $2 : (defined $3 ? $3 : 3);
+    my $count = defined $2 ? $2 : (defined $3 ? $3 : (defined $4 ? $4 : 3));
     my $result = $self->_cpan_lookup('recent', $count);
     _send_if_non_empty($self, $channel, $result);
     return 1;

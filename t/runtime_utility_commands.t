@@ -252,6 +252,21 @@ use Bot::Runtime::UtilityCommands qw(handle_public_utility_command);
 }
 
 {
+  my $bot = Local::UtilityBot->new(nickname => 'Treb', allow_bare => 1);
+  ok(
+    handle_public_utility_command(
+      self       => $bot,
+      channel    => '#ai',
+      msg        => 'cpan: recent 7',
+      style      => 'strict',
+      notes_mode => 'direct_only',
+    ),
+    'strict style parses cpan: recent count (third alternative)'
+  );
+  is_deeply($bot->{cpan_calls}, [['recent', 7]], 'cpan: recent count from third alternative is forwarded');
+}
+
+{
   my $bot = Local::UtilityBot->new(nickname => 'Burt', allow_bare => 1);
   ok(
     handle_public_utility_command(
