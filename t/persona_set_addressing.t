@@ -96,15 +96,17 @@ for my $msg ('persona: set bot_reply_pct 42', ':persona set bot_reply_pct 42') {
   );
 }
 
-# treb.pl and burt.pl delegate utility parsing to runtime
+# treb.pl delegates public-message flow; burt.pl still delegates utility parsing directly
 sub slurp { my ($f) = @_; do { local (@ARGV, $/) = $f; <> } }
-for my $script (qw(treb.pl burt.pl)) {
-  my $src = slurp($script);
-  like(
-    $src,
-    qr/Bot::Runtime::UtilityCommands::handle_public_utility_command\s*\(/,
-    "$script delegates utility parsing to runtime module",
-  );
-}
+like(
+  slurp('treb.pl'),
+  qr/Bot::Runtime::PublicMessages::handle_standard_irc_public_event\s*\(/,
+  'treb.pl delegates public message handling to runtime module',
+);
+like(
+  slurp('burt.pl'),
+  qr/Bot::Runtime::UtilityCommands::handle_public_utility_command\s*\(/,
+  'burt.pl delegates utility parsing to runtime module',
+);
 
 done_testing;
