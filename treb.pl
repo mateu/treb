@@ -162,19 +162,6 @@ before 'START' => sub {
 };
 
 
-sub _parse_public_addressee {
-  my ($self, $msg) = @_;
-  return Bot::Runtime::Dispatch::parse_public_addressee(msg => $msg);
-}
-
-sub _is_public_message_addressed_to_self {
-  my ($self, $msg) = @_;
-  return Bot::Runtime::Dispatch::is_public_message_addressed_to_self(
-    self => $self,
-    msg  => $msg,
-  );
-}
-
 sub _send_to_channel {
   my ($self, $channel, $text) = @_;
   return Bot::Runtime::Dispatch::send_to_channel(
