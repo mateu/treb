@@ -156,14 +156,7 @@ before 'START' => sub {
 };
 
 
-sub _send_to_channel {
-  my ($self, $channel, $text) = @_;
-  return Bot::Runtime::Dispatch::send_to_channel(
-    channel  => $channel,
-    text     => $text,
-    max_line => $MAX_LINE,
-  );
-}
+sub _send_to_channel_max_line { $MAX_LINE }
 
 event _send_line => sub {
   my ( $self, $channel, $line ) = @_[ OBJECT, ARG0, ARG1 ];

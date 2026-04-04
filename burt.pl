@@ -214,15 +214,8 @@ sub _is_repeated_parenthetical_output {
   return lc($last) eq lc($t) ? 1 : 0;
 }
 
-sub _send_to_channel {
-  my ($self, $channel, $text) = @_;
-  return Bot::Runtime::Dispatch::send_to_channel(
-    channel           => $channel,
-    text              => $text,
-    max_line          => $MAX_LINE,
-    return_cumulative => 1,
-  );
-}
+sub _send_to_channel_max_line { $MAX_LINE }
+sub _send_to_channel_return_cumulative { 1 }
 
 event _send_line => sub {
   my ( $self, $channel, $line ) = @_[ OBJECT, ARG0, ARG1 ];
