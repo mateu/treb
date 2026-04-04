@@ -31,6 +31,10 @@ my ($target, $body) = parse_public_addressee(msg => 'bert: hello there');
 is($target, 'bert', 'parse_public_addressee captures nick with colon syntax');
 is($body, 'hello there', 'parse_public_addressee captures body with colon syntax');
 
+($target, $body) = parse_public_addressee(msg => 'Astrid what time is it in Denver?', self => Local::DispatchBot->new(nickname => 'Astrid_bot'));
+is($target, 'Astrid', 'parse_public_addressee captures plain leading-name syntax for bot aliases');
+is($body, 'what time is it in Denver?', 'parse_public_addressee captures body after plain leading name');
+
 ($target, $body) = parse_public_addressee(msg => 'hey burt, you awake?');
 is($target, 'burt', 'parse_public_addressee captures hey syntax target');
 is($body, 'you awake?', 'parse_public_addressee captures hey syntax body');
@@ -38,8 +42,9 @@ is($body, 'you awake?', 'parse_public_addressee captures hey syntax body');
 ($target, $body) = parse_public_addressee(msg => 'just chatting');
 ok(!defined $target && !defined $body, 'parse_public_addressee returns undef pair when not addressed');
 
-my $bot = Local::DispatchBot->new(nickname => 'Bert');
-ok(is_public_message_addressed_to_self(self => $bot, msg => 'bert: status?'), 'is_public_message_addressed_to_self matches nick case-insensitively');
+my $bot = Local::DispatchBot->new(nickname => 'Bert_bot');
+ok(is_public_message_addressed_to_self(self => $bot, msg => 'bert_bot: status?'), 'is_public_message_addressed_to_self matches visible nick case-insensitively');
+ok(is_public_message_addressed_to_self(self => $bot, msg => 'Bert status?'), 'is_public_message_addressed_to_self matches short plain-name addressing');
 ok(!is_public_message_addressed_to_self(self => $bot, msg => 'astrid: status?'), 'is_public_message_addressed_to_self rejects other nicks');
 
 local $ENV{BOT_FILTER_NICKS};
@@ -53,7 +58,8 @@ ok(!is_filtered_bot_nick(nick => 'burt_bot', default_filter_nicks => 'burt_bot')
 is(default_channel(self => Local::DispatchBot->new(channels => ['#ai', '#perl'])), '#ai', 'default_channel returns first configured channel');
 is(default_channel(self => Local::DispatchBot->new(channels => '#solo')), '#solo', 'default_channel returns scalar channel unchanged');
 
-ok(utility_command_matches_me(self => $bot, target => 'bert', allow_bare => 0), 'utility command target matches nickname');
+ok(utility_command_matches_me(self => $bot, target => 'bert', allow_bare => 0), 'utility command target matches short nickname alias');
+ok(utility_command_matches_me(self => $bot, target => 'bert_bot', allow_bare => 0), 'utility command target matches visible nickname');
 ok(!utility_command_matches_me(self => $bot, target => 'astrid', allow_bare => 1), 'utility command target must match nickname when provided');
 ok(utility_command_matches_me(self => $bot, allow_bare => 1), 'utility command allows bare usage when configured');
 ok(!utility_command_matches_me(self => $bot, allow_bare => 0), 'utility command rejects bare usage when disabled');

@@ -13,9 +13,23 @@ our @EXPORT_OK = qw(
   utility_command_matches_me
 );
 
+sub _nickname_aliases {
+  my ($self) = @_;
+  my $nick = $self->get_nickname // '';
+  my %aliases;
+  for my $name ($nick, ($ENV{BOT_IDENTITY_SLUG} // '')) {
+    next unless defined $name && length $name;
+    $aliases{lc $name} = 1;
+    (my $short = $name) =~ s/(?:_bot|_agent)\z//i;
+    $aliases{lc $short} = 1 if length $short;
+  }
+  return %aliases;
+}
+
 sub parse_public_addressee {
   my (%args) = @_;
   my $msg = $args{msg};
+  my $self = $args{self};
   return (undef, undef) unless defined $msg;
 
   if ($msg =~ /^\s*([A-Za-z0-9_\-]+)\s*[:,]\s*(.+?)\s*$/s) {
@@ -26,6 +40,12 @@ sub parse_public_addressee {
     return ($1, $2);
   }
 
+  if ($self && $msg =~ /^\s*([A-Za-z0-9_\-]+)\s+(.+?)\s*$/s) {
+    my ($target, $body) = ($1, $2);
+    my %aliases = _nickname_aliases($self);
+    return ($target, $body) if $aliases{lc $target};
+  }
+
   return (undef, undef);
 }
 
@@ -34,9 +54,10 @@ sub is_public_message_addressed_to_self {
   my $self = $args{self} or die 'is_public_message_addressed_to_self requires self';
   my $msg = $args{msg};
 
-  my ($target, $body) = parse_public_addressee(msg => $msg);
+  my ($target, $body) = parse_public_addressee(self => $self, msg => $msg);
   return 0 unless defined $target && defined $body && $body =~ /\S/;
-  return lc($target) eq lc($self->get_nickname) ? 1 : 0;
+  my %aliases = _nickname_aliases($self);
+  return $aliases{lc $target} ? 1 : 0;
 }
 
 sub send_to_channel {
@@ -109,7 +130,8 @@ sub utility_command_matches_me {
   my $allow_bare = $args{allow_bare} ? 1 : 0;
 
   return $allow_bare unless defined $target && length $target;
-  return lc($target) eq lc($self->get_nickname) ? 1 : 0;
+  my %aliases = _nickname_aliases($self);
+  return $aliases{lc $target} ? 1 : 0;
 }
 
 1;
