@@ -36,30 +36,31 @@ use Bot::Runtime::UtilityCommands ();
 use Bot::Runtime::WebTools ();
 use Bot::Runtime::RaidFlow ();
 use Bot::Runtime::RaiderSetup ();
-use Bot::Runtime::EntrypointConfig qw(build_persona_trait_config);
+use Bot::Runtime::EntrypointConfig qw(
+  load_entrypoint_config
+  persona_trait_meta
+  persona_trait_order
+);
 use Bot::Persona ();
 
-my @BOT_NAMES = qw(
-  Botsworth Clanky Sparky Fizz Gizmo Pixel Blip Rusty Ziggy Turbo
-  Sprocket Widget Noodle Bleep Chomp Dingle Wobble Clunk Zippy Quirk
-);
-my $BOT_NICK = $ENV{IRC_NICKNAME} || $BOT_NAMES[rand @BOT_NAMES] . int(rand(999));
-my $BOT_IDENTITY_SLUG = lc($ENV{BOT_IDENTITY_SLUG} || $BOT_NICK || 'bot');
-my $OWNER = $ENV{OWNER} || $ENV{USER} || 'unknown';
+my $CONFIG = load_entrypoint_config();
+my $BOT_NICK = $CONFIG->{bot_nick};
+my $BOT_IDENTITY_SLUG = $CONFIG->{bot_identity_slug};
+my $OWNER = $CONFIG->{owner};
 
-my $MAX_LINE = $ENV{MAX_LINE_LENGTH} || 400;
-my $BUFFER_DELAY = $ENV{BUFFER_DELAY} || 1.5;
-my $LINE_DELAY = $ENV{LINE_DELAY} || 3;
-my $IDLE_PING = $ENV{IDLE_PING} || 1800;
-my ($PERSONA_TRAIT_META, $PERSONA_TRAIT_ORDER) = build_persona_trait_config(
-  defaults => {
-    ambient_public_reply_pct   => 0,
-    public_thread_window_seconds => 0,
-    bot_reply_pct              => 50,
-    bot_reply_max_turns        => 1,
-    non_substantive_allow_pct  => 0,
-  },
-);
+my $MAX_LINE = $CONFIG->{max_line};
+my $BUFFER_DELAY = $CONFIG->{buffer_delay};
+my $LINE_DELAY = $CONFIG->{line_delay};
+my $IDLE_PING = $CONFIG->{idle_ping};
+
+my %PERSONA_TRAIT_META = %{ persona_trait_meta(defaults => {
+  ambient_public_reply_pct     => 0,
+  public_thread_window_seconds => 0,
+  bot_reply_pct                => 50,
+  bot_reply_max_turns          => 1,
+  non_substantive_allow_pct    => 0,
+}) };
+my @PERSONA_TRAIT_ORDER = persona_trait_order();
 
 # --- The IRC Bot ---
 
@@ -116,8 +117,8 @@ sub _persona_runtime_args {
   return (
     self        => $self,
     bot_name    => $self->_bot_name_slug,
-    trait_meta  => $PERSONA_TRAIT_META,
-    trait_order => $PERSONA_TRAIT_ORDER,
+    trait_meta  => \%PERSONA_TRAIT_META,
+    trait_order => \@PERSONA_TRAIT_ORDER,
   );
 }
 
