@@ -32,11 +32,11 @@ sub parse_public_addressee {
   my $self = $args{self};
   return (undef, undef) unless defined $msg;
 
-  if ($msg =~ /^\s*([A-Za-z0-9_\-]+)\s*[:,]\s*(.+?)\s*$/s) {
+  if ($msg =~ /^\s*([A-Za-z0-9_\-]+)\s*[:,!]\s*(.+?)\s*$/s) {
     return ($1, $2);
   }
 
-  if ($msg =~ /^\s*hey\s+([A-Za-z0-9_\-]+)\s*[:,]?\s*(.+?)\s*$/si) {
+  if ($msg =~ /^\s*hey\s*,?\s*([A-Za-z0-9_\-]+)\s*[:,!?]?\s*(.+?)\s*$/si) {
     return ($1, $2);
   }
 

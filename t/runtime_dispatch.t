@@ -39,12 +39,21 @@ is($body, 'what time is it in Denver?', 'parse_public_addressee captures body af
 is($target, 'burt', 'parse_public_addressee captures hey syntax target');
 is($body, 'you awake?', 'parse_public_addressee captures hey syntax body');
 
+($target, $body) = parse_public_addressee(msg => 'Astrid! Kitchen duty today?');
+is($target, 'Astrid', 'parse_public_addressee captures bang-address syntax');
+is($body, 'Kitchen duty today?', 'parse_public_addressee captures bang-address body');
+
+($target, $body) = parse_public_addressee(msg => 'Hey Astrid! Kitchen duty today?');
+is($target, 'Astrid', 'parse_public_addressee captures hey+bang syntax');
+is($body, 'Kitchen duty today?', 'parse_public_addressee captures hey+bang body');
+
 ($target, $body) = parse_public_addressee(msg => 'just chatting');
 ok(!defined $target && !defined $body, 'parse_public_addressee returns undef pair when not addressed');
 
 my $bot = Local::DispatchBot->new(nickname => 'Bert_bot');
 ok(is_public_message_addressed_to_self(self => $bot, msg => 'bert_bot: status?'), 'is_public_message_addressed_to_self matches visible nick case-insensitively');
 ok(is_public_message_addressed_to_self(self => $bot, msg => 'Bert status?'), 'is_public_message_addressed_to_self matches short plain-name addressing');
+ok(is_public_message_addressed_to_self(self => $bot, msg => 'Hey Bert! status?'), 'is_public_message_addressed_to_self matches hey+bang short-name addressing');
 ok(!is_public_message_addressed_to_self(self => $bot, msg => 'astrid: status?'), 'is_public_message_addressed_to_self rejects other nicks');
 
 local $ENV{BOT_FILTER_NICKS};
