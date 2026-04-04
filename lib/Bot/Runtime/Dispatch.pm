@@ -2,7 +2,6 @@ package Bot::Runtime::Dispatch;
 
 use strict;
 use warnings;
-use Scalar::Util qw(looks_like_number);
 
 use Exporter 'import';
 our @EXPORT_OK = qw(
@@ -46,9 +45,9 @@ sub send_to_channel {
   my $text = defined $args{text} ? $args{text} : '';
   my $max_line = $args{max_line};
   die 'send_to_channel requires max_line' unless defined $max_line;
-  die 'send_to_channel requires max_line to be a positive integer' unless looks_like_number($max_line);
+  die 'send_to_channel requires max_line to be a positive integer'
+    unless $max_line =~ /\A[1-9]\d*\z/;
   $max_line = int($max_line);
-  die 'send_to_channel requires max_line to be a positive integer' unless $max_line > 0;
   my $event_name = $args{event_name} || '_send_line';
   my $return_cumulative = $args{return_cumulative} ? 1 : 0;
 

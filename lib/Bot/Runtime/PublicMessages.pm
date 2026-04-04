@@ -13,7 +13,9 @@ sub _resolve_direct_address {
   my $mode = $args{mode} // 'mention';
   my $mention = $args{mention} ? 1 : 0;
   my $addressed_to_self = $args{addressed_to_self} ? 1 : 0;
-  return $mode eq 'addressed_to_self' ? $addressed_to_self : $mention;
+  return $mention if $mode eq 'mention';
+  return $addressed_to_self if $mode eq 'addressed_to_self';
+  die "_resolve_direct_address requires mode to be 'mention' or 'addressed_to_self' (got '$mode')";
 }
 
 sub handle_standard_irc_public_event {
@@ -28,8 +30,22 @@ sub handle_standard_irc_public_event {
   my $utility_notes_mode = $args{utility_notes_mode} // 'direct_only';
   my $bot_direct_mode = $args{bot_direct_mode} // 'mention';
   my $human_direct_mode = $args{human_direct_mode} // 'addressed_to_self';
-  my $warm_limit = defined $args{warm_limit} ? int($args{warm_limit}) : 3;
-  my $warm_window = defined $args{warm_window} ? int($args{warm_window}) : 300;
+  my $warm_limit  = $args{warm_limit};
+  my $warm_window = $args{warm_window};
+  if (defined $warm_limit) {
+    die 'handle_standard_irc_public_event requires warm_limit to be a positive integer'
+      unless $warm_limit =~ /\A[1-9]\d*\z/;
+    $warm_limit = int($warm_limit);
+  } else {
+    $warm_limit = 3;
+  }
+  if (defined $warm_window) {
+    die 'handle_standard_irc_public_event requires warm_window to be a positive integer'
+      unless $warm_window =~ /\A[1-9]\d*\z/;
+    $warm_window = int($warm_window);
+  } else {
+    $warm_window = 300;
+  }
 
   my ($nick) = split /!/, $nickstr;
   return 0 if defined($nick) && $nick eq $self->get_nickname;
@@ -71,7 +87,7 @@ sub handle_standard_irc_public_event {
   );
 
   if ($speaker_is_filtered_bot) {
-    return 1 unless $bot_direct_address;
+    return 0 unless $bot_direct_address;
 
     my $bot_reply_max_turns = $self->_persona_trait('bot_reply_max_turns');
     if ($bot_reply_max_turns > 0 && $self->_bert_reply_turn_count >= $bot_reply_max_turns) {
@@ -90,7 +106,7 @@ sub handle_standard_irc_public_event {
     return 1;
   }
 
-  return 1 unless $human_direct_address;
+  return 0 unless $human_direct_address;
 
   if (!$self->_human_warm_reply_expires_at || time() > $self->_human_warm_reply_expires_at) {
     $self->_human_warm_reply_count(0);
