@@ -33,14 +33,14 @@ sub handle_standard_irc_public_event {
   my $warm_limit  = $args{warm_limit};
   my $warm_window = $args{warm_window};
   if (defined $warm_limit) {
-    die 'handle_standard_irc_public_event requires warm_limit to be a positive integer'
+    die "handle_standard_irc_public_event requires warm_limit to be a positive integer (got: $warm_limit)"
       unless $warm_limit =~ /\A[1-9]\d*\z/;
     $warm_limit = int($warm_limit);
   } else {
     $warm_limit = 3;
   }
   if (defined $warm_window) {
-    die 'handle_standard_irc_public_event requires warm_window to be a positive integer'
+    die "handle_standard_irc_public_event requires warm_window to be a positive integer (got: $warm_window)"
       unless $warm_window =~ /\A[1-9]\d*\z/;
     $warm_window = int($warm_window);
   } else {
