@@ -33,7 +33,7 @@ use Bot::Runtime::Dispatch ();
 use Bot::Runtime::OutputPipeline ();
 use Bot::Runtime::MethodDelegates ();
 use Bot::Runtime::PresenceEvents ();
-use Bot::Runtime::UtilityCommands ();
+use Bot::Runtime::PublicMessages ();
 use Bot::Runtime::WebTools ();
 use Bot::Runtime::RaidFlow ();
 use Bot::Runtime::EntrypointConfig qw(
@@ -243,62 +243,16 @@ event _idle_check => sub {
 
 event irc_public => sub {
   my ( $self, $nickstr, $channels, $msg ) = @_[ OBJECT, ARG0, ARG1, ARG2 ];
-  my ( $nick ) = split /!/, $nickstr;
-  return if $nick eq $self->get_nickname;
-  my $channel = ref $channels ? $channels->[0] : $channels;
-  $self->info("$channel <$nick> $msg");
-  $self->_last_activity(time());
-
-  if ($self->_is_human_nick($nick) && $self->_bert_reply_turn_count) {
-    $self->_bert_reply_turn_count(0);
-    $self->info("Reset bert conversational turn count by human nick=$nick");
-  }
-
-  if (Bot::Runtime::UtilityCommands::handle_public_utility_command(
+  return Bot::Runtime::PublicMessages::handle_standard_irc_public_event(
     self       => $self,
-    channel    => $channel,
+    nickstr    => $nickstr,
+    channels   => $channels,
     msg        => $msg,
-    style      => q{relaxed},
-    notes_mode => q{utility_prefixed},
-  )) {
-    return;
-  }
-
-  my $speaker_is_filtered_bot = $self->_is_filtered_bot_nick($nick);
-
-  my $bot_nick = $self->get_nickname;
-  my $nick_re = quotemeta($bot_nick);
-  my $direct_address = ($msg =~ /(?:^|\W)$nick_re(?:\W|$)/i) ? 1 : 0;
-
-  if ($speaker_is_filtered_bot) {
-    return unless $direct_address;
-    my $bot_reply_max_turns = $self->_persona_trait('bot_reply_max_turns');
-    if ($bot_reply_max_turns > 0 && $self->_bert_reply_turn_count >= $bot_reply_max_turns) {
-      $self->info("Suppressing Bert conversational message: turn cap reached bot_reply_max_turns=$bot_reply_max_turns");
-      return;
-    }
-    my $bot_reply_pct = $self->_persona_trait('bot_reply_pct');
-    if ($bot_reply_pct < 100 && int(rand(100)) >= $bot_reply_pct) {
-      $self->info("Suppressing Bert conversational message: probability gate bot_reply_pct=$bot_reply_pct");
-      return;
-    }
-    $self->info('Allowing Bert conversational message (direct address, unlocked)');
-    $self->_buffer_message($channel, $nick, $msg, { source_kind => 'bert_conversation' });
-    return;
-  }
-
-  return unless $direct_address;
-
-  my $warm_limit = 3;
-  my $warm_window = 300;
-  if (!$self->_human_warm_reply_expires_at || time() > $self->_human_warm_reply_expires_at) {
-    $self->_human_warm_reply_count(0);
-  }
-  my $warm_human = ($self->_human_warm_reply_count < $warm_limit) ? 1 : 0;
-  $self->_human_warm_reply_count($self->_human_warm_reply_count + 1);
-  $self->_human_warm_reply_expires_at(time() + $warm_window);
-
-  $self->_buffer_message($channel, $nick, $msg, { source_kind => 'conversation', warm_human => $warm_human });
+    utility_style      => q{relaxed},
+    utility_notes_mode => q{utility_prefixed},
+    bot_direct_mode    => q{mention},
+    human_direct_mode  => q{mention},
+  );
 };
 
 event irc_join => sub {
