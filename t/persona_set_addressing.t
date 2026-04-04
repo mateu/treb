@@ -2,30 +2,46 @@ use strict;
 use warnings;
 use Test::More;
 
-sub check_source {
-  my (%args) = @_;
-  my $text = do { local (@ARGV, $/) = $args{file}; <> };
-
-  like(
-    $text,
-    qr/\):\\s\+persona\\s\+set\\s\+/,
-    "$args{name} still has addressed persona set handler",
-  );
-
-  like(
-    $text,
-    qr/return unless lc\(\$1\) eq lc\(\$self->get_nickname\);/,
-    "$args{name} persona set checks addressed nick matches self",
-  );
-
-  unlike(
-    $text,
-    qr/\(\?::persona\\s\+set\\s\+\|persona:\\s\*set\\s\+\)/,
-    "$args{name} no legacy bare persona set fallback remains",
-  );
+sub slurp {
+  my ($file) = @_;
+  return do { local (@ARGV, $/) = $file; <> };
 }
 
-check_source(file => 'treb.pl', name => 'treb');
-check_source(file => 'burt.pl', name => 'burt');
+sub like_literal {
+  my ($text, $literal, $name) = @_;
+  like($text, qr/\Q$literal\E/, $name);
+}
+
+sub unlike_literal {
+  my ($text, $literal, $name) = @_;
+  unlike($text, qr/\Q$literal\E/, $name);
+}
+
+my $utility_commands = slurp('lib/Bot/Runtime/UtilityCommands.pm');
+
+like_literal(
+  $utility_commands,
+  q|if ($msg =~ /^([A-Za-z0-9_\-]+):\s+persona\s+set\s+(\S+)\s+(?:=\s*)?(\S+)\s*$/i) {|,
+  'persona set requires addressed form in utility runtime',
+);
+like_literal(
+  $utility_commands,
+  q{return 0 unless lc($1) eq lc($self->get_nickname);},
+  'persona set checks addressed nick matches bot nickname',
+);
+unlike_literal(
+  $utility_commands,
+  q{(?::persona\s+set\s+|persona:\s*set\s+)},
+  'no legacy bare persona set fallback remains',
+);
+
+for my $script (qw(treb.pl burt.pl)) {
+  my $entrypoint = slurp($script);
+  like_literal(
+    $entrypoint,
+    q{Bot::Runtime::UtilityCommands::handle_public_utility_command(},
+    "$script delegates utility parsing to runtime module",
+  );
+}
 
 done_testing;

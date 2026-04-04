@@ -2,16 +2,51 @@ use strict;
 use warnings;
 use Test::More;
 
-sub check_source {
-  my (%args) = @_;
-  my $text = do { local (@ARGV, $/) = $args{file}; <> };
-  like($text, qr/\(\?:\(\[A-Za-z0-9_\\-\]\+\):\\s\+persona\\s\+full\\s\*\)\$/s, "$args{name} full persona read requires addressed form");
-  like($text, qr/\(\?:\(\[A-Za-z0-9_\\-\]\+\):\\s\+persona\\s\*\)\$/s, "$args{name} summary persona read requires addressed form");
-  unlike($text, qr/\^\(\?::persona\\s\+full\\s\*\|persona:\\s\*full/s, "$args{name} no bare full persona read");
-  unlike($text, qr/\^\(\?::persona\\s\*\|persona:\\s\*\)\$/s, "$args{name} no bare persona read");
+sub slurp {
+  my ($file) = @_;
+  return do { local (@ARGV, $/) = $file; <> };
 }
 
-check_source(file => 'treb.pl', name => 'treb');
-check_source(file => 'burt.pl', name => 'burt');
+sub like_literal {
+  my ($text, $literal, $name) = @_;
+  like($text, qr/\Q$literal\E/, $name);
+}
+
+sub unlike_literal {
+  my ($text, $literal, $name) = @_;
+  unlike($text, qr/\Q$literal\E/, $name);
+}
+
+my $utility_commands = slurp('lib/Bot/Runtime/UtilityCommands.pm');
+
+like_literal(
+  $utility_commands,
+  q|if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+persona\s+full\s*)$/i) {|,
+  'full persona read requires addressed form in utility runtime',
+);
+like_literal(
+  $utility_commands,
+  q|if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+persona\s*)$/i) {|,
+  'summary persona read requires addressed form in utility runtime',
+);
+unlike_literal(
+  $utility_commands,
+  q{(?::persona\s+full\s*|persona:\s*full},
+  'no bare full persona read fallback remains',
+);
+unlike_literal(
+  $utility_commands,
+  q{(?::persona\s*|persona:\s*)$},
+  'no bare summary persona read fallback remains',
+);
+
+for my $script (qw(treb.pl burt.pl)) {
+  my $entrypoint = slurp($script);
+  like_literal(
+    $entrypoint,
+    q{Bot::Runtime::UtilityCommands::handle_public_utility_command(},
+    "$script delegates utility parsing to runtime module",
+  );
+}
 
 done_testing;
