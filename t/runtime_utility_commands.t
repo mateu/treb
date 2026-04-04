@@ -168,6 +168,20 @@ use Bot::Runtime::UtilityCommands qw(handle_public_utility_command);
 }
 
 {
+  my $bot = Local::UtilityBot->new(nickname => 'Treb', allow_bare => 1);
+  ok(
+    handle_public_utility_command(
+      self       => $bot,
+      channel    => '#ai',
+      msg        => 'treb: can you summarize https://example.test?',
+      style      => 'strict',
+      notes_mode => 'direct_only',
+    ),
+    'strict handler accepts natural-language summarize url form'
+  );
+}
+
+{
   my $bot = Local::UtilityBot->new(nickname => 'Treb', allow_bare => 0);
   ok(
     handle_public_utility_command(

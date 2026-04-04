@@ -111,6 +111,14 @@ sub _handle_strict_style {
     return 1;
   }
 
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+)(?:can\s+you\s+)?summari(?:s|z)e(?:\s+this\s+url)?\s+(https?:\/\/\S+)\s*\??$/i) {
+    return 0 unless $self->_utility_command_matches_me($1);
+    my $url = $2;
+    my $result = $self->_summarize_url($url);
+    _send_if_non_empty($self, $channel, $result);
+    return 1;
+  }
+
   if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+time\s*|:time\s*|time:\s*)$/i) {
     return 0 unless $self->_utility_command_matches_me($1);
     my $line = 'Current local time: ' . $self->_current_local_time_text . '.';
@@ -180,6 +188,14 @@ sub _handle_relaxed_style {
   my ($self, $channel, $msg) = @_;
 
   if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+)?(?:sum:\s*|:sum\s+)(https?:\/\/\S+)/i) {
+    return 0 unless $self->_utility_command_matches_me($1);
+    my $url = $2;
+    my $result = $self->_summarize_url($url);
+    _send_if_non_empty($self, $channel, $result);
+    return 1;
+  }
+
+  if ($msg =~ /^(?:([A-Za-z0-9_\-]+):\s+)?(?:can\s+you\s+)?summari(?:s|z)e(?:\s+this\s+url)?\s+(https?:\/\/\S+)\s*\??$/i) {
     return 0 unless $self->_utility_command_matches_me($1);
     my $url = $2;
     my $result = $self->_summarize_url($url);

@@ -18,6 +18,8 @@ marker = irc_harness.marker
 BURT_NICK = irc_harness.BURT_NICK
 TREB_NICK = irc_harness.TREB_NICK
 ALICE_NICK = irc_harness.ALICE_NICK
+SCENARIO_NATURAL_LANGUAGE_CPAN_BASIC = irc_harness.SCENARIO_NATURAL_LANGUAGE_CPAN_BASIC
+SCENARIO_NATURAL_LANGUAGE_SUMMARY_BASIC = irc_harness.SCENARIO_NATURAL_LANGUAGE_SUMMARY_BASIC
 
 CHANNEL = "#lab"
 PROMPT_BURT = f"{BURT_NICK}, give one practical debugging habit for flaky IRC bots."
@@ -113,6 +115,32 @@ class EvaluateAddressedScenarioTests(unittest.TestCase):
         ok, notes, _ = evaluate(events, CHANNEL)
         self.assertTrue(ok, notes)
         self.assertTrue(any("PASS bounded bot-to-bot exchange (1 alternations)" == n for n in notes), notes)
+
+
+class EvaluateNaturalLanguageCPANScenarioTests(unittest.TestCase):
+    def test_cpan_only_scenario_checks_cpan_content(self):
+        events = base_prefix_events() + [
+            marker(f"addressed-human split prompt -> {TREB_NICK}"),
+            IRCEvent(kind="privmsg", raw="", nick=ALICE_NICK, target=CHANNEL, text=f"{TREB_NICK}: tell me about the cpan module Moo"),
+            IRCEvent(kind="privmsg", raw="", nick=TREB_NICK, target=CHANNEL, text="Moo is a lightweight Perl object system. Docs: https://metacpan.org/pod/Moo"),
+        ] + base_suffix_events()
+
+        ok, notes, _ = evaluate(events, CHANNEL, SCENARIO_NATURAL_LANGUAGE_CPAN_BASIC)
+        self.assertTrue(ok, notes)
+        self.assertTrue(any("PASS mcp prompt (cpan)" in n for n in notes), notes)
+
+
+class EvaluateNaturalLanguageSummaryScenarioTests(unittest.TestCase):
+    def test_summary_only_scenario_checks_summary_content(self):
+        events = base_prefix_events() + [
+            marker(f"addressed-human split prompt -> {TREB_NICK}"),
+            IRCEvent(kind="privmsg", raw="", nick=ALICE_NICK, target=CHANNEL, text=f"{TREB_NICK}: can you summarize https://flymissoula.com/"),
+            IRCEvent(kind="privmsg", raw="", nick=TREB_NICK, target=CHANNEL, text="Fly Missoula summary: FAQ, airport construction, and traveler info."),
+        ] + base_suffix_events()
+
+        ok, notes, _ = evaluate(events, CHANNEL, SCENARIO_NATURAL_LANGUAGE_SUMMARY_BASIC)
+        self.assertTrue(ok, notes)
+        self.assertTrue(any("PASS mcp prompt (summary)" in n for n in notes), notes)
 
 
 if __name__ == "__main__":

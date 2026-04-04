@@ -135,18 +135,43 @@ sub summarize_url {
     my $result = $self->_raider->raid($prompt);
     "$result";
   };
-  return 'URL summary failed right now.' if $@ || !defined $summary || $summary !~ /\S/;
 
-  $summary =~ s{<think\b[^>]*>.*?</think>\s*}{}gsi;
-  $summary =~ s{<thinking\b[^>]*>.*?</thinking>\s*}{}gsi;
-  $summary =~ s/<\/?\w+>//g;
-  $summary =~ s/^\s+|\s+$//g;
-  $summary =~ s/\r//g;
-  $summary =~ s/[ \t]+/ /g;
-  $summary =~ s/\n{3,}/\n\n/g;
+  if (!$@ && defined $summary && $summary =~ /\S/) {
+    $summary =~ s{<think\b[^>]*>.*?</think>\s*}{}gsi;
+    $summary =~ s{<thinking\b[^>]*>.*?</thinking>\s*}{}gsi;
+    $summary =~ s/<\/?\w+>//g;
+    $summary =~ s/^\s+|\s+$//g;
+    $summary =~ s/\r//g;
+    $summary =~ s/[ \t]+/ /g;
+    $summary =~ s/\n{3,}/\n\n/g;
+    return $summary if $summary =~ /\S/;
+  }
 
-  return 'URL summary failed right now.' unless $summary =~ /\S/;
-  return $summary;
+  my @parts;
+  push @parts, $title if length $title;
+  my @chunks = grep { /\S/ } split /\n+/, $excerpt;
+  my @picked;
+  for my $chunk (@chunks) {
+    $chunk =~ s/^\s+|\s+$//g;
+    next unless length $chunk >= 40;
+    push @picked, $chunk;
+    last if @picked >= 3;
+  }
+  push @parts, @picked;
+  return 'URL summary failed right now.' unless @parts;
+
+  my @lines;
+  for my $part (@parts) {
+    $part =~ s/\s+/ /g;
+    $part =~ s/^\s+|\s+$//g;
+    next unless length $part;
+    $part = substr($part, 0, 280) . '...' if length($part) > 280;
+    push @lines, $part;
+    last if @lines >= 4;
+  }
+
+  return join("\n", @lines) if @lines;
+  return 'URL summary failed right now.';
 }
 
 sub search_web {

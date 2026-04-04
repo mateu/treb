@@ -94,7 +94,7 @@ sub _tool_specs {
     },
     {
       name         => 'cpan_module',
-      description  => 'Look up compact CPAN module metadata for a module name, like the :cpan module command.',
+      description  => 'Use for Perl or CPAN module questions. Prefer this when the human says CPAN module, Perl module, asks about a distribution, docs, abstract, author, or asks about a module like Moo. Do not use general web search first for clearly CPAN-specific requests.',
       input_schema => {
         type       => 'object',
         properties => {
@@ -113,7 +113,7 @@ sub _tool_specs {
     },
     {
       name         => 'summarize_url',
-      description  => 'Fetch and summarize an http(s) URL for IRC chat.',
+      description  => 'Use when the human gives a specific http(s) URL and asks what is on that page or asks for a summary of that exact page. Prefer this over web search for requests like "can you summarize <url>" or "what does this page say?".',
       input_schema => {
         type       => 'object',
         properties => {

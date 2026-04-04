@@ -39,6 +39,12 @@ BOT_NICKS = {BURT_NICK, TREB_NICK}
 HARNESS_MODE_DETERMINISTIC = "deterministic"
 HARNESS_MODE_REAL = "real"
 
+SCENARIO_BASELINE = "baseline"
+SCENARIO_MCP_NATURAL_LANGUAGE_BASIC = "mcp-natural-language-basic"
+SCENARIO_NATURAL_LANGUAGE_TIME_BASIC = "natural-language-time-basic"
+SCENARIO_NATURAL_LANGUAGE_CPAN_BASIC = "natural-language-cpan-basic"
+SCENARIO_NATURAL_LANGUAGE_SUMMARY_BASIC = "natural-language-summary-basic"
+
 
 def ts() -> str:
     return dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -65,6 +71,7 @@ class HarnessConfig:
     ollama_url: str
     start_fake_ollama: bool
     irc_port: int
+    scenario: str
 
 
 def resolve_config(argv: Optional[List[str]] = None) -> HarnessConfig:
@@ -81,9 +88,16 @@ def resolve_config(argv: Optional[List[str]] = None) -> HarnessConfig:
         default=0,
         help="IRC port for mini server (default: auto-pick a free local port).",
     )
+    parser.add_argument(
+        "--scenario",
+        choices=[SCENARIO_BASELINE, SCENARIO_MCP_NATURAL_LANGUAGE_BASIC, SCENARIO_NATURAL_LANGUAGE_TIME_BASIC, SCENARIO_NATURAL_LANGUAGE_CPAN_BASIC, SCENARIO_NATURAL_LANGUAGE_SUMMARY_BASIC],
+        default=os.environ.get("IRC_HARNESS_SCENARIO", SCENARIO_BASELINE),
+        help="Scenario to run: baseline, mcp-natural-language-basic, natural-language-time-basic, natural-language-cpan-basic, or natural-language-summary-basic.",
+    )
     args = parser.parse_args(argv)
 
     mode = args.mode
+    scenario = args.scenario
     irc_port = args.irc_port if args.irc_port and args.irc_port > 0 else pick_free_port()
     if mode == HARNESS_MODE_DETERMINISTIC:
         return HarnessConfig(
@@ -93,6 +107,7 @@ def resolve_config(argv: Optional[List[str]] = None) -> HarnessConfig:
             ollama_url="",
             start_fake_ollama=True,
             irc_port=irc_port,
+            scenario=scenario,
         )
 
     return HarnessConfig(
@@ -102,6 +117,7 @@ def resolve_config(argv: Optional[List[str]] = None) -> HarnessConfig:
         ollama_url=os.environ.get("IRC_HARNESS_REAL_OLLAMA_URL", os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")),
         start_fake_ollama=False,
         irc_port=irc_port,
+        scenario=scenario,
     )
 
 
@@ -544,7 +560,7 @@ def _dedupe_privmsg_echoes(events: List[IRCEvent]) -> List[IRCEvent]:
     return out
 
 
-def evaluate(events: List[IRCEvent], channel: str) -> Tuple[bool, List[str], List[str]]:
+def evaluate(events: List[IRCEvent], channel: str, scenario: str = SCENARIO_BASELINE) -> Tuple[bool, List[str], List[str]]:
     notes: List[str] = []
     report: List[str] = []
     events = _dedupe_privmsg_echoes(events)
@@ -572,18 +588,19 @@ def evaluate(events: List[IRCEvent], channel: str) -> Tuple[bool, List[str], Lis
         ok = False
         notes.append(f"FAIL join order expected [Burt, Treb], observed {join_order[:2]}")
 
-    join_index_treb = next((i for i, e in enumerate(events) if e.kind == "join" and e.nick == TREB_NICK), None)
-    greeted = False
-    if join_index_treb is not None:
-        for e in events[join_index_treb + 1 : join_index_treb + 15]:
-            if e.kind == "privmsg" and e.nick == BURT_NICK and e.target == channel:
-                greeted = True
-                break
-    if greeted:
-        notes.append("PASS Burt greeted soon after Treb joined")
-    else:
-        ok = False
-        notes.append("FAIL did not observe Burt greeting after Treb join")
+    if scenario == SCENARIO_BASELINE:
+        join_index_treb = next((i for i, e in enumerate(events) if e.kind == "join" and e.nick == TREB_NICK), None)
+        greeted = False
+        if join_index_treb is not None:
+            for e in events[join_index_treb + 1 : join_index_treb + 15]:
+                if e.kind == "privmsg" and e.nick == BURT_NICK and e.target == channel:
+                    greeted = True
+                    break
+        if greeted:
+            notes.append("PASS Burt greeted soon after Treb joined")
+        else:
+            ok = False
+            notes.append("FAIL did not observe Burt greeting after Treb join")
 
     for line in notes:
         if line.startswith(("PASS join order", "FAIL join order", "PASS Burt greeted", "FAIL did not observe Burt")):
@@ -593,7 +610,8 @@ def evaluate(events: List[IRCEvent], channel: str) -> Tuple[bool, List[str], Lis
     report.append("Addressed human replies")
     report.append("----------------------")
 
-    for bot in (BURT_NICK, TREB_NICK):
+    expected_reply_bots = (BURT_NICK, TREB_NICK) if scenario == SCENARIO_BASELINE else (TREB_NICK,)
+    for bot in expected_reply_bots:
         count = sum(1 for e in bot_msgs if e.nick == bot)
         if count < 1:
             ok = False
@@ -601,13 +619,36 @@ def evaluate(events: List[IRCEvent], channel: str) -> Tuple[bool, List[str], Lis
         else:
             notes.append(f"PASS {bot} produced {count} channel replies")
 
-    split_cases = [
-        (BURT_NICK, TREB_NICK, f"{BURT_NICK}, give one practical debugging habit for flaky IRC bots."),
-        (TREB_NICK, BURT_NICK, f"{TREB_NICK}, how would you triage a noisy regression transcript quickly?"),
-    ]
+    if scenario == SCENARIO_MCP_NATURAL_LANGUAGE_BASIC:
+        split_cases = [
+            (TREB_NICK, None, f"{TREB_NICK}: can you summarize https://flymissoula.com/", ("faq", "construction", "airport", "flymissoula"), "summary"),
+            (TREB_NICK, None, f"{TREB_NICK}: search the web for flights to missoula", ("google flights", "find cheap flights", "https://", "missoula"), "search"),
+            (TREB_NICK, None, f"{TREB_NICK}: tell me about the cpan module Moo", ("moo", "metacpan", "perl", "object", "haarg", "docs:"), "cpan"),
+        ]
+    elif scenario == SCENARIO_NATURAL_LANGUAGE_CPAN_BASIC:
+        split_cases = [
+            (TREB_NICK, None, f"{TREB_NICK}: tell me about the cpan module Moo", ("moo", "metacpan", "perl", "object", "haarg", "docs:"), "cpan"),
+        ]
+    elif scenario == SCENARIO_NATURAL_LANGUAGE_SUMMARY_BASIC:
+        split_cases = [
+            (TREB_NICK, None, f"{TREB_NICK}: can you summarize https://flymissoula.com/", ("faq", "construction", "airport", "flymissoula", "missoula"), "summary"),
+        ]
+    elif scenario == SCENARIO_BASELINE:
+        split_cases = [
+            (BURT_NICK, TREB_NICK, f"{BURT_NICK}, give one practical debugging habit for flaky IRC bots."),
+            (TREB_NICK, BURT_NICK, f"{TREB_NICK}, how would you triage a noisy regression transcript quickly?"),
+        ]
+    else:
+        split_cases = []
     max_non_addressed_interjections = 2
     split_prompt_texts = {c[2] for c in split_cases}
-    for addressed, other, prompt in split_cases:
+    for case in split_cases:
+        if scenario in {SCENARIO_MCP_NATURAL_LANGUAGE_BASIC, SCENARIO_NATURAL_LANGUAGE_CPAN_BASIC, SCENARIO_NATURAL_LANGUAGE_SUMMARY_BASIC}:
+            addressed, other, prompt, expected_fragments, label = case
+        else:
+            addressed, other, prompt = case
+            expected_fragments = ()
+            label = "addressed"
         prompt_idx = next(
             (i for i, e in enumerate(events) if e.kind == "privmsg" and e.nick == ALICE_NICK and e.text == prompt),
             None,
@@ -651,48 +692,64 @@ def evaluate(events: List[IRCEvent], channel: str) -> Tuple[bool, List[str], Lis
         ]
         addressed_replies = [e for e in window if e.nick == addressed]
         addressed_substantive = [e for e in addressed_replies if _is_substantive(e.text)]
-        other_replies = [e for e in window if e.nick == other]
+        other_replies = [e for e in window if other and e.nick == other]
 
-        if addressed_substantive:
-            notes.append(f"PASS addressed prompt: {addressed} replied substantively ({len(addressed_substantive)})")
-        else:
-            ok = False
-            notes.append(f"FAIL addressed prompt: {addressed} did not reply substantively")
-
-        if len(other_replies) > max_non_addressed_interjections:
-            ok = False
-            notes.append(f"FAIL addressed prompt: {other} piled on ({len(other_replies)})")
-        elif len(other_replies) > 0:
-            notes.append(
-                f"PASS addressed prompt: {other} interjected {len(other_replies)} time(s) "
-                f"(<= {max_non_addressed_interjections} allowed)"
+        if scenario in {SCENARIO_MCP_NATURAL_LANGUAGE_BASIC, SCENARIO_NATURAL_LANGUAGE_CPAN_BASIC, SCENARIO_NATURAL_LANGUAGE_SUMMARY_BASIC}:
+            matched = [
+                e for e in addressed_substantive
+                if any(fragment in e.text.lower() for fragment in expected_fragments)
+            ]
+            if matched:
+                notes.append(f"PASS mcp prompt ({label}): {addressed} replied with expected content ({len(matched)})")
+            else:
+                ok = False
+                notes.append(f"FAIL mcp prompt ({label}): {addressed} lacked expected content")
+            report.append(
+                f"- MCP {label}: addressed_replies={len(addressed_replies)} "
+                f"addressed_substantive={len(addressed_substantive)} content_matches={len(matched)}"
             )
         else:
-            notes.append(f"PASS addressed prompt: {other} stayed quiet")
+            if addressed_substantive:
+                notes.append(f"PASS addressed prompt: {addressed} replied substantively ({len(addressed_substantive)})")
+            else:
+                ok = False
+                notes.append(f"FAIL addressed prompt: {addressed} did not reply substantively")
 
-        report.append(
-            f"- Prompt to {addressed}: addressed_replies={len(addressed_replies)} "
-            f"addressed_substantive={len(addressed_substantive)} other_replies={len(other_replies)}"
-        )
+            if len(other_replies) > max_non_addressed_interjections:
+                ok = False
+                notes.append(f"FAIL addressed prompt: {other} piled on ({len(other_replies)})")
+            elif len(other_replies) > 0:
+                notes.append(
+                    f"PASS addressed prompt: {other} interjected {len(other_replies)} time(s) "
+                    f"(<= {max_non_addressed_interjections} allowed)"
+                )
+            else:
+                notes.append(f"PASS addressed prompt: {other} stayed quiet")
 
-    report.append("")
-    report.append("Bot-to-bot exchange")
-    report.append("-------------------")
-    b2b_start = next((i for i, e in enumerate(events) if e.kind == "marker" and e.text == "bot-to-bot trigger prompt"), None)
-    b2b_end = next((i for i, e in enumerate(events) if e.kind == "marker" and e.text == "command-path prompt"), len(events))
-    b2b_scope = events[(b2b_start + 1) if b2b_start is not None else 0 : b2b_end]
-    b2b_pairs = 0
-    for i in range(1, len(b2b_scope)):
-        prev, cur = b2b_scope[i - 1], b2b_scope[i]
-        if prev.kind == cur.kind == "privmsg" and prev.target == cur.target == channel:
-            if prev.nick in BOT_NICKS and cur.nick in BOT_NICKS and prev.nick != cur.nick:
-                b2b_pairs += 1
-    if b2b_pairs > 4:
-        ok = False
-        notes.append(f"FAIL bot-to-bot exchange too long ({b2b_pairs} adjacent alternations)")
-    else:
-        notes.append(f"PASS bounded bot-to-bot exchange ({b2b_pairs} alternations)")
-    report.append(notes[-1].replace("PASS ", "- ").replace("FAIL ", "- "))
+            report.append(
+                f"- Prompt to {addressed}: addressed_replies={len(addressed_replies)} "
+                f"addressed_substantive={len(addressed_substantive)} other_replies={len(other_replies)}"
+            )
+
+    if scenario == SCENARIO_BASELINE:
+        report.append("")
+        report.append("Bot-to-bot exchange")
+        report.append("-------------------")
+        b2b_start = next((i for i, e in enumerate(events) if e.kind == "marker" and e.text == "bot-to-bot trigger prompt"), None)
+        b2b_end = next((i for i, e in enumerate(events) if e.kind == "marker" and e.text == "command-path prompt"), len(events))
+        b2b_scope = events[(b2b_start + 1) if b2b_start is not None else 0 : b2b_end]
+        b2b_pairs = 0
+        for i in range(1, len(b2b_scope)):
+            prev, cur = b2b_scope[i - 1], b2b_scope[i]
+            if prev.kind == cur.kind == "privmsg" and prev.target == cur.target == channel:
+                if prev.nick in BOT_NICKS and cur.nick in BOT_NICKS and prev.nick != cur.nick:
+                    b2b_pairs += 1
+        if b2b_pairs > 4:
+            ok = False
+            notes.append(f"FAIL bot-to-bot exchange too long ({b2b_pairs} adjacent alternations)")
+        else:
+            notes.append(f"PASS bounded bot-to-bot exchange ({b2b_pairs} alternations)")
+        report.append(notes[-1].replace("PASS ", "- ").replace("FAIL ", "- "))
 
     report.append("")
     report.append("Command path")
@@ -799,10 +856,16 @@ async def main() -> int:
 
         burt_fh = burt_log.open("wb")
         treb_fh = treb_log.open("wb")
+        perl_home = os.environ.get("HOME", "")
+        perl5_lib = f"{perl_home}/perl5/lib/perl5" if perl_home else ""
+        local_lib_bootstrap = (
+            f'if [[ -d "{perl5_lib}" ]]; then eval "$(perl -I"{perl5_lib}" -Mlocal::lib="{perl_home}/perl5")"; fi; '
+            if perl_home else ""
+        )
         burt_proc = await asyncio.create_subprocess_exec(
             "bash",
             "-lc",
-            'if [[ -d "$HOME/perl5/lib/perl5" ]]; then eval "$(perl -I"$HOME/perl5/lib/perl5" -Mlocal::lib="$HOME/perl5")"; fi; exec perl "' + str(ROOT / "burt.pl") + '"',
+            local_lib_bootstrap + 'exec perl "' + str(ROOT / "burt.pl") + '"',
             cwd=str(ROOT),
             env=burt_env,
             stdout=burt_fh,
@@ -816,7 +879,7 @@ async def main() -> int:
         treb_proc = await asyncio.create_subprocess_exec(
             "bash",
             "-lc",
-            'if [[ -d "$HOME/perl5/lib/perl5" ]]; then eval "$(perl -I"$HOME/perl5/lib/perl5" -Mlocal::lib="$HOME/perl5")"; fi; exec perl "' + str(ROOT / "treb.pl") + '"',
+            local_lib_bootstrap + 'exec perl "' + str(ROOT / "treb.pl") + '"',
             cwd=str(ROOT),
             env=treb_env,
             stdout=treb_fh,
@@ -827,17 +890,52 @@ async def main() -> int:
 
         await asyncio.sleep(2.0)
 
-        all_events.append(marker(f"addressed-human split prompt -> {BURT_NICK}"))
-        await human.say(DEFAULT_CHANNEL, f"{BURT_NICK}, give one practical debugging habit for flaky IRC bots.")
-        await asyncio.sleep(7.0)
-        all_events.append(marker(f"addressed-human split prompt -> {TREB_NICK}"))
-        await human.say(DEFAULT_CHANNEL, f"{TREB_NICK}, how would you triage a noisy regression transcript quickly?")
-        await asyncio.sleep(7.0)
-        all_events.append(marker("bot-to-bot trigger prompt"))
-        await human.say(DEFAULT_CHANNEL, f"{BURT_NICK}, ask {TREB_NICK} one concise bot-to-bot test question.")
-        await asyncio.sleep(2.5)
-        all_events.append(marker("command-path prompt"))
-        await human.say(DEFAULT_CHANNEL, "time:")
+        if cfg.scenario == SCENARIO_MCP_NATURAL_LANGUAGE_BASIC:
+            for prompt in (
+                f"{TREB_NICK}: can you summarize https://flymissoula.com/",
+                f"{TREB_NICK}: search the web for flights to missoula",
+                f"{TREB_NICK}: tell me about the cpan module Moo",
+            ):
+                all_events.append(marker(f"addressed-human split prompt -> {TREB_NICK}"))
+                await human.say(DEFAULT_CHANNEL, prompt)
+                await asyncio.sleep(14.0)
+            all_events.append(marker("command-path prompt"))
+            await human.say(DEFAULT_CHANNEL, "time:")
+        elif cfg.scenario == SCENARIO_NATURAL_LANGUAGE_CPAN_BASIC:
+            all_events.append(marker(f"addressed-human split prompt -> {TREB_NICK}"))
+            await human.say(DEFAULT_CHANNEL, f"{TREB_NICK}: tell me about the cpan module Moo")
+            await asyncio.sleep(8.0)
+            all_events.append(marker("command-path prompt"))
+            await human.say(DEFAULT_CHANNEL, "time:")
+        elif cfg.scenario == SCENARIO_NATURAL_LANGUAGE_SUMMARY_BASIC:
+            all_events.append(marker(f"addressed-human split prompt -> {TREB_NICK}"))
+            await human.say(DEFAULT_CHANNEL, f"{TREB_NICK}: can you summarize https://flymissoula.com/")
+            await asyncio.sleep(8.0)
+            all_events.append(marker("command-path prompt"))
+            await human.say(DEFAULT_CHANNEL, "time:")
+        elif cfg.scenario == SCENARIO_NATURAL_LANGUAGE_TIME_BASIC:
+            for prompt in (
+                f"{TREB_NICK}: What time is it in Barcelona?",
+                f"{TREB_NICK}: what time is it in Tokyo?",
+                f"{TREB_NICK}: current time in New York?",
+            ):
+                all_events.append(marker(f"addressed-human split prompt -> {TREB_NICK}"))
+                await human.say(DEFAULT_CHANNEL, prompt)
+                await asyncio.sleep(6.0)
+            all_events.append(marker("command-path prompt"))
+            await human.say(DEFAULT_CHANNEL, "time:")
+        else:
+            all_events.append(marker(f"addressed-human split prompt -> {BURT_NICK}"))
+            await human.say(DEFAULT_CHANNEL, f"{BURT_NICK}, give one practical debugging habit for flaky IRC bots.")
+            await asyncio.sleep(7.0)
+            all_events.append(marker(f"addressed-human split prompt -> {TREB_NICK}"))
+            await human.say(DEFAULT_CHANNEL, f"{TREB_NICK}, how would you triage a noisy regression transcript quickly?")
+            await asyncio.sleep(7.0)
+            all_events.append(marker("bot-to-bot trigger prompt"))
+            await human.say(DEFAULT_CHANNEL, f"{BURT_NICK}, ask {TREB_NICK} one concise bot-to-bot test question.")
+            await asyncio.sleep(2.5)
+            all_events.append(marker("command-path prompt"))
+            await human.say(DEFAULT_CHANNEL, "time:")
 
         deadline = asyncio.get_running_loop().time() + 18
         while asyncio.get_running_loop().time() < deadline:
@@ -876,7 +974,7 @@ async def main() -> int:
     transcript_path = run_dir / "transcript.log"
     transcript_path.write_text("\n".join(transcript_lines) + "\n", encoding="utf-8")
 
-    ok, notes, report = evaluate(all_events, DEFAULT_CHANNEL)
+    ok, notes, report = evaluate(all_events, DEFAULT_CHANNEL, cfg.scenario)
     eval_path = run_dir / "evaluation.txt"
     eval_path.write_text("\n".join(notes) + "\n", encoding="utf-8")
     convo_path = run_dir / "conversation.log"
@@ -887,6 +985,7 @@ async def main() -> int:
     summary = {
         "ok": ok,
         "mode": cfg.mode,
+        "scenario": cfg.scenario,
         "engine": cfg.engine,
         "model": cfg.model,
         "ollama_url": cfg.ollama_url,
