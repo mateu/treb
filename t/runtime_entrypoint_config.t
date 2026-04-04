@@ -107,4 +107,31 @@ is($normalized_meta->{bot_reply_pct}{default}, 42, 'bot reply pct coerces to int
 is($normalized_meta->{bot_reply_max_turns}{default}, 2, 'bot reply max turns coerces to int');
 is($normalized_meta->{non_substantive_allow_pct}{default}, 100, 'non-substantive clamps to 100');
 
+{
+  local $ENV{BUFFER_DELAY} = 'bogus';
+  local $ENV{LINE_DELAY}   = 'not-a-number';
+  local $ENV{IDLE_PING}    = 'abc';
+  local $ENV{MAX_LINE_LENGTH} = 'bad';
+
+  my $cfg = load_entrypoint_config();
+  is($cfg->{buffer_delay}, 1.5,  'non-numeric BUFFER_DELAY falls back to default');
+  is($cfg->{line_delay},   3,    'non-numeric LINE_DELAY falls back to default');
+  is($cfg->{idle_ping},    1800, 'non-numeric IDLE_PING falls back to default');
+  is($cfg->{max_line},     400,  'non-numeric MAX_LINE_LENGTH falls back to default');
+}
+
+{
+  local $ENV{MAX_LINE_LENGTH} = 0;
+
+  my $cfg = load_entrypoint_config();
+  is($cfg->{max_line}, 1, 'MAX_LINE_LENGTH=0 is clamped to minimum of 1');
+}
+
+{
+  local $ENV{MAX_LINE_LENGTH} = -50;
+
+  my $cfg = load_entrypoint_config();
+  is($cfg->{max_line}, 1, 'negative MAX_LINE_LENGTH is clamped to minimum of 1');
+}
+
 done_testing;
