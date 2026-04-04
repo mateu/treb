@@ -24,9 +24,13 @@ sub clean_ai_output {
   $text =~ s/<\s*\@?\s*(\w+)\s*>/$1/g;
   $text =~ s/<\/?\w+>//g;
   $text =~ s/^\*?\s*(save_note|recall_notes|update_note|delete_note|recall_history|stay_silent|set_alarm|whois|send_private_message)\b[^\n]*\n?//mg;
+  $text =~ s/^\s*end_turn:\s*\n?//img;
+  $text =~ s/^\s*System\s*\(untrusted\)\s*:\s*[^\n]*\n?//img;
+  $text =~ s/^\s*system\s*:\s*(?:Stop further tool use until new messages arrive\.|You see messages from burt_bot in \#mateu-test\. Do not reply to this system message\.|You will now receive messages\. Stay quiet unless directly addressed\.)\s*\n?//img;
   $text =~ s/^\s*I stayed silent\b[^\n]*\n?//img;
   $text =~ s/^\s*I am staying silent\b[^\n]*\n?//img;
   $text =~ s/^\s*\(No response\s*-\s*staying silent\)\s*\n?//img;
+  $text =~ s/^\s*\[No response needed\s*-\s*I chose silence\]\s*\n?//img;
   $text =~ s/^\s+//;
   $text =~ s/\s+$//;
   $self->_log_cleanup_change($prefix . 'strip_markup', $before_markup, $text);
