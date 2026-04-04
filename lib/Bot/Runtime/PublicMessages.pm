@@ -77,7 +77,7 @@ sub handle_standard_irc_public_event {
 
   my $bot_direct_address = _resolve_direct_address(
     mode => $bot_direct_mode,
-    mention => $direct_mention,
+    mention => ($direct_mention || $direct_addressee) ? 1 : 0,
     addressed_to_self => $direct_addressee,
   );
   my $human_direct_address = _resolve_direct_address(
