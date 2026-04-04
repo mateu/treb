@@ -130,7 +130,7 @@ sub install_shared_delegates {
     },
     _parse_public_addressee => sub {
       my ($self, $msg) = @_;
-      return Bot::Runtime::Dispatch::parse_public_addressee(msg => $msg);
+      return Bot::Runtime::Dispatch::parse_public_addressee(self => $self, msg => $msg);
     },
     _is_public_message_addressed_to_self => sub {
       my ($self, $msg) = @_;

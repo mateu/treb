@@ -335,14 +335,14 @@ event irc_public => sub {
 
   my $bot_nick = $self->get_nickname;
   my $nick_re = quotemeta($bot_nick);
-  my $direct_address = ($msg =~ /(?:^|\W)$nick_re(?:\W|$)/i) ? 1 : 0;
+  my $direct_mention = ($msg =~ /(?:^|\W)$nick_re(?:\W|$)/i) ? 1 : 0;
+  my $direct_addressee = $self->_is_public_message_addressed_to_self($msg) ? 1 : 0;
+  my $direct_address = ($direct_mention || $direct_addressee) ? 1 : 0;
   my $thread_open = ($self->_public_thread_open_until && time() <= $self->_public_thread_open_until) ? 1 : 0;
   my $addressed_other_human_turn = 0;
   if ($self->_is_human_nick($nick) && !$direct_address) {
-    if ($msg =~ /^\s*([A-Za-z0-9_\-]+)\s*[:,]/) {
-      my $target = $1;
-      $addressed_other_human_turn = 1 if lc($target) ne lc($bot_nick);
-    }
+    my ($target) = $self->_parse_public_addressee($msg);
+    $addressed_other_human_turn = 1 if defined($target) && lc($target) ne lc($bot_nick) && lc($target) ne 'hey';
   }
 
   if ($speaker_is_filtered_bot) {

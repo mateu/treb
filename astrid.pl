@@ -251,7 +251,7 @@ event irc_public => sub {
     utility_style      => q{relaxed},
     utility_notes_mode => q{utility_prefixed},
     bot_direct_mode    => q{mention},
-    human_direct_mode  => q{mention},
+    human_direct_mode  => q{addressed_to_self},
   );
 };
 

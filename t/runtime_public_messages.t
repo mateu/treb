@@ -146,6 +146,31 @@ use Bot::Runtime::Dispatch ();
 
 {
   my $bot = Local::PublicBot->new(
+    nickname => 'astrid_bot',
+    filtered => { burt_bot => 1 },
+    traits   => { bot_reply_max_turns => 3, bot_reply_pct => 100 },
+  );
+
+  no warnings 'redefine';
+  local *Bot::Runtime::UtilityCommands::handle_public_utility_command = sub { return 0 };
+
+  handle_standard_irc_public_event(
+    self               => $bot,
+    nickstr            => 'burt_bot!u@h',
+    channels           => ['#ai'],
+    msg                => 'Astrid! Please tell me something good is cooking up there.',
+    utility_style      => 'strict',
+    utility_notes_mode => 'direct_only',
+    bot_direct_mode    => 'mention',
+    human_direct_mode  => 'addressed_to_self',
+  );
+
+  is(scalar @{$bot->{buffered}}, 1, 'filtered bot message buffered for short-name bang address');
+  is($bot->{buffered}[0]{extra}{source_kind}, 'bert_conversation', 'short-name bot address uses filtered bot lane');
+}
+
+{
+  my $bot = Local::PublicBot->new(
     nickname => 'treb_bot',
     filtered => { burt_bot => 1 },
     traits   => { bot_reply_max_turns => 1, bot_reply_pct => 100 },
@@ -225,6 +250,31 @@ use Bot::Runtime::Dispatch ();
   is(scalar @{$bot->{buffered}}, 1, 'mention-mode human direct path buffers astrid public message');
   is($bot->{buffered}[0]{extra}{source_kind}, 'conversation', 'human lane source kind set');
   is($bot->{buffered}[0]{extra}{warm_human}, 1, 'human lane marks warm_human');
+}
+
+{
+  my $bot = Local::PublicBot->new(
+    nickname => 'astrid_bot',
+    filtered => { treb_bot => 1 },
+    traits   => { bot_reply_max_turns => 1, bot_reply_pct => 100 },
+  );
+
+  no warnings 'redefine';
+  local *Bot::Runtime::UtilityCommands::handle_public_utility_command = sub { return 0 };
+
+  handle_standard_irc_public_event(
+    self               => $bot,
+    nickstr            => 'mateu!u@h',
+    channels           => ['#ai'],
+    msg                => 'Astrid: please tell me something good is cooking up there.',
+    utility_style      => 'relaxed',
+    utility_notes_mode => 'utility_prefixed',
+    bot_direct_mode    => 'mention',
+    human_direct_mode  => 'addressed_to_self',
+  );
+
+  is(scalar @{$bot->{buffered}}, 1, 'addressed_to_self human path buffers short-name addressed Astrid message');
+  is($bot->{buffered}[0]{extra}{source_kind}, 'conversation', 'short-name addressed human message uses human lane');
 }
 
 done_testing;

@@ -25,6 +25,8 @@ sub clean_ai_output {
   $text =~ s/<\/?\w+>//g;
   $text =~ s/^\*?\s*(save_note|recall_notes|update_note|delete_note|recall_history|stay_silent|set_alarm|whois|send_private_message)\b[^\n]*\n?//mg;
   $text =~ s/^\s*end_turn:\s*\n?//img;
+  $text =~ s/^\s*System\s*\(untrusted\)\s*:\s*\[You were silent\. No response was needed\.\]\s*\n?//img;
+  $text =~ s/^\s*System\s*\(untrusted\)\s*:\s*No response needed\.\s*\n?//img;
   $text =~ s/^\s*System\s*\(untrusted\)\s*:\s*[^\n]*\n?//img;
   $text =~ s/^\s*system\s*:\s*(?:Stop further tool use until new messages arrive\.|You see messages from burt_bot in \#mateu-test\. Do not reply to this system message\.|You will now receive messages\. Stay quiet unless directly addressed\.)\s*\n?//img;
   $text =~ s/^\s*I stayed silent\b[^\n]*\n?//img;
@@ -34,6 +36,12 @@ sub clean_ai_output {
   $text =~ s/^\s*[^\n]*doesn't require a response from me\.[^\n]*\n?//img;
   $text =~ s/^\s*[^\n]*we don't banter unprompted\.[^\n]*\n?//img;
   $text =~ s/^\s*[^\n]*I'll continue lurking quietly\.?\s*\n?//img;
+  $text =~ s/^\s*I'll stay quiet[^\n]*\n?//img;
+  $text =~ s/^\s*[^\n]*Not my moment to jump in\.?\s*\n?//img;
+  $text =~ s/^\s*\(I respected her choice\.\)\s*\n?//img;
+  $text =~ s/^\s*\(still respecting it\)\s*\n?//img;
+  $text =~ s/^\s*\*system\*\s*[^\n]*staying silent[^\n]*\n?//img;
+  $text =~ s/^\s*\*system\*\s*[^\n]*still just observing[^\n]*\n?//img;
   $text =~ s/^\s+//;
   $text =~ s/\s+$//;
   $self->_log_cleanup_change($prefix . 'strip_markup', $before_markup, $text);
