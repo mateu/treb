@@ -3,7 +3,7 @@ package Bot::Runtime::EntrypointConfig;
 use strict;
 use warnings;
 
-use Exporter qw(import);
+use Exporter 'import';
 
 our @EXPORT_OK = qw(build_persona_trait_config);
 
@@ -12,7 +12,7 @@ sub _normalize_pct {
   $value = 0 + ($value // 0);
   $value = 0 if $value < 0;
   $value = 100 if $value > 100;
-  return $value;
+  return int($value);
 }
 
 sub _normalize_non_negative_int {

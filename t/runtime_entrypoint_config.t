@@ -46,7 +46,7 @@ use Bot::Runtime::EntrypointConfig qw(build_persona_trait_config);
   is($meta->{join_greet_pct}{default}, 100, 'join greet clamps to 100');
   is($meta->{ambient_public_reply_pct}{default}, 0, 'ambient clamps to 0');
   is($meta->{public_thread_window_seconds}{default}, 0, 'thread window clamps to non-negative int');
-  is($meta->{bot_reply_pct}{default}, 42.9, 'bot reply pct preserves decimal');
+  is($meta->{bot_reply_pct}{default}, 42, 'bot reply pct coerces to int');
   is($meta->{bot_reply_max_turns}{default}, 2, 'bot reply max turns coerces to int');
   is($meta->{non_substantive_allow_pct}{default}, 100, 'non-substantive clamps to 100');
 }
