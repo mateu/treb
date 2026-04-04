@@ -79,7 +79,9 @@ my $bot = TestDelegateBot->new;
   };
   local *Bot::Runtime::Buffering::split_priority_messages = sub {
     my (%args) = @_;
-    return [reverse @{ $args{messages} || [] }];
+    my $active_messages   = [reverse @{ $args{messages} || [] }];
+    my $deferred_messages = [];
+    return ($active_messages, $deferred_messages);
   };
   local *Bot::Runtime::Buffering::schedule_pending_buffers = sub {
     my (%args) = @_;
@@ -157,10 +159,17 @@ my $bot = TestDelegateBot->new;
     'buffer:TestDelegateBot:#chan:alice:hello:17',
     'buffer delegate forwards payload and bot delay hook',
   );
+  my ($active_messages, $deferred_messages) =
+    $bot->_split_priority_messages([qw(one two)]);
   is_deeply(
-    $bot->_split_priority_messages([qw(one two)]),
+    $active_messages,
     [qw(two one)],
-    'split-priority delegate forwards list payload',
+    'split-priority delegate forwards active list payload',
+  );
+  is_deeply(
+    $deferred_messages,
+    [],
+    'split-priority delegate forwards deferred list payload',
   );
   is(
     $bot->_schedule_pending_buffers(),
