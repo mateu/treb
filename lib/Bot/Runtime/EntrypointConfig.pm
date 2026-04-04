@@ -11,6 +11,8 @@ our @EXPORT_OK = qw(
   load_entrypoint_config
   persona_trait_order
   persona_trait_meta
+  build_persona_trait_config
+  build_runtime_delegate_config
 );
 
 my @DEFAULT_BOT_NAMES = qw(
@@ -144,6 +146,41 @@ sub persona_trait_meta {
       ),
     },
   };
+}
+
+sub build_persona_trait_config {
+  my (%args) = @_;
+  my $trait_meta = persona_trait_meta(defaults => $args{defaults});
+  my $trait_order = [ persona_trait_order() ];
+  return ($trait_meta, $trait_order);
+}
+
+sub build_runtime_delegate_config {
+  my (%args) = @_;
+
+  my $bot_name_slug = defined $args{bot_name_slug} ? $args{bot_name_slug} : 'bot';
+  my $trait_meta = $args{trait_meta} || {};
+  my $trait_order = $args{trait_order} || [];
+  my $max_line = $args{max_line};
+  my $script_file = $args{script_file};
+  die 'build_runtime_delegate_config requires max_line' unless defined $max_line;
+  die 'build_runtime_delegate_config requires script_file' unless defined $script_file && length $script_file;
+
+  my %config = (
+    bot_name_slug    => $bot_name_slug,
+    trait_meta       => $trait_meta,
+    trait_order      => $trait_order,
+    mcp_server_name  => $args{mcp_server_name} || ($bot_name_slug . '-tools'),
+    owner            => defined $args{owner} ? $args{owner} : 'unknown',
+    max_line         => $max_line,
+    script_file      => $script_file,
+  );
+
+  if (defined $args{max_context_tokens}) {
+    $config{max_context_tokens} = $args{max_context_tokens};
+  }
+
+  return \%config;
 }
 
 1;
