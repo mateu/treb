@@ -58,6 +58,17 @@ sub install_shared_delegates {
       my ($self) = @_;
       return Bot::Runtime::Dispatch::default_channel(self => $self);
     },
+    _parse_public_addressee => sub {
+      my ($self, $msg) = @_;
+      return Bot::Runtime::Dispatch::parse_public_addressee(msg => $msg);
+    },
+    _is_public_message_addressed_to_self => sub {
+      my ($self, $msg) = @_;
+      return Bot::Runtime::Dispatch::is_public_message_addressed_to_self(
+        self => $self,
+        msg  => $msg,
+      );
+    },
     _is_filtered_bot_nick => sub {
       my ($self, $nick) = @_;
       return Bot::Runtime::Dispatch::is_filtered_bot_nick(

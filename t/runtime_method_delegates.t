@@ -65,6 +65,14 @@ my $bot = TestDelegateBot->new;
     my (%args) = @_;
     return join(':', 'default-channel', ref($args{self}));
   };
+  local *Bot::Runtime::Dispatch::parse_public_addressee = sub {
+    my (%args) = @_;
+    return join(':', 'addressee', $args{msg});
+  };
+  local *Bot::Runtime::Dispatch::is_public_message_addressed_to_self = sub {
+    my (%args) = @_;
+    return join(':', 'addressed', ref($args{self}), $args{msg});
+  };
   local *Bot::Runtime::Dispatch::is_filtered_bot_nick = sub {
     my (%args) = @_;
     return ($args{nick} eq 'rude_bot' && $args{default_filter_nicks} eq 'rude_bot') ? 1 : 0;
@@ -136,6 +144,16 @@ my $bot = TestDelegateBot->new;
     $bot->_default_channel(),
     'default-channel:TestDelegateBot',
     'default channel delegate forwards invocant in named args',
+  );
+  is(
+    $bot->_parse_public_addressee('treb: hi'),
+    'addressee:treb: hi',
+    'parse addressee delegate forwards message payload',
+  );
+  is(
+    $bot->_is_public_message_addressed_to_self('treb, hi'),
+    'addressed:TestDelegateBot:treb, hi',
+    'address detection delegate forwards self + message payload',
   );
   ok(
     $bot->_is_filtered_bot_nick('rude_bot'),
