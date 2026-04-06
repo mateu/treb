@@ -19,6 +19,10 @@
 
 use strict;
 use warnings;
+use utf8;
+use Encode qw();
+binmode(STDOUT, ":utf8");
+binmode(STDERR, ":utf8");
 use lib 'lib';
 
 use Bot::MemoryStore;
@@ -143,7 +147,7 @@ sub _send_to_channel_max_line { $MAX_LINE }
 
 event _send_line => sub {
   my ( $self, $channel, $line ) = @_[ OBJECT, ARG0, ARG1 ];
-  $self->privmsg($channel => $line);
+  $self->privmsg($channel => Encode::encode_utf8($line));
 };
 
 sub _default_filtered_bot_nicks {
@@ -202,7 +206,7 @@ sub _do_raid {
     self => $self,
     max_line => $MAX_LINE,
     brainfreeze => \@BRAINFREEZE,
-    silent_name => "Bert",
+    silent_name => "treb_bot",
     allow_bert_non_substantive => 1,
     on_bert_reply_consumed => sub {
       my ($bot) = @_;

@@ -66,6 +66,7 @@ sub setup_raider {
     engine             => $engine,
     max_context_tokens => $max_context_tokens,
     mission            => $mission,
+    max_iterations     => 13,
   );
 
   $self->_raider($raider);

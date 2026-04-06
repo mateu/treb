@@ -105,6 +105,17 @@ sub do_raid {
 
   $self->_processing(0);
 
+  my $has_bert_conversation = 0;
+  my $has_warm_human_conversation = 0;
+  for my $m (@{$messages}) {
+    if (($m->{source_kind} // '') eq 'bert_conversation' && $m->{nick} && $self->_is_filtered_bot_nick($m->{nick})) {
+      $has_bert_conversation = 1;
+    }
+    if (($m->{source_kind} // '') eq 'conversation' && ($m->{warm_human} // 0)) {
+      $has_warm_human_conversation = 1;
+    }
+  }
+
   if ($answer =~ /__SILENT__/) {
     $self->info("${silent_name} chose to stay silent");
     $self->_schedule_pending_buffers;
@@ -113,6 +124,23 @@ sub do_raid {
 
   my $raw_answer = $answer;
   $answer = clean_ai_output(self => $self, text => $answer);
+
+  if ($answer !~ /\S/ && $has_warm_human_conversation) {
+    $self->info('Retrying empty output for warm human conversation lane');
+    my $retry = eval {
+      my $prompt = $input . "\n\nA human directly addressed you and your previous output was empty. Answer that human directly and promptly now. This overrides your default quietness. Be brief, useful, and natural. Answer the actual question first. Use any tool results you already have. Do not use stage directions, faux silence, ambient observation, withdrawn asides, roleplay garnish, or any text about staying quiet. Output plain IRC-ready text only.";
+      my $result = $raider->raid($prompt);
+      "$result";
+    };
+    if (!$@ && defined $retry) {
+      my $retry_raw = $retry;
+      $retry = clean_ai_output(self => $self, text => $retry, log_prefix => 'empty_retry_');
+      if ($retry =~ /\S/) {
+        $answer = $retry;
+        $raw_answer = $retry_raw;
+      }
+    }
+  }
 
   if ($answer !~ /\S/) {
     $self->_log_cleanup_empty($raw_answer, $answer);
@@ -123,17 +151,6 @@ sub do_raid {
 
   if ($post_cleanup_guard && $post_cleanup_guard->($self, $channel, $answer)) {
     return;
-  }
-
-  my $has_bert_conversation = 0;
-  my $has_warm_human_conversation = 0;
-  for my $m (@{$messages}) {
-    if (($m->{source_kind} // '') eq 'bert_conversation' && $m->{nick} && $self->_is_filtered_bot_nick($m->{nick})) {
-      $has_bert_conversation = 1;
-    }
-    if (($m->{source_kind} // '') eq 'conversation' && ($m->{warm_human} // 0)) {
-      $has_warm_human_conversation = 1;
-    }
   }
 
   if ($self->_is_non_substantive_output($answer)) {

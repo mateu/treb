@@ -254,6 +254,38 @@ use Bot::Runtime::RaidFlow qw(do_raid);
 {
   my $bot = Local::RaidFlowBot->new(
     pending => {
+      input => 'treb_bot: Find some theaters in Marseille.',
+      channel => '#ai',
+      messages => [
+        { nick => 'mateu', channel => '#ai', msg => 'treb_bot: Find some theaters in Marseille.', source_kind => 'conversation', warm_human => 1 },
+      ],
+    },
+    replies => ['', 'mateu: I found Théâtre du Gymnase, Théâtre Toursky, and Théâtre de l\'Odéon in Marseille.'],
+  );
+
+  do_raid(
+    self => $bot,
+    max_line => 400,
+    brainfreeze => ['*brainfreeze*'],
+    silent_name => 'treb_bot',
+    allow_bert_non_substantive => 0,
+  );
+
+  is(
+    $bot->{sent}[0]{msg},
+    'mateu: I found Théâtre du Gymnase, Théâtre Toursky, and Théâtre de l\'Odéon in Marseille.',
+    'warm-human empty reply retries and sends substantive output',
+  );
+  like(
+    join("\n", @{$bot->{info}}),
+    qr/Retrying empty output for warm human conversation lane/,
+    'empty warm-human retry is logged',
+  );
+}
+
+{
+  my $bot = Local::RaidFlowBot->new(
+    pending => {
       input => 'prompt',
       channel => '#ai',
       messages => [

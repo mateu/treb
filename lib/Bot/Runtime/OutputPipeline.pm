@@ -22,7 +22,6 @@ sub clean_ai_output {
   my $before_markup = $text;
   $text =~ s/^<\s*\@?\s*(\w+)\s*>:?\s*/$1: /mg;
   $text =~ s/<\s*\@?\s*(\w+)\s*>/$1/g;
-  $text =~ s/<\/?\w+>//g;
   $text =~ s/^\*?\s*(save_note|recall_notes|update_note|delete_note|recall_history|stay_silent|set_alarm|whois|send_private_message)\b[^\n]*\n?//mg;
   $text =~ s/^\s*end_turn:\s*\n?//img;
   $text =~ s/^\s*System\s*\(untrusted\)\s*:\s*\[You were silent\. No response was needed\.\]\s*\n?//img;

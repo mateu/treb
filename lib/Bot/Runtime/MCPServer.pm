@@ -131,30 +131,70 @@ sub _tool_specs {
       },
     },
     {
-      name         => 'search_web',
-      description  => 'Search the web and return compact result lines. Defaults to 2 results for tool use.',
+      name         => 'fuseki_sparql_query',
+      description  => 'Executes a SPARQL query against a local Jena Fuseki database. CRITICAL RULES: 1. Use `a` (rdf:type) for types: Theater (wd:Q24354), Cinema (wd:Q41253), Theme Park (wd:Q194195), Museum (wd:Q33506), Castle/Château (wd:Q77148). 2. ALL labels have "@en" tag; use `STR()`: `FILTER(CONTAINS(LCASE(STR(?cityLabel)), "marseille"))`. 3. PROPERTIES: wdt:P131 (location), wdt:P571 (date), wdt:P84 (architect), wdt:P625 (GPS), wdt:P1435 (heritage status). 4. Use OPTIONAL for dates, architects, and heritage. 5. GEOSPATIAL: Coordinates (P625) look like "Point(Long Lat)". Use `replace(str(?coords), "Point\\\\((.*) (.*)\\\\)", "$2")` to get Latitude as a number. 6. SEARCH: NEVER use Wikidata IDs (e.g., wd:Q23431) for locations. ALWAYS filter by city name string using rdfs:label. 7. LABELS: NEVER use "SERVICE wikibase:label". Always manually fetch rdfs:label and use FILTER(LANG(?label) = "en"). 8. IMPORTANT: Always start your final response by addressing the user (e.g., "mateu: I found...").',
       input_schema => {
         type       => 'object',
         properties => {
-          query => { type => 'string', description => 'Search query text' },
-          limit => { type => 'number', description => 'How many results to return (1-5, default 2)' },
+          query => { type => 'string', description => 'The raw SPARQL query without PREFIX declarations.' },
         },
         required => ['query'],
       },
       code => sub {
         my ($tool, $tool_args) = @_;
-        my $query = _trim($tool_args->{query});
-        return $tool->text_result('Search query is empty.') unless length $query;
+        my $llm_query = $tool_args->{query} // '';
 
-        my $limit = _clamp_numeric(
-          value   => exists $tool_args->{limit} ? $tool_args->{limit} : undef,
-          default => 2,
-          min     => 1,
-          max     => 5,
-        );
-        my $line = $self->_search_web($query, $limit);
-        _log_tool_call(self => $self, message => "MCP search_web called => $query (limit=$limit)");
-        return $tool->text_result($line);
+        # Strip any PREFIX lines the LLM may have included; inject canonical prefixes below.
+        $llm_query =~ s/^PREFIX.*?\n//gmi;
+        $llm_query =~ s/^\s+|\s+$//g;
+        print STDERR "\n\n>>>>>> KIMI WROTE THIS QUERY <<<<<<\n$llm_query\n>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n\n";
+        return $tool->text_result('SPARQL query is empty.') unless length $llm_query;
+
+        my $prefixes = "PREFIX wd: <http://www.wikidata.org/entity/>\n" .
+                       "PREFIX wdt: <http://www.wikidata.org/prop/direct/>\n" .
+                       "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n" .
+                       "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n";
+
+        my $full_query = $prefixes . $llm_query;
+
+        require HTTP::Tiny;
+        require JSON::PP;
+
+        my $http = HTTP::Tiny->new( timeout => 10 );
+        my $url  = 'http://192.168.1.200:3030/wikidata_france/sparql';
+
+        my $response = $http->post( $url, {
+            headers => {
+                'Content-Type' => 'application/sparql-query',
+                'Accept'       => 'application/sparql-results+json',
+            },
+            content => $full_query,
+        });
+
+        print STDERR "\n>>>>>> FUSEKI RESPONSE <<<<<<\n" . ($response->{content} // 'NO CONTENT') . "\n>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n\n";
+
+        if ( $response->{success} ) {
+            my $parsed_json;
+            eval {
+                $parsed_json = JSON::PP::decode_json( $response->{content} );
+            };
+            if ($@) {
+                return $tool->text_result("Failed to parse JSON response from Fuseki: $@");
+            }
+
+            my $bindings = exists $parsed_json->{results}{bindings}
+                            ? $parsed_json->{results}{bindings}
+                            : $parsed_json;
+
+            return $tool->text_result( JSON::PP::encode_json($bindings) );
+        }
+        else {
+            my $status = $response->{status} || 'Unknown';
+            my $reason = $response->{reason} || 'Connection Error';
+            my $error_body = $response->{content} || '';
+
+            return $tool->text_result("SPARQL Error HTTP $status: $reason. Details: $error_body");
+        }
       },
     },
     {
