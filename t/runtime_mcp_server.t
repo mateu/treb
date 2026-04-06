@@ -63,7 +63,6 @@ use Bot::Runtime::MCPServer qw(build_mcp_server);
             pms     => [],
             cpan    => [],
             urls    => [],
-            web     => [],
         }, $class;
         return $self;
     }
@@ -79,11 +78,6 @@ use Bot::Runtime::MCPServer qw(build_mcp_server);
         my ($self, $url) = @_;
         push @{ $self->{urls} }, $url;
         return "summary:$url";
-    }
-    sub _search_web {
-        my ($self, $query, $limit) = @_;
-        push @{ $self->{web} }, [$query, $limit];
-        return "search:$query:$limit";
     }
     sub _current_local_time_text { return '2026-04-03 09:10 MDT' }
     sub _time_text_for_zone {
@@ -112,7 +106,7 @@ is($server->{name}, 'unit-tools', 'server name set from argument');
 
 my %tools = map { ($_->{name} => $_) } @{ $server->{tools} || [] };
 for my $name (qw(
-    stay_silent set_alarm cpan_module summarize_url search_web current_time time_in
+    stay_silent set_alarm cpan_module summarize_url fuseki_sparql_query current_time time_in
     recall_history save_note recall_notes update_note delete_note send_private_message whois
 )) {
     ok($tools{$name}, "$name tool registered");
@@ -162,15 +156,9 @@ is($tools{summarize_url}{code}->($tool, { url => '  https://example.com  ' }), '
 is_deeply($bot->{urls}, ['https://example.com'], 'summary delegate captured URL');
 is($tools{summarize_url}{code}->($tool, { url => '   ' }), 'URL is empty.', 'summarize_url rejects empty URL');
 
-$tools{search_web}{code}->($tool, { query => '  perl  ' });
-is_deeply($bot->{web}[0], ['perl', 2], 'search_web uses default MCP limit 2');
-$tools{search_web}{code}->($tool, { query => 'perl', limit => 77 });
-is_deeply($bot->{web}[1], ['perl', 5], 'search_web clamps limit high bound');
-$tools{search_web}{code}->($tool, { query => 'perl', limit => 0 });
-is_deeply($bot->{web}[2], ['perl', 1], 'search_web clamps limit low bound');
-$tools{search_web}{code}->($tool, { query => 'perl', limit => 'bogus' });
-is_deeply($bot->{web}[3], ['perl', 2], 'search_web defaults to 2 on non-numeric limit');
-is($tools{search_web}{code}->($tool, { query => '   ' }), 'Search query is empty.', 'search_web rejects empty query');
+like($tools{fuseki_sparql_query}{description}, qr/Do not invent or guess type IDs/, 'fuseki tool description warns against guessing type ids');
+like($tools{fuseki_sparql_query}{description}, qr/do at most one broader follow-up query/i, 'fuseki tool description limits iterative retries');
+like($tools{fuseki_sparql_query}{description}, qr/could not verify a reliable match/i, 'fuseki tool description instructs uncertainty for weak castle results');
 
 like($tools{current_time}{code}->($tool, {}), qr/^Current local time:/, 'current_time returns formatted line');
 like($tools{time_in}{code}->($tool, { zone => '  Europe/London  ' }), qr/Europe\/London/, 'time_in trims zone');
