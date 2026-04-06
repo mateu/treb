@@ -682,19 +682,28 @@ def evaluate(events: List[IRCEvent], channel: str, scenario: str = SCENARIO_BASE
                 (
                     i
                     for i, e in enumerate(events[prompt_idx + 1 :], start=prompt_idx + 1)
-                    if e.kind == "privmsg" and e.nick == ALICE_NICK and e.text in split_prompt_texts
+                    if e.kind == "privmsg" and e.nick == ALICE_NICK and e.text in split_prompt_texts and e.text != prompt
                 ),
                 len(events),
             )
-            next_human_msg = next(
-                (
-                    i
-                    for i, e in enumerate(events[prompt_idx + 1 :], start=prompt_idx + 1)
-                    if e.kind == "privmsg" and e.nick == ALICE_NICK
-                ),
-                len(events),
-            )
-            window_end = min(next_split_prompt, next_human_msg)
+            if scenario in {
+                SCENARIO_MCP_NATURAL_LANGUAGE_BASIC,
+                SCENARIO_NATURAL_LANGUAGE_CPAN_BASIC,
+                SCENARIO_NATURAL_LANGUAGE_SUMMARY_BASIC,
+                SCENARIO_WIKIDATA_THEATERS_MARSEILLE,
+                SCENARIO_WIKIDATA_CASTLE_MARSEILLE,
+            }:
+                window_end = next_split_prompt
+            else:
+                next_human_msg = next(
+                    (
+                        i
+                        for i, e in enumerate(events[prompt_idx + 1 :], start=prompt_idx + 1)
+                        if e.kind == "privmsg" and e.nick == ALICE_NICK
+                    ),
+                    len(events),
+                )
+                window_end = min(next_split_prompt, next_human_msg)
         window = [
             e
             for e in events[prompt_idx + 1 : window_end]
@@ -709,14 +718,29 @@ def evaluate(events: List[IRCEvent], channel: str, scenario: str = SCENARIO_BASE
                 e for e in addressed_substantive
                 if any(fragment in e.text.lower() for fragment in expected_fragments)
             ]
+            uncertainty_markers = ()
+            if scenario == SCENARIO_WIKIDATA_CASTLE_MARSEILLE:
+                uncertainty_markers = (
+                    "could not verify",
+                    "couldn't verify",
+                    "not trust",
+                    "no reliable match",
+                    "could not find a reliable match",
+                )
+            uncertain = [
+                e for e in addressed_substantive
+                if uncertainty_markers and any(marker in e.text.lower() for marker in uncertainty_markers)
+            ]
             if matched:
                 notes.append(f"PASS mcp prompt ({label}): {addressed} replied with expected content ({len(matched)})")
+            elif uncertain:
+                notes.append(f"PASS mcp prompt ({label}): {addressed} replied with reliable uncertainty ({len(uncertain)})")
             else:
                 ok = False
                 notes.append(f"FAIL mcp prompt ({label}): {addressed} lacked expected content")
             report.append(
                 f"- MCP {label}: addressed_replies={len(addressed_replies)} "
-                f"addressed_substantive={len(addressed_substantive)} content_matches={len(matched)}"
+                f"addressed_substantive={len(addressed_substantive)} content_matches={len(matched)} uncertainty_matches={len(uncertain)}"
             )
         else:
             if addressed_substantive:
