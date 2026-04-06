@@ -45,6 +45,7 @@ SCENARIO_NATURAL_LANGUAGE_TIME_BASIC = "natural-language-time-basic"
 SCENARIO_NATURAL_LANGUAGE_CPAN_BASIC = "natural-language-cpan-basic"
 SCENARIO_NATURAL_LANGUAGE_SUMMARY_BASIC = "natural-language-summary-basic"
 SCENARIO_WIKIDATA_THEATERS_MARSEILLE = "wikidata-theaters-marseille"
+SCENARIO_WIKIDATA_CASTLE_MARSEILLE = "wikidata-castle-marseille"
 
 
 def ts() -> str:
@@ -91,9 +92,9 @@ def resolve_config(argv: Optional[List[str]] = None) -> HarnessConfig:
     )
     parser.add_argument(
         "--scenario",
-        choices=[SCENARIO_BASELINE, SCENARIO_MCP_NATURAL_LANGUAGE_BASIC, SCENARIO_NATURAL_LANGUAGE_TIME_BASIC, SCENARIO_NATURAL_LANGUAGE_CPAN_BASIC, SCENARIO_NATURAL_LANGUAGE_SUMMARY_BASIC, SCENARIO_WIKIDATA_THEATERS_MARSEILLE],
+        choices=[SCENARIO_BASELINE, SCENARIO_MCP_NATURAL_LANGUAGE_BASIC, SCENARIO_NATURAL_LANGUAGE_TIME_BASIC, SCENARIO_NATURAL_LANGUAGE_CPAN_BASIC, SCENARIO_NATURAL_LANGUAGE_SUMMARY_BASIC, SCENARIO_WIKIDATA_THEATERS_MARSEILLE, SCENARIO_WIKIDATA_CASTLE_MARSEILLE],
         default=os.environ.get("IRC_HARNESS_SCENARIO", SCENARIO_BASELINE),
-        help="Scenario to run: baseline, mcp-natural-language-basic, natural-language-time-basic, natural-language-cpan-basic, natural-language-summary-basic, or wikidata-theaters-marseille.",
+        help="Scenario to run: baseline, mcp-natural-language-basic, natural-language-time-basic, natural-language-cpan-basic, natural-language-summary-basic, wikidata-theaters-marseille, or wikidata-castle-marseille.",
     )
     args = parser.parse_args(argv)
 
@@ -638,6 +639,10 @@ def evaluate(events: List[IRCEvent], channel: str, scenario: str = SCENARIO_BASE
         split_cases = [
             (TREB_NICK, None, f"{TREB_NICK}: Find some theaters in Marseille.", ("marseille", "théâtre", "theatre", "gymnase", "toursky", "odéon", "joliette"), "wikidata"),
         ]
+    elif scenario == SCENARIO_WIKIDATA_CASTLE_MARSEILLE:
+        split_cases = [
+            (TREB_NICK, None, f"{TREB_NICK}: Tell me about a castle in Marseille and who the architect was.", ("castle", "château", "architect", "marseille"), "wikidata-castle"),
+        ]
     elif scenario == SCENARIO_BASELINE:
         split_cases = [
             (BURT_NICK, TREB_NICK, f"{BURT_NICK}, give one practical debugging habit for flaky IRC bots."),
@@ -648,7 +653,7 @@ def evaluate(events: List[IRCEvent], channel: str, scenario: str = SCENARIO_BASE
     max_non_addressed_interjections = 2
     split_prompt_texts = {c[2] for c in split_cases}
     for case in split_cases:
-        if scenario in {SCENARIO_MCP_NATURAL_LANGUAGE_BASIC, SCENARIO_NATURAL_LANGUAGE_CPAN_BASIC, SCENARIO_NATURAL_LANGUAGE_SUMMARY_BASIC, SCENARIO_WIKIDATA_THEATERS_MARSEILLE}:
+        if scenario in {SCENARIO_MCP_NATURAL_LANGUAGE_BASIC, SCENARIO_NATURAL_LANGUAGE_CPAN_BASIC, SCENARIO_NATURAL_LANGUAGE_SUMMARY_BASIC, SCENARIO_WIKIDATA_THEATERS_MARSEILLE, SCENARIO_WIKIDATA_CASTLE_MARSEILLE}:
             addressed, other, prompt, expected_fragments, label = case
         else:
             addressed, other, prompt = case
@@ -699,7 +704,7 @@ def evaluate(events: List[IRCEvent], channel: str, scenario: str = SCENARIO_BASE
         addressed_substantive = [e for e in addressed_replies if _is_substantive(e.text)]
         other_replies = [e for e in window if other and e.nick == other]
 
-        if scenario in {SCENARIO_MCP_NATURAL_LANGUAGE_BASIC, SCENARIO_NATURAL_LANGUAGE_CPAN_BASIC, SCENARIO_NATURAL_LANGUAGE_SUMMARY_BASIC, SCENARIO_WIKIDATA_THEATERS_MARSEILLE}:
+        if scenario in {SCENARIO_MCP_NATURAL_LANGUAGE_BASIC, SCENARIO_NATURAL_LANGUAGE_CPAN_BASIC, SCENARIO_NATURAL_LANGUAGE_SUMMARY_BASIC, SCENARIO_WIKIDATA_THEATERS_MARSEILLE, SCENARIO_WIKIDATA_CASTLE_MARSEILLE}:
             matched = [
                 e for e in addressed_substantive
                 if any(fragment in e.text.lower() for fragment in expected_fragments)
@@ -933,6 +938,12 @@ async def main() -> int:
             all_events.append(marker(f"addressed-human split prompt -> {TREB_NICK}"))
             await human.say(DEFAULT_CHANNEL, f"{TREB_NICK}: Find some theaters in Marseille.")
             await asyncio.sleep(14.0)
+            all_events.append(marker("command-path prompt"))
+            await human.say(DEFAULT_CHANNEL, "time:")
+        elif cfg.scenario == SCENARIO_WIKIDATA_CASTLE_MARSEILLE:
+            all_events.append(marker(f"addressed-human split prompt -> {TREB_NICK}"))
+            await human.say(DEFAULT_CHANNEL, f"{TREB_NICK}: Tell me about a castle in Marseille and who the architect was.")
+            await asyncio.sleep(18.0)
             all_events.append(marker("command-path prompt"))
             await human.say(DEFAULT_CHANNEL, "time:")
         else:

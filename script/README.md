@@ -18,6 +18,8 @@
 ## Quick examples
 - Run the live Wikidata/Jena Marseille scenario against Treb's real model:
   - `IRC_HARNESS_MODE=real IRC_HARNESS_REAL_MODEL='kimi-k2.5:cloud' IRC_HARNESS_SCENARIO=wikidata-theaters-marseille script/run-local-irc-harness.sh`
+- Run the live Wikidata/Jena castle scenario against Treb's real model (grounded answer or explicit reliable uncertainty both count as success):
+  - `IRC_HARNESS_MODE=real IRC_HARNESS_REAL_MODEL='kimi-k2.5:cloud' IRC_HARNESS_SCENARIO=wikidata-castle-marseille script/run-local-irc-harness.sh`
 - Start a bot normally:
   - `script/run-treb.sh`
   - `script/run-burt.sh`
