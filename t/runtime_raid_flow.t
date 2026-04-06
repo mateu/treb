@@ -388,6 +388,36 @@ use Bot::Runtime::RaidFlow qw(do_raid);
 }
 
 {
+  my $bot = Local::RaidFlowBot->new(
+    pending => {
+      input => 'treb_bot: Tell me about a castle in Marseille and who the architect was.',
+      channel => '#ai',
+      messages => [
+        { nick => 'mateu', channel => '#ai', msg => 'treb_bot: Tell me about a castle in Marseille and who the architect was.', source_kind => 'conversation', warm_human => 1 },
+      ],
+    },
+    replies => [{ die => 'Raider tool loop exceeded 13 iterations' }],
+  );
+
+  do_raid(
+    self        => $bot,
+    max_line    => 400,
+    brainfreeze => ['*brainfreeze*'],
+  );
+
+  like(
+    $bot->{sent}[0]{msg},
+    qr/could not find a reliable match/i,
+    'tool-loop failure for warm human gets uncertainty fallback instead of generic crash message',
+  );
+  like(
+    join("\n", @{$bot->{errors}}),
+    qr/Raider error: Raider tool loop exceeded 13 iterations/,
+    'tool-loop failure is still logged',
+  );
+}
+
+{
   @POE::Kernel::delayed = ();
 
   my $bot = Local::RaidFlowBot->new(

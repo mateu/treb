@@ -55,6 +55,17 @@ sub do_raid {
     return;
   }
 
+  my $has_bert_conversation = 0;
+  my $has_warm_human_conversation = 0;
+  for my $m (@{$messages}) {
+    if (($m->{source_kind} // '') eq 'bert_conversation' && $m->{nick} && $self->_is_filtered_bot_nick($m->{nick})) {
+      $has_bert_conversation = 1;
+    }
+    if (($m->{source_kind} // '') eq 'conversation' && ($m->{warm_human} // 0)) {
+      $has_warm_human_conversation = 1;
+    }
+  }
+
   my $answer = eval {
     my $result = $raider->raid($input);
     "$result";
@@ -82,7 +93,21 @@ sub do_raid {
   $self->_pending_raid(undef);
 
   if ($@) {
-    $self->error("Raider error: $@");
+    my $err = "$@";
+    $err =~ s/\s+$//;
+    $self->error("Raider error: $err");
+
+    if ($has_warm_human_conversation && $err =~ /tool loop exceeded/i) {
+      my $fallback = 'I dug through the available tool results but could not find a reliable match for that request before the tool loop gave up. I would not trust a specific castle/architect answer from this pass.';
+      $self->_send_to_channel(
+        $channel || $self->_default_channel,
+        $fallback,
+      );
+      $self->_processing(0);
+      $self->_schedule_pending_buffers;
+      return;
+    }
+
     $self->_send_to_channel(
       $self->_default_channel,
       'My brain is fried. Someone forgot to feed the gerbils that power my CPU.',
@@ -104,17 +129,6 @@ sub do_raid {
   };
 
   $self->_processing(0);
-
-  my $has_bert_conversation = 0;
-  my $has_warm_human_conversation = 0;
-  for my $m (@{$messages}) {
-    if (($m->{source_kind} // '') eq 'bert_conversation' && $m->{nick} && $self->_is_filtered_bot_nick($m->{nick})) {
-      $has_bert_conversation = 1;
-    }
-    if (($m->{source_kind} // '') eq 'conversation' && ($m->{warm_human} // 0)) {
-      $has_warm_human_conversation = 1;
-    }
-  }
 
   if ($answer =~ /__SILENT__/) {
     $self->info("${silent_name} chose to stay silent");
