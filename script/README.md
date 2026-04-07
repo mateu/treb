@@ -62,6 +62,17 @@
   - `script/check-all.sh`
   - or individually: `script/with-burt-env.sh perl -c burt.pl`
 
+## Current venue-graph status summary
+- The cumulative `wgraph` bundle workflow is now live and reloadable into Fuseki.
+- Generated venue data now includes both `rdf:type` (`a`) and `wdt:P31` class triples so loader verification and Treb's live MCP queries agree.
+- Confirmed live online successes after the `wdt:P31` fix include:
+  - castles: `castle-petite-malmaison`
+  - theaters: `theater-grand-bordeaux`
+  - museums: `museum-orsay`
+  - cinemas: `cinema-cineum-cannes`
+  - theme parks: `themepark-ok-corral` and `themepark-asterix`/Parc Astérix-style opening-date asks
+- Known imperfection: `theater-graslin-nantes` still fails live and remains under investigation rather than being treated as a stable regression.
+
 ## Rule of thumb
 Use `run-*.sh` as the default human-facing entrypoint.
 Use `run-*-sandbox.sh` when you explicitly want the extra sandbox wrapper.
