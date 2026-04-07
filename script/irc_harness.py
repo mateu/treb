@@ -52,6 +52,9 @@ SCENARIO_CASTLE_PASTRE = "castle-pastre"
 SCENARIO_THEATER_OPERA_MARSEILLE = "theater-opera-marseille"
 SCENARIO_THEATER_GRAND_BORDEAUX = "theater-grand-bordeaux"
 SCENARIO_THEATER_GRASLIN_NANTES = "theater-graslin-nantes"
+SCENARIO_MUSEUM_ORSAY = "museum-orsay"
+SCENARIO_MUSEUM_BOURSE_COMMERCE = "museum-bourse-commerce"
+SCENARIO_MUSEUM_VIEILLE_CHARITE = "museum-vieille-charite"
 
 
 def ts() -> str:
@@ -98,9 +101,9 @@ def resolve_config(argv: Optional[List[str]] = None) -> HarnessConfig:
     )
     parser.add_argument(
         "--scenario",
-        choices=[SCENARIO_BASELINE, SCENARIO_MCP_NATURAL_LANGUAGE_BASIC, SCENARIO_NATURAL_LANGUAGE_TIME_BASIC, SCENARIO_NATURAL_LANGUAGE_CPAN_BASIC, SCENARIO_NATURAL_LANGUAGE_SUMMARY_BASIC, SCENARIO_WIKIDATA_THEATERS_MARSEILLE, SCENARIO_WIKIDATA_CASTLE_MARSEILLE, SCENARIO_CASTLE_PETITE_MALMAISON, SCENARIO_CASTLE_PETIT_TRIANON, SCENARIO_CASTLE_PASTRE, SCENARIO_THEATER_OPERA_MARSEILLE, SCENARIO_THEATER_GRAND_BORDEAUX, SCENARIO_THEATER_GRASLIN_NANTES],
+        choices=[SCENARIO_BASELINE, SCENARIO_MCP_NATURAL_LANGUAGE_BASIC, SCENARIO_NATURAL_LANGUAGE_TIME_BASIC, SCENARIO_NATURAL_LANGUAGE_CPAN_BASIC, SCENARIO_NATURAL_LANGUAGE_SUMMARY_BASIC, SCENARIO_WIKIDATA_THEATERS_MARSEILLE, SCENARIO_WIKIDATA_CASTLE_MARSEILLE, SCENARIO_CASTLE_PETITE_MALMAISON, SCENARIO_CASTLE_PETIT_TRIANON, SCENARIO_CASTLE_PASTRE, SCENARIO_THEATER_OPERA_MARSEILLE, SCENARIO_THEATER_GRAND_BORDEAUX, SCENARIO_THEATER_GRASLIN_NANTES, SCENARIO_MUSEUM_ORSAY, SCENARIO_MUSEUM_BOURSE_COMMERCE, SCENARIO_MUSEUM_VIEILLE_CHARITE],
         default=os.environ.get("IRC_HARNESS_SCENARIO", SCENARIO_BASELINE),
-        help="Scenario to run: baseline, mcp-natural-language-basic, natural-language-time-basic, natural-language-cpan-basic, natural-language-summary-basic, wikidata-theaters-marseille, wikidata-castle-marseille, castle-petite-malmaison, castle-petit-trianon, castle-pastre, theater-opera-marseille, theater-grand-bordeaux, or theater-graslin-nantes.",
+        help="Scenario to run: baseline, mcp-natural-language-basic, natural-language-time-basic, natural-language-cpan-basic, natural-language-summary-basic, wikidata-theaters-marseille, wikidata-castle-marseille, castle-petite-malmaison, castle-petit-trianon, castle-pastre, theater-opera-marseille, theater-grand-bordeaux, theater-graslin-nantes, museum-orsay, museum-bourse-commerce, or museum-vieille-charite.",
     )
     args = parser.parse_args(argv)
 
@@ -673,6 +676,18 @@ def evaluate(events: List[IRCEvent], channel: str, scenario: str = SCENARIO_BASE
         split_cases = [
             (TREB_NICK, None, f"{TREB_NICK}: Tell me about the Théâtre Graslin in Nantes and who the architect was.", ("théâtre graslin", "nantes", "mathurin crucy"), "theater-graslin-nantes"),
         ]
+    elif scenario == SCENARIO_MUSEUM_ORSAY:
+        split_cases = [
+            (TREB_NICK, None, f"{TREB_NICK}: Tell me about the Musée d'Orsay in Paris and who the architect was.", ("orsay", "paris", "victor laloux"), "museum-orsay"),
+        ]
+    elif scenario == SCENARIO_MUSEUM_BOURSE_COMMERCE:
+        split_cases = [
+            (TREB_NICK, None, f"{TREB_NICK}: Tell me about the Bourse de Commerce - Pinault Collection in Paris and who the architect was.", ("bourse de commerce", "paris", "tadao ando"), "museum-bourse-commerce"),
+        ]
+    elif scenario == SCENARIO_MUSEUM_VIEILLE_CHARITE:
+        split_cases = [
+            (TREB_NICK, None, f"{TREB_NICK}: Tell me about La Vieille Charité in Marseille and who the architect was.", ("vieille charité", "marseille", "pierre puget"), "museum-vieille-charite"),
+        ]
     elif scenario == SCENARIO_BASELINE:
         split_cases = [
             (BURT_NICK, TREB_NICK, f"{BURT_NICK}, give one practical debugging habit for flaky IRC bots."),
@@ -695,6 +710,9 @@ def evaluate(events: List[IRCEvent], channel: str, scenario: str = SCENARIO_BASE
             SCENARIO_THEATER_OPERA_MARSEILLE,
             SCENARIO_THEATER_GRAND_BORDEAUX,
             SCENARIO_THEATER_GRASLIN_NANTES,
+            SCENARIO_MUSEUM_ORSAY,
+            SCENARIO_MUSEUM_BOURSE_COMMERCE,
+            SCENARIO_MUSEUM_VIEILLE_CHARITE,
         }:
             addressed, other, prompt, expected_fragments, label = case
         else:
@@ -740,6 +758,9 @@ def evaluate(events: List[IRCEvent], channel: str, scenario: str = SCENARIO_BASE
                 SCENARIO_THEATER_OPERA_MARSEILLE,
                 SCENARIO_THEATER_GRAND_BORDEAUX,
                 SCENARIO_THEATER_GRASLIN_NANTES,
+                SCENARIO_MUSEUM_ORSAY,
+                SCENARIO_MUSEUM_BOURSE_COMMERCE,
+                SCENARIO_MUSEUM_VIEILLE_CHARITE,
             }:
                 window_end = next_split_prompt
             else:
@@ -773,6 +794,9 @@ def evaluate(events: List[IRCEvent], channel: str, scenario: str = SCENARIO_BASE
             SCENARIO_THEATER_OPERA_MARSEILLE,
             SCENARIO_THEATER_GRAND_BORDEAUX,
             SCENARIO_THEATER_GRASLIN_NANTES,
+            SCENARIO_MUSEUM_ORSAY,
+            SCENARIO_MUSEUM_BOURSE_COMMERCE,
+            SCENARIO_MUSEUM_VIEILLE_CHARITE,
         }:
             matched = [
                 e for e in addressed_substantive
@@ -1063,6 +1087,24 @@ async def main() -> int:
         elif cfg.scenario == SCENARIO_THEATER_GRASLIN_NANTES:
             all_events.append(marker(f"addressed-human split prompt -> {TREB_NICK}"))
             await human.say(DEFAULT_CHANNEL, f"{TREB_NICK}: Tell me about the Théâtre Graslin in Nantes and who the architect was.")
+            await asyncio.sleep(28.0)
+            all_events.append(marker("command-path prompt"))
+            await human.say(DEFAULT_CHANNEL, "time:")
+        elif cfg.scenario == SCENARIO_MUSEUM_ORSAY:
+            all_events.append(marker(f"addressed-human split prompt -> {TREB_NICK}"))
+            await human.say(DEFAULT_CHANNEL, f"{TREB_NICK}: Tell me about the Musée d'Orsay in Paris and who the architect was.")
+            await asyncio.sleep(28.0)
+            all_events.append(marker("command-path prompt"))
+            await human.say(DEFAULT_CHANNEL, "time:")
+        elif cfg.scenario == SCENARIO_MUSEUM_BOURSE_COMMERCE:
+            all_events.append(marker(f"addressed-human split prompt -> {TREB_NICK}"))
+            await human.say(DEFAULT_CHANNEL, f"{TREB_NICK}: Tell me about the Bourse de Commerce - Pinault Collection in Paris and who the architect was.")
+            await asyncio.sleep(28.0)
+            all_events.append(marker("command-path prompt"))
+            await human.say(DEFAULT_CHANNEL, "time:")
+        elif cfg.scenario == SCENARIO_MUSEUM_VIEILLE_CHARITE:
+            all_events.append(marker(f"addressed-human split prompt -> {TREB_NICK}"))
+            await human.say(DEFAULT_CHANNEL, f"{TREB_NICK}: Tell me about La Vieille Charité in Marseille and who the architect was.")
             await asyncio.sleep(28.0)
             all_events.append(marker("command-path prompt"))
             await human.say(DEFAULT_CHANNEL, "time:")
