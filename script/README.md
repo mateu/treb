@@ -22,6 +22,12 @@
   - `IRC_HARNESS_MODE=real IRC_HARNESS_REAL_MODEL='kimi-k2.5:cloud' IRC_HARNESS_SCENARIO=theater-graslin-nantes script/run-local-irc-harness.sh`
 - Run the Marseille theater scenario when you specifically want to probe timing/interleaving behavior (graph data exists, but this case remains operationally flaky):
   - `IRC_HARNESS_MODE=real IRC_HARNESS_REAL_MODEL='kimi-k2.5:cloud' IRC_HARNESS_SCENARIO=theater-opera-marseille script/run-local-irc-harness.sh`
+- Run the primary live museum regression against Treb's real model:
+  - `IRC_HARNESS_MODE=real IRC_HARNESS_REAL_MODEL='kimi-k2.5:cloud' IRC_HARNESS_SCENARIO=museum-orsay script/run-local-irc-harness.sh`
+- Run the backup live museum regression against Treb's real model:
+  - `IRC_HARNESS_MODE=real IRC_HARNESS_REAL_MODEL='kimi-k2.5:cloud' IRC_HARNESS_SCENARIO=museum-bourse-commerce script/run-local-irc-harness.sh`
+- Run the Vieille Charité museum scenario when you specifically want to observe DB-miss-then-fallback behavior (interesting, but not as clean as Orsay or Bourse):
+  - `IRC_HARNESS_MODE=real IRC_HARNESS_REAL_MODEL='kimi-k2.5:cloud' IRC_HARNESS_SCENARIO=museum-vieille-charite script/run-local-irc-harness.sh`
 - Run the legacy live Wikidata/Jena Marseille discovery scenario against Treb's real model:
   - `IRC_HARNESS_MODE=real IRC_HARNESS_REAL_MODEL='kimi-k2.5:cloud' IRC_HARNESS_SCENARIO=wikidata-theaters-marseille script/run-local-irc-harness.sh`
 - Run the live Wikidata/Jena castle scenario against Treb's real model (grounded answer or explicit reliable uncertainty both count as success):
