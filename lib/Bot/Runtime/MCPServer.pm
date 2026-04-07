@@ -159,18 +159,29 @@ sub _tool_specs {
 
         require HTTP::Tiny;
         require JSON::PP;
+        require Encode;
 
         my $http = HTTP::Tiny->new( timeout => 10 );
         my $url  = 'http://192.168.1.200:3030/wikidata_france/sparql';
 
+        my $query_octets = Encode::encode('UTF-8', $full_query);
+        my $query_hex_preview = unpack('H*', substr($query_octets, 0, 256));
+        my $query_char_len = length($full_query);
+        my $query_byte_len = length($query_octets);
+        my $utf8_flag = utf8::is_utf8($full_query) ? 1 : 0;
+
+        print STDERR "[FUSEKI DEBUG] query_char_len=$query_char_len query_byte_len=$query_byte_len utf8_flag=$utf8_flag hex_preview=$query_hex_preview\n";
+
         my $response = $http->post( $url, {
             headers => {
-                'Content-Type' => 'application/sparql-query',
+                'Content-Type' => 'application/sparql-query; charset=UTF-8',
                 'Accept'       => 'application/sparql-results+json',
             },
-            content => $full_query,
+            content => $query_octets,
         });
 
+        my $response_len = defined $response->{content} ? length($response->{content}) : 0;
+        print STDERR "[FUSEKI DEBUG] status=" . ($response->{status} // 'undef') . " success=" . ($response->{success} ? 1 : 0) . " reason=" . ($response->{reason} // 'undef') . " content_len=$response_len\n";
         print STDERR "\n>>>>>> FUSEKI RESPONSE <<<<<<\n" . ($response->{content} // 'NO CONTENT') . "\n>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n\n";
 
         if ( $response->{success} ) {
