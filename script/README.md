@@ -16,7 +16,13 @@
 - `with-astrid-env.sh <cmd>` — run an arbitrary command with Astrid's environment loaded
 
 ## Quick examples
-- Run the live Wikidata/Jena Marseille scenario against Treb's real model:
+- Run the primary live theater regression against Treb's real model:
+  - `IRC_HARNESS_MODE=real IRC_HARNESS_REAL_MODEL='kimi-k2.5:cloud' IRC_HARNESS_SCENARIO=theater-grand-bordeaux script/run-local-irc-harness.sh`
+- Run the backup live theater regression against Treb's real model:
+  - `IRC_HARNESS_MODE=real IRC_HARNESS_REAL_MODEL='kimi-k2.5:cloud' IRC_HARNESS_SCENARIO=theater-graslin-nantes script/run-local-irc-harness.sh`
+- Run the Marseille theater scenario when you specifically want to probe timing/interleaving behavior (graph data exists, but this case remains operationally flaky):
+  - `IRC_HARNESS_MODE=real IRC_HARNESS_REAL_MODEL='kimi-k2.5:cloud' IRC_HARNESS_SCENARIO=theater-opera-marseille script/run-local-irc-harness.sh`
+- Run the legacy live Wikidata/Jena Marseille discovery scenario against Treb's real model:
   - `IRC_HARNESS_MODE=real IRC_HARNESS_REAL_MODEL='kimi-k2.5:cloud' IRC_HARNESS_SCENARIO=wikidata-theaters-marseille script/run-local-irc-harness.sh`
 - Run the live Wikidata/Jena castle scenario against Treb's real model (grounded answer or explicit reliable uncertainty both count as success):
   - `IRC_HARNESS_MODE=real IRC_HARNESS_REAL_MODEL='kimi-k2.5:cloud' IRC_HARNESS_SCENARIO=wikidata-castle-marseille script/run-local-irc-harness.sh`
