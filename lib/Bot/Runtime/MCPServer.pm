@@ -165,12 +165,14 @@ sub _tool_specs {
         my $url  = 'http://192.168.1.200:3030/wikidata_france/sparql';
 
         my $query_octets = Encode::encode('UTF-8', $full_query);
-        my $query_hex_preview = unpack('H*', substr($query_octets, 0, 256));
-        my $query_char_len = length($full_query);
-        my $query_byte_len = length($query_octets);
-        my $utf8_flag = utf8::is_utf8($full_query) ? 1 : 0;
-
-        print STDERR "[FUSEKI DEBUG] query_char_len=$query_char_len query_byte_len=$query_byte_len utf8_flag=$utf8_flag hex_preview=$query_hex_preview\n";
+        my $debug_fuseki = $ENV{TREB_FUSEKI_DEBUG} ? 1 : 0;
+        if ($debug_fuseki) {
+            my $query_hex_preview = unpack('H*', substr($query_octets, 0, 256));
+            my $query_char_len = length($full_query);
+            my $query_byte_len = length($query_octets);
+            my $utf8_flag = utf8::is_utf8($full_query) ? 1 : 0;
+            print STDERR "[FUSEKI DEBUG] query_char_len=$query_char_len query_byte_len=$query_byte_len utf8_flag=$utf8_flag hex_preview=$query_hex_preview\n";
+        }
 
         my $response = $http->post( $url, {
             headers => {
@@ -181,7 +183,9 @@ sub _tool_specs {
         });
 
         my $response_len = defined $response->{content} ? length($response->{content}) : 0;
-        print STDERR "[FUSEKI DEBUG] status=" . ($response->{status} // 'undef') . " success=" . ($response->{success} ? 1 : 0) . " reason=" . ($response->{reason} // 'undef') . " content_len=$response_len\n";
+        if ($debug_fuseki) {
+            print STDERR "[FUSEKI DEBUG] status=" . ($response->{status} // 'undef') . " success=" . ($response->{success} ? 1 : 0) . " reason=" . ($response->{reason} // 'undef') . " content_len=$response_len\n";
+        }
         print STDERR "\n>>>>>> FUSEKI RESPONSE <<<<<<\n" . ($response->{content} // 'NO CONTENT') . "\n>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n\n";
 
         if ( $response->{success} ) {
