@@ -40,7 +40,11 @@
   - Note: usually good, but has shown one miss in live runs; keep as backup.
 - Run the legacy live Wikidata/Jena Marseille discovery scenario against Treb's real model:
   - `IRC_HARNESS_MODE=real IRC_HARNESS_REAL_MODEL='kimi-k2.5:cloud' IRC_HARNESS_SCENARIO=wikidata-theaters-marseille script/run-local-irc-harness.sh`
-- Run the live Wikidata/Jena castle scenario against Treb's real model (grounded answer or explicit reliable uncertainty both count as success):
+- Run the primary live castle regression against Treb's real model:
+  - `IRC_HARNESS_MODE=real IRC_HARNESS_REAL_MODEL='kimi-k2.5:cloud' IRC_HARNESS_SCENARIO=castle-petite-malmaison script/run-local-irc-harness.sh`
+- Run the backup live castle regression against Treb's real model:
+  - `IRC_HARNESS_MODE=real IRC_HARNESS_REAL_MODEL='kimi-k2.5:cloud' IRC_HARNESS_SCENARIO=castle-petit-trianon script/run-local-irc-harness.sh`
+- Run the Marseille castle scenario when you specifically want a legacy/flaky discovery probe rather than the stable regression path:
   - `IRC_HARNESS_MODE=real IRC_HARNESS_REAL_MODEL='kimi-k2.5:cloud' IRC_HARNESS_SCENARIO=wikidata-castle-marseille script/run-local-irc-harness.sh`
 - Start a bot normally:
   - `script/run-treb.sh`
