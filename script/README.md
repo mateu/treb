@@ -28,6 +28,16 @@
   - `IRC_HARNESS_MODE=real IRC_HARNESS_REAL_MODEL='kimi-k2.5:cloud' IRC_HARNESS_SCENARIO=museum-bourse-commerce script/run-local-irc-harness.sh`
 - Run the Vieille Charité museum scenario when you specifically want to observe DB-miss-then-fallback behavior (interesting, but not as clean as Orsay or Bourse):
   - `IRC_HARNESS_MODE=real IRC_HARNESS_REAL_MODEL='kimi-k2.5:cloud' IRC_HARNESS_SCENARIO=museum-vieille-charite script/run-local-irc-harness.sh`
+- Run the primary live cinema regression against Treb's real model:
+  - `IRC_HARNESS_MODE=real IRC_HARNESS_REAL_MODEL='kimi-k2.5:cloud' IRC_HARNESS_SCENARIO=cinema-cineum-cannes script/run-local-irc-harness.sh`
+- Run the backup live cinema regression against Treb's real model:
+  - `IRC_HARNESS_MODE=real IRC_HARNESS_REAL_MODEL='kimi-k2.5:cloud' IRC_HARNESS_SCENARIO=cinema-grand-rex script/run-local-irc-harness.sh`
+  - Note: this case can be timing-sensitive (occasionally Treb answers only the follow-up `time:`); keep as backup.
+- Run the primary live theme-park regression against Treb's real model:
+  - `IRC_HARNESS_MODE=real IRC_HARNESS_REAL_MODEL='kimi-k2.5:cloud' IRC_HARNESS_SCENARIO=themepark-ok-corral script/run-local-irc-harness.sh`
+- Run the backup live theme-park regression against Treb's real model:
+  - `IRC_HARNESS_MODE=real IRC_HARNESS_REAL_MODEL='kimi-k2.5:cloud' IRC_HARNESS_SCENARIO=themepark-asterix script/run-local-irc-harness.sh`
+  - Note: usually good, but has shown one miss in live runs; keep as backup.
 - Run the legacy live Wikidata/Jena Marseille discovery scenario against Treb's real model:
   - `IRC_HARNESS_MODE=real IRC_HARNESS_REAL_MODEL='kimi-k2.5:cloud' IRC_HARNESS_SCENARIO=wikidata-theaters-marseille script/run-local-irc-harness.sh`
 - Run the live Wikidata/Jena castle scenario against Treb's real model (grounded answer or explicit reliable uncertainty both count as success):
