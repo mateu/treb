@@ -46,6 +46,28 @@ sub _log_tool_call {
   $self->info($args{message});
 }
 
+sub _fuseki_dataset_url {
+  return $ENV{TREB_FUSEKI_URL} || 'http://192.168.1.200:3030/wikidata_venues/sparql';
+}
+
+sub _query_targets_named_graphs {
+  my ($query) = @_;
+  return 0 unless defined $query && length $query;
+  return $query =~ /\bGRAPH\b/i ? 1 : 0;
+}
+
+sub _wrap_query_for_named_graphs {
+  my ($query) = @_;
+  return $query if _query_targets_named_graphs($query);
+
+  if ($query =~ /\A(.*?\bWHERE\s*\{)(.*)(\}\s*(?:ORDER\s+BY\b.*|GROUP\s+BY\b.*|HAVING\b.*|LIMIT\b.*|OFFSET\b.*)?)\z/is) {
+    my ($where_open, $where_body, $tail) = ($1, $2, $3);
+    return $where_open . ' GRAPH ?graph { ' . $where_body . ' }' . $tail;
+  }
+
+  return $query;
+}
+
 sub _tool_specs {
   my (%args) = @_;
   my $self = $args{self};
@@ -132,7 +154,7 @@ sub _tool_specs {
     },
     {
       name         => 'fuseki_sparql_query',
-      description  => 'Executes a SPARQL query against the configured France Jena Fuseki dataset. CRITICAL RULES: 1. Use only known venue classes when you are confident the class is correct: Theater (wd:Q24354), Cinema (wd:Q41253), Theme Park (wd:Q194195), Museum (wd:Q33506), Castle/Château/Fort/Palace in the current France castle graph (wd:Q23413). Do not invent or guess type IDs. 2. CLASS FILTERING: the current venue graph includes both `rdf:type` and `wdt:P31` class assertions; prefer `wdt:P31` for venue-class filtering. 3. LABELS: data may have @en and/or @fr labels. Do not assume English-only labels. Use `STR()` and `LCASE()`, for example `FILTER(CONTAINS(LCASE(STR(?cityLabel)), "marseille"))`, and prefer `FILTER(LANG(?label) IN ("en", "fr"))` when fetching labels. 4. NAME MATCHING: accented and unaccented spellings may differ (for example `château` vs `chateau`, `Pastré` vs `Pastre`, `Astérix` vs `Asterix`). If a name-based query returns empty, do at most one broader follow-up using lowercase string matching on labels, and consider both accented and unaccented variants. 5. PROPERTIES: wdt:P131 (location), wdt:P571 (date), wdt:P84 (architect), wdt:P625 (GPS), wdt:P1435 (heritage status). Use OPTIONAL for dates, architects, coordinates, and heritage. 6. GEOSPATIAL: Coordinates (P625) look like `Point(Long Lat)`. Use `replace(str(?coords), "Point\\((.*) (.*)\\)", "$2")` to get Latitude as a number when needed. 7. SEARCH: do not rely on guessed Wikidata IDs for locations. Prefer filtering locations by label string using `rdfs:label`. 8. LABEL FETCHING: NEVER use `SERVICE wikibase:label`. Always fetch `rdfs:label` manually. 9. QUERY DISCIPLINE: if an exact class-based query returns empty or obviously wrong rows, do at most one broader follow-up query. Do not keep iterating near-duplicate queries. 10. NAMED-ENTITY WORKFLOW (all venue types): when asked about a specific named place, first try a name/class or name/location discovery query; if you find a plausible item, follow with an item-bound detail query for architect/date/coords/heritage instead of answering from the discovery query alone. 11. ABSENCE CLAIMS: an empty first query does NOT prove the place is absent. Before saying a named place is missing/not in the database, you MUST run at least one Fuseki query in the current turn; if the first query is empty, run one broader follow-up (for example name-only or name+city) before concluding that you could not verify a reliable match from the database. Prefer "I could not verify a reliable match from the database" over "it is not in the database" unless the evidence is strong. 12. ARCHITECT HANDLING: architect existence is determined by a raw `?item wdt:P84 ?architect` binding. Query `?architect` directly first. `?architectLabel` or name fields are optional enrichment only. If `?architect` exists but no readable label/name is available, report that architect data exists in the graph but a human-readable architect label is unavailable. Multiple architect rows are allowed. Deduplicate repeated rows caused by multiple labels or heritage values. Do not say architect data is missing unless no `wdt:P84` bindings are returned for the matched item. 13. CASTLE RESPONSE RULE: if the entity is found but architect data is missing, say that clearly. If results are empty or irrelevant, say you could not verify a reliable match from the database instead of guessing. 14. IMPORTANT: Always start your final response by addressing the user (e.g., "mateu: I found...").',
+      description  => 'Executes a SPARQL query against the configured `wikidata_venues` Jena Fuseki dataset. CRITICAL RULES: 1. The dataset is organized into named graphs like `urn:wgraph:norway`, `urn:wgraph:france`, `urn:wgraph:spain`, and `urn:wgraph:italy`. The default graph may be empty, so venue-matching queries should normally use `GRAPH ?graph { ... }` or a specific graph like `GRAPH <urn:wgraph:spain> { ... }`. 2. Use only known venue classes when you are confident the class is correct: Theater (wd:Q24354), Cinema (wd:Q41253), Theme Park (wd:Q194195), Museum (wd:Q33506), Castle/Château/Fort/Palace (wd:Q23413). Do not invent or guess type IDs. 3. CLASS FILTERING: the current venue graph includes both `rdf:type` and `wdt:P31` class assertions; prefer `wdt:P31` for venue-class filtering. 4. LABELS: data may have @en, @fr, and/or other labels. Do not assume English-only labels. Use `STR()` and `LCASE()`, for example `FILTER(CONTAINS(LCASE(STR(?cityLabel)), "marseille"))`, and prefer `FILTER(LANG(?label) IN ("en", "fr"))` when fetching labels. 5. NAME MATCHING: accented and unaccented spellings may differ (for example `château` vs `chateau`, `Pastré` vs `Pastre`, `Astérix` vs `Asterix`). If a name-based query returns empty, do at most one broader follow-up using lowercase string matching on labels, and consider both accented and unaccented variants. 6. PROPERTIES: wdt:P131 (location), wdt:P571 (date), wdt:P84 (architect), wdt:P625 (GPS), wdt:P1435 (heritage status). Use OPTIONAL for dates, architects, coordinates, and heritage. 7. GEOSPATIAL: Coordinates (P625) look like `Point(Long Lat)`. Use `replace(str(?coords), "Point\\((.*) (.*)\\)", "$2")` to get Latitude as a number when needed. 8. SEARCH: do not rely on guessed Wikidata IDs for locations. Prefer filtering locations by label string using `rdfs:label`. 9. LABEL FETCHING: NEVER use `SERVICE wikibase:label`. Always fetch `rdfs:label` manually. 10. QUERY DISCIPLINE: if an exact class-based query returns empty or obviously wrong rows, do at most one broader follow-up query. Do not keep iterating near-duplicate queries. 11. NAMED-ENTITY WORKFLOW (all venue types): when asked about a specific named place, first try a name/class or name/location discovery query; if you find a plausible item, follow with an item-bound detail query for architect/date/coords/heritage instead of answering from the discovery query alone. 12. ABSENCE CLAIMS: an empty first query does NOT prove the place is absent. Before saying a named place is missing/not in the database, you MUST run at least one Fuseki query in the current turn; if the first query is empty, run one broader follow-up (for example name-only or name+city) before concluding that you could not verify a reliable match from the database. Prefer "I could not verify a reliable match from the database" over "it is not in the database" unless the evidence is strong. 13. ARCHITECT HANDLING: architect existence is determined by a raw `?item wdt:P84 ?architect` binding. Query `?architect` directly first. `?architectLabel` or name fields are optional enrichment only. If `?architect` exists but no readable label/name is available, report that architect data exists in the graph but a human-readable architect label is unavailable. Multiple architect rows are allowed. Deduplicate repeated rows caused by multiple labels or heritage values. Do not say architect data is missing unless no `wdt:P84` bindings are returned for the matched item. 14. CONSISTENCY RULE: architect statuses are mutually exclusive. If no `?architect` binding exists for the matched item, say architect data is unavailable and do NOT also say architect data exists in the graph. Only use the "architect data exists but no human-readable architect label is available" wording when at least one raw `?architect` binding is present for that same matched item. 15. IMPORTANT: Always start your final response by addressing the user (e.g., "mateu: I found...").',
       input_schema => {
         type       => 'object',
         properties => {
@@ -155,6 +177,7 @@ sub _tool_specs {
                        "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n" .
                        "PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>\n";
 
+        $llm_query = _wrap_query_for_named_graphs($llm_query);
         my $full_query = $prefixes . $llm_query;
 
         require HTTP::Tiny;
@@ -162,7 +185,7 @@ sub _tool_specs {
         require Encode;
 
         my $http = HTTP::Tiny->new( timeout => 10 );
-        my $url  = 'http://192.168.1.200:3030/wikidata_france/sparql';
+        my $url  = _fuseki_dataset_url();
 
         my $query_octets = Encode::encode('UTF-8', $full_query);
         my $debug_fuseki = $ENV{TREB_FUSEKI_DEBUG} ? 1 : 0;

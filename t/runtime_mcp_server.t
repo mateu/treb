@@ -159,6 +159,42 @@ is($tools{summarize_url}{code}->($tool, { url => '   ' }), 'URL is empty.', 'sum
 like($tools{fuseki_sparql_query}{description}, qr/Do not invent or guess type IDs/, 'fuseki tool description warns against guessing type ids');
 like($tools{fuseki_sparql_query}{description}, qr/do at most one broader follow-up query/i, 'fuseki tool description limits iterative retries');
 like($tools{fuseki_sparql_query}{description}, qr/could not verify a reliable match/i, 'fuseki tool description instructs uncertainty for weak castle results');
+like($tools{fuseki_sparql_query}{description}, qr/named graphs like `urn:wgraph:/, 'fuseki tool description mentions named graphs');
+like($tools{fuseki_sparql_query}{description}, qr/default graph may be empty/i, 'fuseki tool description warns that default graph may be empty');
+like($tools{fuseki_sparql_query}{description}, qr/architect statuses are mutually exclusive/i, 'fuseki tool description forbids contradictory architect statuses');
+like($tools{fuseki_sparql_query}{description}, qr/Only use the "architect data exists but no human-readable architect label is available" wording when at least one raw `\?architect` binding is present/i, 'fuseki tool description ties unlabeled-architect wording to real architect bindings');
+
+{
+    require HTTP::Tiny;
+    no warnings 'redefine';
+    my @posts;
+    local *HTTP::Tiny::new = sub {
+        return bless {}, 'TestFusekiHTTP';
+    };
+    local *TestFusekiHTTP::post = sub {
+        my ($self, $url, $args) = @_;
+        push @posts, [$url, $args->{content}];
+        return {
+            success => 1,
+            status  => 200,
+            reason  => 'OK',
+            content => '{"results":{"bindings":[]}}',
+        };
+    };
+
+    my $json = $tools{fuseki_sparql_query}{code}->($tool, {
+        query => 'SELECT ?venue WHERE { ?venue wdt:P31 wd:Q33506 . } LIMIT 5',
+    });
+    is($json, '[]', 'fuseki tool returns JSON bindings array on success');
+    is($posts[0][0], 'http://192.168.1.200:3030/wikidata_venues/sparql', 'fuseki tool uses wikidata_venues endpoint by default');
+    like($posts[0][1], qr/GRAPH \?graph \s*\{\s*\?venue wdt:P31 wd:Q33506 \.\s*\}/s, 'fuseki tool wraps plain queries in GRAPH ?graph');
+
+    @posts = ();
+    $tools{fuseki_sparql_query}{code}->($tool, {
+        query => 'SELECT ?venue WHERE { GRAPH <urn:wgraph:spain> { ?venue wdt:P31 wd:Q33506 . } } LIMIT 5',
+    });
+    unlike($posts[0][1], qr/GRAPH \?graph \{ .* GRAPH <urn:wgraph:spain>/s, 'fuseki tool does not double-wrap explicit GRAPH queries');
+}
 
 like($tools{current_time}{code}->($tool, {}), qr/^Current local time:/, 'current_time returns formatted line');
 like($tools{time_in}{code}->($tool, { zone => '  Europe/London  ' }), qr/Europe\/London/, 'time_in trims zone');
