@@ -57,12 +57,13 @@ use Bot::Runtime::MCPServer qw(build_mcp_server);
     sub new {
         my ($class) = @_;
         my $self = bless {
-            memory  => TestRuntimeMemory->new,
-            irc     => TestRuntimeIRC->new,
-            infos   => [],
-            pms     => [],
-            cpan    => [],
-            urls    => [],
+            memory   => TestRuntimeMemory->new,
+            irc      => TestRuntimeIRC->new,
+            infos    => [],
+            pms      => [],
+            cpan     => [],
+            urls     => [],
+            searches => [],
         }, $class;
         return $self;
     }
@@ -78,6 +79,11 @@ use Bot::Runtime::MCPServer qw(build_mcp_server);
         my ($self, $url) = @_;
         push @{ $self->{urls} }, $url;
         return "summary:$url";
+    }
+    sub _search_web {
+        my ($self, $query, $limit) = @_;
+        push @{ $self->{searches} }, [$query, $limit];
+        return "search:$query:$limit";
     }
     sub _current_local_time_text { return '2026-04-03 09:10 MDT' }
     sub _time_text_for_zone {
@@ -106,7 +112,7 @@ is($server->{name}, 'unit-tools', 'server name set from argument');
 
 my %tools = map { ($_->{name} => $_) } @{ $server->{tools} || [] };
 for my $name (qw(
-    stay_silent set_alarm cpan_module summarize_url fuseki_sparql_query current_time time_in
+    stay_silent set_alarm cpan_module summarize_url search_web fuseki_sparql_query current_time time_in
     recall_history save_note recall_notes update_note delete_note send_private_message whois
 )) {
     ok($tools{$name}, "$name tool registered");
@@ -155,6 +161,15 @@ is($tools{cpan_module}{code}->($tool, { name => '   ' }), 'Module name is requir
 is($tools{summarize_url}{code}->($tool, { url => '  https://example.com  ' }), 'summary:https://example.com', 'summarize_url delegates trimmed URL');
 is_deeply($bot->{urls}, ['https://example.com'], 'summary delegate captured URL');
 is($tools{summarize_url}{code}->($tool, { url => '   ' }), 'URL is empty.', 'summarize_url rejects empty URL');
+
+is($tools{search_web}{code}->($tool, { query => '  perl mcp  ' }), 'search:perl mcp:2', 'search_web delegates trimmed query with default limit');
+is_deeply($bot->{searches}[0], ['perl mcp', 2], 'search_web delegate captured defaulted search');
+is($tools{search_web}{code}->($tool, { query => '  perl mcp  ', limit => 99 }), 'search:perl mcp:5', 'search_web clamps high limits');
+is_deeply($bot->{searches}[1], ['perl mcp', 5], 'search_web delegate captured clamped search');
+is($tools{search_web}{code}->($tool, { query => '   ' }), 'Search query is empty.', 'search_web rejects empty query');
+like($tools{search_web}{description}, qr/defaults to 2/i, 'search_web description documents default limit');
+like($tools{search_web}{description}, qr/Do NOT use this for structured venue-database questions/i, 'search_web description warns against Fuseki crossover');
+like($tools{search_web}{description}, qr/prefer `fuseki_sparql_query`/i, 'search_web description points venue facts to Fuseki');
 
 like($tools{fuseki_sparql_query}{description}, qr/Do not invent or guess type IDs/, 'fuseki tool description warns against guessing type ids');
 like($tools{fuseki_sparql_query}{description}, qr/do at most one broader follow-up query/i, 'fuseki tool description limits iterative retries');
