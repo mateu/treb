@@ -6,3 +6,4 @@ requires 'MCP::Server';
 requires 'Langertha::Raider';
 requires 'DBD::SQLite';
 requires 'Net::Async::HTTP';
+requires 'IO::Async::SSL';
