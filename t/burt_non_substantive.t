@@ -19,6 +19,11 @@ ok($bot->_is_non_substantive_output('(Silent - Treb\'s greeting is bot-to-bot ba
 ok($bot->_is_non_substantive_output('(Silent - continuing bot-to-bot banter without human involvement.)'), 'continued silent-policy narration is non-substantive');
 ok($bot->_is_non_substantive_output('(Silence from the attic.)'), 'attic silence line is non-substantive');
 ok($bot->_is_non_substantive_output('(The attic holds its peace.)'), 'attic peace line is non-substantive');
+ok($bot->_is_non_substantive_output('Staying silent.'), 'plain staying silent line is non-substantive');
+ok($bot->_is_non_substantive_output('Remaining quiet.'), 'plain remaining quiet line is non-substantive');
+ok($bot->_is_non_substantive_output('Just observing.'), 'plain observing line is non-substantive');
+ok($bot->_is_non_substantive_output('Listening.'), 'plain listening line is non-substantive');
 ok(!$bot->_is_non_substantive_output('mateu: the chickens are in ok.'), 'substantive line not non-substantive');
+ok(!$bot->_is_non_substantive_output('Use cpanm.'), 'brief actionable answer remains substantive');
 
 done_testing;

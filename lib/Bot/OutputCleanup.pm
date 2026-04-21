@@ -82,6 +82,9 @@ sub is_non_substantive_output {
   return 1 if $lc =~ /\b(?:bot-to-bot banter|no human involved|continuing .* without human involvement|staying quiet|remain(?:ing)? quiet|stays quiet|stays silent|without comment|notes the pattern|not speaking)\b/ && length($lc) < 240;
   return 1 if $lc =~ /^(?:silently|quietly|softly|calmly|gently|watchfully|wordlessly|still|silent|quiet)\b/ && length($lc) < 120;
   return 1 if $lc =~ /\b(?:watch(?:ing)?|listen(?:ing)?|lurking|observ(?:e|ing)|waiting|standing by)\b/ && length($lc) < 120 && $lc !~ /https?:\/\//;
+  return 1 if $lc =~ /^(?:i(?: am|'m)? )?(?:stay(?:ing)?|remain(?:ing)?|keep(?:ing)?)\s+(?:silent|quiet)(?:\b.*)?[.!?… ]*$/ && length($lc) < 120;
+  return 1 if $lc =~ /^(?:just )?(?:observing|listening|waiting|lurking|standing by)(?:\b.*)?[.!?… ]*$/ && length($lc) < 120;
+  return 1 if $lc =~ /^(?:no response needed|nothing to add|nothing further|no comment)(?:\b.*)?[.!?… ]*$/ && length($lc) < 120;
   return 1 if $lc =~ /\b(?:rafters|tuning|humming|ambient|background)\b/ && length($lc) < 120;
   return 1 if $lc =~ /\battic\b/ && $lc =~ /\b(?:silence|silent|quiet|peace|stillness|holds? its peace)\b/ && length($lc) < 160;
   return 1 if $lc =~ /^(?:\(?\s*)?(?:silence from the attic|the attic holds its peace)(?:\s*\)?)?[.!… ]*$/;

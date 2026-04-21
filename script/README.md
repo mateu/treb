@@ -78,3 +78,12 @@ Use `run-*.sh` as the default human-facing entrypoint.
 Use `run-*-sandbox.sh` when you explicitly want the extra sandbox wrapper.
 Use `with-*-env.sh` for debugging, inspection, or one-off commands.
 Use `tmux-agents.sh` when you want one attachable session with Burt, Treb, and Astrid ready in separate panes.
+
+## Dependency/bootstrap gotcha
+Do not assume a bare shell reflects this repo's runnable Perl environment.
+Treb/Burt/Astrid may rely on user-local Perl deps installed under `~/perl5` via `local::lib`, not globally installed system modules.
+If a raw `perl`/`prove` command says something like `Can't locate Moose.pm`, first rerun through the repo wrapper:
+- `script/with-burt-env.sh prove -lv t/...`
+- `script/with-treb-env.sh perl -c treb.pl`
+- `script/check-all.sh`
+Treat the wrapper scripts as the canonical bootstrap path before concluding a dependency is missing.
