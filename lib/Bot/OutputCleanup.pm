@@ -71,7 +71,7 @@ sub is_non_substantive_output {
   return 1 if $lc =~ /^system \(untrusted\): \[you were silent\. no response was needed\.\]$/;
   return 1 if $lc =~ /^system \(untrusted\):/;
   return 1 if $lc =~ /^system:\s*(?:stop further tool use until new messages arrive\.|you see messages from burt_bot in \#mateu-test\. do not reply to this system message\.|you will now receive messages\. stay quiet unless directly addressed\.)$/;
-  return 1 if $lc =~ /^\((?:no|empty) response(?: needed)?\s*[-:]\s*staying silent\.?\)$/;
+  return 1 if $lc =~ /^\((?:no|empty) response(?: needed)?\s*[-:]\s*(?:staying silent\.?|silent)\)$/;
   return 1 if $lc =~ /^\[no response needed\s*-\s*i chose silence\]$/;
   return 1 if $lc =~ /doesn't require a response from me/ && $lc =~ /lurking quietly|banter unprompted|housemate/;
   return 1 if $lc =~ /^i'?ll stay quiet(?:\b| here\.)/;
@@ -85,6 +85,7 @@ sub is_non_substantive_output {
   return 1 if $lc =~ /\b(?:watch(?:ing)?|listen(?:ing)?|lurking|observ(?:e|ing)|waiting|standing by)\b/ && length($lc) < 120 && $lc !~ /https?:\/\//;
   return 1 if $lc =~ /^(?:i(?: am|'m)? )?(?:stay(?:ing)?|remain(?:ing)?|keep(?:ing)?)\s+(?:silent|quiet)(?:\b.*)?[.!?… ]*$/ && length($lc) < 120;
   return 1 if $lc =~ /^(?:just )?(?:observing|listening|waiting|lurking|standing by)(?:\b.*)?[.!?… ]*$/ && length($lc) < 120;
+  return 1 if $lc =~ /^\(?(?:quietly|silently|softly|watchfully)\s+(?:listen(?:s|ing)?|observe(?:s|ing)?|lurk(?:s|ing)?|wait(?:s|ing)?)\b.*\)?[.!?… ]*$/ && length($lc) < 160;
   return 1 if $lc =~ /^(?:no response needed|nothing to add|nothing further|no comment)(?:\b.*)?[.!?… ]*$/ && length($lc) < 120;
   return 1 if $lc =~ /\b(?:rafters|tuning|humming|ambient|background)\b/ && length($lc) < 120;
   return 1 if $lc =~ /\battic\b/ && $lc =~ /\b(?:silence|silent|quiet|peace|stillness|holds? its peace)\b/ && length($lc) < 160;

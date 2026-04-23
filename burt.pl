@@ -158,6 +158,8 @@ sub _is_non_substantive_output {
   $t =~ s/^\s+|\s+$//g;
   return 1 unless length $t;
   return 1 if $self->_is_trivial_parenthetical($t);
+  my $shared_non_substantive = Bot::OutputCleanup::is_non_substantive_output($text);
+  return 1 if $shared_non_substantive;
 
   # Burt is intentionally more conversational/atmospheric than Treb.
   # Preserve a few of the older permissive guardrails here so shared
@@ -166,7 +168,7 @@ sub _is_non_substantive_output {
   return 0 if $t =~ /[:;]/;
   return 0 if length($t) > 180;
 
-  return Bot::OutputCleanup::is_non_substantive_output($text);
+  return $shared_non_substantive;
 }
 
 sub _is_repeated_parenthetical_output {

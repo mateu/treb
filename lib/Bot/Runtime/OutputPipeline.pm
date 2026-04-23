@@ -30,7 +30,7 @@ sub clean_ai_output {
   $text =~ s/^\s*system\s*:\s*(?:Stop further tool use until new messages arrive\.|You see messages from burt_bot in \#mateu-test\. Do not reply to this system message\.|You will now receive messages\. Stay quiet unless directly addressed\.)\s*\n?//img;
   $text =~ s/^\s*I stayed silent\b[^\n]*\n?//img;
   $text =~ s/^\s*I am staying silent\b[^\n]*\n?//img;
-  $text =~ s/^\s*\((?:No|Empty) response(?: needed)?\s*[-:]\s*staying silent\.?\)\s*\n?//img;
+  $text =~ s/^\s*\((?:No|Empty) response(?: needed)?\s*[-:]\s*(?:staying silent\.?|silent)\)\s*\n?//img;
   $text =~ s/^\s*\[No response needed\s*-\s*I chose silence\]\s*\n?//img;
   $text =~ s/^\s*[^\n]*doesn't require a response from me\.[^\n]*\n?//img;
   $text =~ s/^\s*[^\n]*we don't banter unprompted\.[^\n]*\n?//img;
