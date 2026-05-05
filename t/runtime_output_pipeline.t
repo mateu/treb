@@ -59,4 +59,24 @@ is_deeply(
   'applies configured log label prefix',
 );
 
+my $silence_bot = TestBot->new;
+my $silence_cleaned = clean_ai_output(
+  self => $silence_bot,
+  text => 'status: Remaining quiet.',
+);
+
+is($silence_cleaned, 'IRC:', 'collapses status-prefixed silence intent before send');
+
+my $substantive_bot = TestBot->new;
+my $substantive_cleaned = clean_ai_output(
+  self => $substantive_bot,
+  text => 'No output file was generated because the command failed.',
+);
+
+is(
+  $substantive_cleaned,
+  'IRC:No output file was generated because the command failed.',
+  'does not collapse substantive no-output diagnostic text',
+);
+
 done_testing;

@@ -33,7 +33,10 @@ my @non_substantive_cases = (
   ['(no output)', 'parenthesized no-output artifact is non-substantive'],
   ['No output.', 'bare no-output artifact is non-substantive'],
   ['<success>Bot chose silence.</success>', 'success-wrapped silence artifact is non-substantive'],
-  ['success: Bot chose silence.', 'success-prefixed silence artifact is non-substantive'],
+  ['success: Bot chose silence.</success>', 'malformed success-prefixed silence artifact is non-substantive'],
+  ['<output>No output.</output>', 'output-wrapped no-output artifact is non-substantive'],
+  ['<response>Nothing to add.</response>', 'response-wrapped nothing-to-add artifact is non-substantive'],
+  ['status: Remaining quiet.', 'status-prefixed remaining-quiet artifact is non-substantive'],
   ['Staying silent.', 'plain staying silent line is non-substantive'],
   ['Remaining quiet.', 'plain remaining quiet line is non-substantive'],
   ['Just observing.', 'plain observing line is non-substantive'],
@@ -48,6 +51,10 @@ for my $case (@non_substantive_cases) {
 my @substantive_cases = (
   ['mateu: the chickens are in ok.', 'substantive line not non-substantive'],
   ['Use cpanm.', 'brief actionable answer remains substantive'],
+  ['No output file was generated because the command failed.', 'diagnostic no-output explanation remains substantive'],
+  ['Set SILENT_MODE=1 before running the test.', 'technical silent-mode instruction remains substantive'],
+  ['https://example.com/no-output', 'URL mentioning no-output remains substantive'],
+  ['The result is quiet because the amp is muted.', 'explanatory quiet sentence remains substantive'],
 );
 
 for my $case (@substantive_cases) {

@@ -10,6 +10,8 @@ use Encode ();
 our @EXPORT_OK = qw(
   repair_mojibake_text
   clean_text_for_irc
+  normalize_silence_intent_text
+  is_silence_intent_output
   is_non_substantive_output
   cleanup_log_preview
   cleanup_change_message
@@ -51,6 +53,57 @@ sub clean_text_for_irc {
   return $text;
 }
 
+sub normalize_silence_intent_text {
+  my ($text) = @_;
+  return '' unless defined $text;
+
+  $text =~ s/^\s+|\s+$//g;
+  return '' unless length $text;
+
+  my $prev = '';
+  my $i = 0;
+  while ($text ne $prev && $i++ < 4) {
+    $prev = $text;
+    $text =~ s/^\s*<(?:success|output|response)\b[^>]*>\s*(.*?)\s*<\/(?:success|output|response)>\s*$/$1/is;
+    $text =~ s/^\s*(?:success|result|status)\s*:\s*//i;
+    $text =~ s/^\s+|\s+$//g;
+  }
+
+  return $text;
+}
+
+sub is_silence_intent_output {
+  my ($text) = @_;
+  return 0 unless defined $text;
+
+  my $normalized = normalize_silence_intent_text($text);
+  return 0 unless length $normalized;
+  return 0 if length($normalized) > 200;
+
+  my $lc = lc $normalized;
+  $lc =~ s/\s+/ /g;
+
+  return 0 if $lc =~ /https?:\/\//;
+  return 0 if $lc =~ /\b(?:because|since|when|while|after|before|if|but|however|except|unless|for example)\b/;
+
+  return 1 if $lc =~ /^\(?\s*no output\s*\)?[.!?… ]*$/;
+  return 1 if $lc =~ /^\(?\s*(?:no|empty) response(?: needed)?(?:\s*[-:]\s*(?:staying silent\.?|silent))?\s*\)?[.!?… ]*$/;
+  return 1 if $lc =~ /^(?:no response needed|nothing to add|nothing further|no comment)(?:\b.*)?[.!?… ]*$/;
+  return 1 if $lc =~ /^(?:i(?: am|'m)?\s+)?(?:stay(?:ing)?|remain(?:ing)?|keep(?:ing)?|choose|chose)\s+(?:silent|quiet|to stay silent|to remain silent|not to respond)(?:\b.*)?[.!?… ]*$/;
+  return 1 if $lc =~ /^(?:bot|assistant|i)\s+(?:chose|choose|chooses|is choosing)\s+(?:silence|to stay silent|not to respond)(?:\b.*)?[.!?… ]*$/;
+  return 1 if $lc =~ /^(?:just\s+)?(?:observing|listening|waiting|lurking|standing by)(?:\b.*)?[.!?… ]*$/;
+
+  if (
+    $lc =~ /\b(?:silent|silence|quiet|no output|no response|no reply|not to respond|nothing to add|nothing further|no comment|staying silent|remaining quiet|sits this out)\b/
+    && $lc !~ /\b(?:error|failed|fix|bug|issue|todo|next|run|command|path|file|test|result|output:)\b/
+    && $lc !~ /[0-9]{2,}/
+  ) {
+    return 1;
+  }
+
+  return 0;
+}
+
 sub is_non_substantive_output {
   my ($text) = @_;
   return 1 unless defined $text;
@@ -73,8 +126,7 @@ sub is_non_substantive_output {
   return 1 if $lc =~ /^system:\s*(?:stop further tool use until new messages arrive\.|you see messages from burt_bot in \#mateu-test\. do not reply to this system message\.|you will now receive messages\. stay quiet unless directly addressed\.)$/;
   return 1 if $lc =~ m{^<success>\s*bot chose silence\.\s*</success>$};
   return 1 if $lc =~ /^success:\s*bot chose silence\.?$/;
-  return 1 if $lc =~ /^\(?\s*(?:no|empty) response(?: needed)?(?:\s*[-:]\s*(?:staying silent\.?|silent))?\s*\)?$/;
-  return 1 if $lc =~ /^\(?\s*no output\s*\)?[.!?… ]*$/;
+  return 1 if is_silence_intent_output($text);
   return 1 if $lc =~ /^\[no response needed\s*-\s*i chose silence\]$/;
   return 1 if $lc =~ /doesn't require a response from me/ && $lc =~ /lurking quietly|banter unprompted|housemate/;
   return 1 if $lc =~ /^i'?ll stay quiet(?:\b| here\.)/;
