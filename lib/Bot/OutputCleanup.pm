@@ -71,7 +71,10 @@ sub is_non_substantive_output {
   return 1 if $lc =~ /^system \(untrusted\): \[you were silent\. no response was needed\.\]$/;
   return 1 if $lc =~ /^system \(untrusted\):/;
   return 1 if $lc =~ /^system:\s*(?:stop further tool use until new messages arrive\.|you see messages from burt_bot in \#mateu-test\. do not reply to this system message\.|you will now receive messages\. stay quiet unless directly addressed\.)$/;
+  return 1 if $lc =~ m{^<success>\s*bot chose silence\.\s*</success>$};
+  return 1 if $lc =~ /^success:\s*bot chose silence\.?$/;
   return 1 if $lc =~ /^\(?\s*(?:no|empty) response(?: needed)?(?:\s*[-:]\s*(?:staying silent\.?|silent))?\s*\)?$/;
+  return 1 if $lc =~ /^\(?\s*no output\s*\)?[.!?… ]*$/;
   return 1 if $lc =~ /^\[no response needed\s*-\s*i chose silence\]$/;
   return 1 if $lc =~ /doesn't require a response from me/ && $lc =~ /lurking quietly|banter unprompted|housemate/;
   return 1 if $lc =~ /^i'?ll stay quiet(?:\b| here\.)/;
