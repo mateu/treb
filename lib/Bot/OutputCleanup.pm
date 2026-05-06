@@ -64,8 +64,8 @@ sub normalize_silence_intent_text {
   my $i = 0;
   while ($text ne $prev && $i++ < 4) {
     $prev = $text;
-    $text =~ s/^\s*<(?:success|output|response)\b[^>]*>\s*(.*?)\s*<\/(?:success|output|response)>\s*$/$1/is;
-    $text =~ s/^\s*(?:success|result|status)\s*:\s*//i;
+    $text =~ s/^\s*<(?:success|error|output|response)\b[^>]*>\s*(.*?)\s*<\/(?:success|error|output|response)>\s*$/$1/is;
+    $text =~ s/^\s*(?:success|error|result|status)\s*:\s*//i;
     $text =~ s/^\s+|\s+$//g;
   }
 
@@ -89,12 +89,13 @@ sub is_silence_intent_output {
   return 1 if $lc =~ /^\(?\s*no output\s*\)?[.!?… ]*$/;
   return 1 if $lc =~ /^\(?\s*(?:no|empty) response(?: needed)?(?:\s*[-:]\s*(?:staying silent\.?|silent))?\s*\)?[.!?… ]*$/;
   return 1 if $lc =~ /^(?:no response needed|nothing to add|nothing further|no comment)(?:\b.*)?[.!?… ]*$/;
+  return 1 if $lc =~ /^stay silent chosen\.?(?: no message sent\.?)?$/;
   return 1 if $lc =~ /^(?:i(?: am|'m)?\s+)?(?:stay(?:ing)?|remain(?:ing)?|keep(?:ing)?|choose|chose)\s+(?:silent|quiet|to stay silent|to remain silent|not to respond)(?:\b.*)?[.!?… ]*$/;
   return 1 if $lc =~ /^(?:bot|assistant|i)\s+(?:chose|choose|chooses|is choosing)\s+(?:silence|to stay silent|not to respond)(?:\b.*)?[.!?… ]*$/;
   return 1 if $lc =~ /^(?:just\s+)?(?:observing|listening|waiting|lurking|standing by)(?:\b.*)?[.!?… ]*$/;
 
   if (
-    $lc =~ /\b(?:silent|silence|quiet|no output|no response|no reply|not to respond|nothing to add|nothing further|no comment|staying silent|remaining quiet|sits this out)\b/
+    $lc =~ /\b(?:silent|silence|quiet|no output|no response|no reply|no message sent|not to respond|nothing to add|nothing further|no comment|staying silent|remaining quiet|stay silent chosen|sits this out)\b/
     && $lc !~ /\b(?:error|failed|fix|bug|issue|todo|next|run|command|path|file|test|result|output:)\b/
     && $lc !~ /[0-9]{2,}/
   ) {

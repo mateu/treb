@@ -37,6 +37,9 @@ my @non_substantive_cases = (
   ['<output>No output.</output>', 'output-wrapped no-output artifact is non-substantive'],
   ['<response>Nothing to add.</response>', 'response-wrapped nothing-to-add artifact is non-substantive'],
   ['status: Remaining quiet.', 'status-prefixed remaining-quiet artifact is non-substantive'],
+  ['<error>Stay silent chosen. No message sent.</error>', 'error-wrapped stay-silent artifact is non-substantive'],
+  ['error: Stay silent chosen. No message sent.</error>', 'malformed error-prefixed stay-silent artifact is non-substantive'],
+  ['result: No message sent.', 'result-prefixed no-message artifact is non-substantive'],
   ['Staying silent.', 'plain staying silent line is non-substantive'],
   ['Remaining quiet.', 'plain remaining quiet line is non-substantive'],
   ['Just observing.', 'plain observing line is non-substantive'],
@@ -55,6 +58,8 @@ my @substantive_cases = (
   ['Set SILENT_MODE=1 before running the test.', 'technical silent-mode instruction remains substantive'],
   ['https://example.com/no-output', 'URL mentioning no-output remains substantive'],
   ['The result is quiet because the amp is muted.', 'explanatory quiet sentence remains substantive'],
+  ['error: Failed to send message because Nick is required.', 'real send error remains substantive'],
+  ['<error>SPARQL Error HTTP 500: Fuseki failed.</error>', 'real wrapped tool error remains substantive'],
 );
 
 for my $case (@substantive_cases) {

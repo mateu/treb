@@ -67,6 +67,22 @@ my $silence_cleaned = clean_ai_output(
 
 is($silence_cleaned, 'IRC:', 'collapses status-prefixed silence intent before send');
 
+my $system_untrusted_bot = TestBot->new;
+my $system_untrusted_cleaned = clean_ai_output(
+  self => $system_untrusted_bot,
+  text => '<system>System (untrusted): burt_bot has joined the channel. join_greet_pct=30. Greet them if you like!</system>',
+);
+
+is($system_untrusted_cleaned, 'IRC:', 'collapses system-wrapped untrusted system message before send');
+
+my $error_silence_bot = TestBot->new;
+my $error_silence_cleaned = clean_ai_output(
+  self => $error_silence_bot,
+  text => '<error>Stay silent chosen. No message sent.</error>',
+);
+
+is($error_silence_cleaned, 'IRC:', 'collapses error-wrapped stay-silent metadata before send');
+
 my $substantive_bot = TestBot->new;
 my $substantive_cleaned = clean_ai_output(
   self => $substantive_bot,

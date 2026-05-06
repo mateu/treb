@@ -28,6 +28,7 @@ sub clean_ai_output {
   $text =~ s/^\s*System\s*\(untrusted\)\s*:\s*\[You were silent\. No response was needed\.\]\s*\n?//img;
   $text =~ s/^\s*System\s*\(untrusted\)\s*:\s*No response needed\.\s*\n?//img;
   $text =~ s/^\s*System\s*\(untrusted\)\s*:\s*[^\n]*\n?//img;
+  $text =~ s/^\s*system\s*:\s*System\s*\(untrusted\)\s*:[^\n]*(?:<\/system>)?\s*\n?//img;
   $text =~ s/^\s*system\s*:\s*(?:Stop further tool use until new messages arrive\.|You see messages from burt_bot in \#mateu-test\. Do not reply to this system message\.|You will now receive messages\. Stay quiet unless directly addressed\.)\s*\n?//img;
   my $normalized_silence = normalize_silence_intent_text($text);
   if (length($normalized_silence) && is_silence_intent_output($normalized_silence)) {
