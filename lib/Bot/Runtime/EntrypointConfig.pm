@@ -83,13 +83,14 @@ sub _normalize_non_negative_int {
 sub load_entrypoint_config {
   my (%args) = @_;
   my $default_nick = $args{default_nick};
+  my $default_identity_slug = $args{default_identity_slug};
 
   my @names = default_bot_names();
   my $bot_nick = _env_string('IRC_NICKNAME', $default_nick || $names[rand @names] . int(rand(999)));
 
   return {
     bot_nick           => $bot_nick,
-    bot_identity_slug  => lc(_env_string('BOT_IDENTITY_SLUG', $bot_nick || 'bot')),
+    bot_identity_slug  => lc(_env_string('BOT_IDENTITY_SLUG', $default_identity_slug || $bot_nick || 'bot')),
     owner              => _env_string('OWNER', _env_string('USER', 'unknown')),
     max_line           => _env_number(name => 'MAX_LINE_LENGTH', default => 400, min => 1),
     buffer_delay       => _env_number(name => 'BUFFER_DELAY', default => 1.5),

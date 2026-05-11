@@ -10,6 +10,27 @@ Current baseline:
 
 This repo is the clean home for the bot, separate from the earlier Squirt/Koan testbed history.
 
+
+## critic / critic_bot
+
+`critic` is a constructive adversarial companion bot: Socratic questioner, helpful critic, red-team reviewer, and devil’s advocate. Its IRC nickname is `critic_bot`, matching the Treb/Burt short-name plus IRC-name pattern. It shares the Treb/Burt runtime pattern and loads:
+
+- `critic.pl`
+- `critic.persona.txt`
+- `critic.mission.txt`
+- `critic.env` / `critic.env.example`
+- `script/run-critic.sh`
+- `script/run-critic-sandbox.sh`
+
+First-pass sandbox run:
+
+```bash
+cp critic.env.example critic.env   # edit if needed
+script/run-critic-sandbox.sh
+```
+
+Default short identity is `critic`; default IRC nickname is `critic_bot`. Address it as `critic_bot` or `critic` when you want pointed but cooperative critique.
+
 ## Local IRC integration harness (live + deterministic)
 
 A first-pass behavior-regression harness is available at:

@@ -57,6 +57,17 @@ ok(grep { $_ eq 'Botsworth' } @names, 'default bot names include expected seed n
 }
 
 {
+  local $ENV{IRC_NICKNAME} = '';
+  local $ENV{BOT_IDENTITY_SLUG} = '';
+  my $cfg = load_entrypoint_config(
+    default_nick          => 'critic_bot',
+    default_identity_slug => 'critic',
+  );
+  is($cfg->{bot_nick}, 'critic_bot', 'default_nick can set IRC-facing bot nick');
+  is($cfg->{bot_identity_slug}, 'critic', 'default_identity_slug can set short identity slug');
+}
+
+{
   local $ENV{BUFFER_DELAY} = 'bogus';
   local $ENV{MAX_LINE_LENGTH} = 0;
   my $cfg = load_entrypoint_config();
