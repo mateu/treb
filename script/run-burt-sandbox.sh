@@ -1,14 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-
-exec systemd-run --user --pty \
-  --unit=burt-sandbox \
-  --description="burt sandbox" \
-  --property=NoNewPrivileges=yes \
-  --property=PrivateTmp=yes \
-  --property=ProtectSystem=strict \
-  --property=ReadWritePaths="$ROOT" \
-  --property=WorkingDirectory="$ROOT" \
-  bash -lc "$ROOT/script/run-burt.sh"
+# The installed persistent unit owns the process and retains the sandbox.
+# Setup instructions: script/README.md (Burt boot persistence).
+exec systemctl --user start burt-sandbox.service

@@ -1,0 +1,19 @@
+[Unit]
+Description=Burt IRC bot sandbox
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=%h/dev/treb
+ExecStart=/usr/bin/bash -lc 'exec "$HOME/dev/treb/script/run-burt.sh"'
+Restart=always
+RestartSec=10s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=%h/dev/treb
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
