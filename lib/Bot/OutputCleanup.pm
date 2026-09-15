@@ -86,7 +86,7 @@ sub is_silence_intent_output {
   return 0 if $lc =~ /https?:\/\//;
   return 0 if $lc =~ /\b(?:because|since|when|while|after|before|if|but|however|except|unless|for example)\b/;
 
-  return 1 if $lc =~ /^\(?\s*no output\s*\)?[.!?… ]*$/;
+  return 1 if $lc =~ /^\(?\s*no (?:output|message)\s*\)?[.!?… ]*$/;
   return 1 if $lc =~ /^\(?\s*(?:no|empty) response(?: needed)?(?:\s*[-:]\s*(?:staying silent\.?|silent))?\s*\)?[.!?… ]*$/;
   return 1 if $lc =~ /^(?:no response needed|nothing to add|nothing further|no comment)(?:\b.*)?[.!?… ]*$/;
   return 1 if $lc =~ /^stay silent chosen\.?(?: no message sent\.?)?$/;

@@ -37,7 +37,7 @@ sub clean_ai_output {
   $text =~ s/^\s*I stayed silent\b[^\n]*\n?//img;
   $text =~ s/^\s*I am staying silent\b[^\n]*\n?//img;
   $text =~ s/^\s*\((?:No|Empty) response(?: needed)?\s*[-:]\s*(?:staying silent\.?|silent)\)\s*\n?//img;
-  $text =~ s/^\s*\(?\s*no output\s*\)?[.!?… ]*(?:\n|\z)//img;
+  $text =~ s/^\s*\(?\s*no (?:output|message)\s*\)?[.!?… ]*(?:\n|\z)//img;
   $text =~ s/^\s*\[No response needed\s*-\s*I chose silence\]\s*\n?//img;
   $text =~ s/^\s*[^\n]*doesn't require a response from me\.[^\n]*\n?//img;
   $text =~ s/^\s*[^\n]*we don't banter unprompted\.[^\n]*\n?//img;
