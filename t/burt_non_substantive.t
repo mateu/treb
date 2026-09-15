@@ -32,6 +32,8 @@ my @non_substantive_cases = (
   ['No response', 'bare no response artifact is non-substantive'],
   ['(no output)', 'parenthesized no-output artifact is non-substantive'],
   ['No output.', 'bare no-output artifact is non-substantive'],
+  ['(no message)', 'parenthesized no-message artifact is non-substantive'],
+  ['No message.', 'bare no-message artifact is non-substantive'],
   ['<success>Bot chose silence.</success>', 'success-wrapped silence artifact is non-substantive'],
   ['success: Bot chose silence.</success>', 'malformed success-prefixed silence artifact is non-substantive'],
   ['<output>No output.</output>', 'output-wrapped no-output artifact is non-substantive'],

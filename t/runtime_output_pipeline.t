@@ -83,6 +83,14 @@ my $error_silence_cleaned = clean_ai_output(
 
 is($error_silence_cleaned, 'IRC:', 'collapses error-wrapped stay-silent metadata before send');
 
+my $no_message_bot = TestBot->new;
+my $no_message_cleaned = clean_ai_output(
+  self => $no_message_bot,
+  text => '(no message)',
+);
+
+is($no_message_cleaned, 'IRC:', 'collapses no-message artifact before send');
+
 my $substantive_bot = TestBot->new;
 my $substantive_cleaned = clean_ai_output(
   self => $substantive_bot,
