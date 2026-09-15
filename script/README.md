@@ -7,7 +7,7 @@
 
 ## Optional sandbox launchers
 - `run-treb-sandbox.sh` — start Treb in a transient user `systemd-run` sandbox
-- `run-burt-sandbox.sh` — start Burt in a transient user `systemd-run` sandbox
+- `run-burt-sandbox.sh` — start Burt via the persistent user `burt-sandbox.service`
 - `run-astrid-sandbox.sh` — start Astrid in a transient user `systemd-run` sandbox
 
 ## Helper env wrappers
@@ -87,3 +87,35 @@ If a raw `perl`/`prove` command says something like `Can't locate Moose.pm`, fir
 - `script/with-treb-env.sh perl -c treb.pl`
 - `script/check-all.sh`
 Treat the wrapper scripts as the canonical bootstrap path before concluding a dependency is missing.
+
+## Burt boot persistence
+
+Burt's sandbox is a persistent user service, installed on Clawd. It starts at
+boot without an interactive login (hunter has linger enabled), restarts after
+process exits with a 10-second delay, and preserves the original sandbox.
+The existing `run-burt.sh` still loads Perl dependencies and `burt.env`.
+The IRC library's Connector plugin retries lost/failed IRC connections.
+
+Install/update the unit from this checkout (expected at `~/dev/treb`):
+
+```sh
+mkdir -p ~/.config/systemd/user
+install -m 644 script/burt-sandbox.service ~/.config/systemd/user/burt-sandbox.service
+systemctl --user daemon-reload
+systemctl --user enable --now burt-sandbox.service
+```
+
+When migrating from the old transient launcher, stop its service **before**
+reloading and enabling the permanent unit. Enable user lingering if absent
+(`loginctl enable-linger hunter`; may require administrator authorization).
+
+```sh
+script/run-burt-sandbox.sh                        # start; safe if already running
+systemctl --user restart burt-sandbox.service     # restart after changes
+systemctl --user stop burt-sandbox.service        # stop without automatic restart
+systemctl --user status burt-sandbox.service
+journalctl --user -u burt-sandbox.service -f       # replaces attached terminal output
+systemctl --user disable --now burt-sandbox.service # stop and disable boot startup
+```
+
+Do not start `run-burt.sh` separately while this service is running.
