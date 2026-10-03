@@ -9,6 +9,16 @@ use Bot::Runtime::OutputPipeline 'clean_ai_output';
 
 our @EXPORT_OK = qw(do_raid);
 
+sub _terminal_silence_cancelled {
+  my ($raider, $result) = @_;
+  return 0 unless ref($result) && $result->can('is_cancelled') && $result->is_cancelled;
+  return 0 unless $raider && $raider->can('plugin_instances');
+  for my $plugin (@{ $raider->plugin_instances || [] }) {
+    return 1 if $plugin->can('terminal_silence_requested') && $plugin->terminal_silence_requested;
+  }
+  return 0;
+}
+
 sub do_raid {
   my (%args) = @_;
 
@@ -85,7 +95,7 @@ sub do_raid {
 
   my $answer = eval {
     my $result = $raider->raid($input);
-    "$result";
+    _terminal_silence_cancelled($raider, $result) ? '__SILENT__' : "$result";
   };
   my $raid_error = $@;
   if ($self->can('_raid_in_progress')) {
@@ -94,7 +104,7 @@ sub do_raid {
 
   if ($raid_error && $raid_error =~ /429|rate.limit/i) {
     my $total_wait = $self->_rate_limit_wait;
-    my $err_channel = $self->_default_channel;
+    my $err_channel = $channel || $self->_default_channel;
     if ($total_wait == 0 && @{$brainfreeze}) {
       my $msg = $brainfreeze->[rand @{$brainfreeze}];
       $self->_send_to_channel($err_channel, $msg);
@@ -118,20 +128,12 @@ sub do_raid {
     $err =~ s/\s+$//;
     $self->error("Raider error: $err");
 
-    if ($has_warm_human_conversation && $err =~ /tool loop exceeded/i) {
-      my $fallback = 'I dug through the available tool results but could not find a reliable match for that request before the tool loop gave up. I would not trust a specific castle/architect answer from this pass.';
-      $self->_send_to_channel(
-        $channel || $self->_default_channel,
-        $fallback,
-      );
-      $self->_processing(0);
-      $self->_schedule_pending_buffers;
-      return;
-    }
-
+    my $fallback = $err =~ /tool loop exceeded/i
+      ? 'I hit the tool-call limit before I could finish that request. Please try again with a narrower question.'
+      : 'My brain is fried. Someone forgot to feed the gerbils that power my CPU.';
     $self->_send_to_channel(
-      $self->_default_channel,
-      'My brain is fried. Someone forgot to feed the gerbils that power my CPU.',
+      $channel || $self->_default_channel,
+      $fallback,
     );
     $self->_processing(0);
     $self->_schedule_pending_buffers;

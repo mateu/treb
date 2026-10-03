@@ -45,6 +45,7 @@ use Bot::Runtime::RaidFlow qw(do_raid);
     return bless {
       replies => $args{replies} || [],
       engine  => Local::RaidFlowEngine->new,
+      plugins => $args{plugins} || [],
     }, $class;
   }
 
@@ -57,6 +58,7 @@ use Bot::Runtime::RaidFlow qw(do_raid);
   }
 
   sub active_engine { return $_[0]->{engine} }
+  sub plugin_instances { return $_[0]->{plugins} }
 }
 
 {
@@ -203,6 +205,44 @@ use Bot::Runtime::RaidFlow qw(do_raid);
     $self->{_bert_reply_lock} = $value if @_ > 1;
     return $self->{_bert_reply_lock};
   }
+}
+
+{
+  package Local::TerminalSilenceResult;
+  use overload '""' => sub { 'Cancelled' }, fallback => 1;
+  sub new { bless {}, shift }
+  sub is_cancelled { 1 }
+}
+
+{
+  package Local::TerminalSilencePlugin;
+  sub new { bless {}, shift }
+  sub terminal_silence_requested { 1 }
+}
+
+{
+  my $raider = Local::RaidFlowRaider->new(
+    replies => [Local::TerminalSilenceResult->new],
+    plugins => [Local::TerminalSilencePlugin->new],
+  );
+  my $bot = Local::RaidFlowBot->new(
+    pending => {
+      input => '<system> a bot joined',
+      channel => '#mateu-test',
+      messages => [
+        { nick => 'system', channel => '#mateu-test', msg => 'joined', source_kind => 'system' },
+      ],
+    },
+    raider => $raider,
+  );
+
+  do_raid(self => $bot, max_line => 400, silent_name => 'Treb');
+
+  is(scalar @{$bot->{sent}}, 0, 'terminal stay_silent cancellation emits no IRC fallback');
+  is($bot->_pending_raid, undef, 'terminal stay_silent clears pending raid');
+  is($bot->_processing, 0, 'terminal stay_silent resets processing');
+  is($bot->{scheduled}, 1, 'terminal stay_silent schedules the next pending buffer');
+  like(join("\n", @{$bot->{info}}), qr/Treb chose to stay silent/, 'terminal stay_silent is logged as silence');
 }
 
 {
@@ -397,9 +437,9 @@ use Bot::Runtime::RaidFlow qw(do_raid);
   my $bot = Local::RaidFlowBot->new(
     pending => {
       input => 'treb_bot: Tell me about a castle in Marseille and who the architect was.',
-      channel => '#ai',
+      channel => '#mateu-test',
       messages => [
-        { nick => 'mateu', channel => '#ai', msg => 'treb_bot: Tell me about a castle in Marseille and who the architect was.', source_kind => 'conversation', warm_human => 1 },
+        { nick => 'mateu', channel => '#mateu-test', msg => 'treb_bot: Tell me about a castle in Marseille and who the architect was.', source_kind => 'conversation', warm_human => 1 },
       ],
     },
     replies => [{ die => 'Raider tool loop exceeded 13 iterations' }],
@@ -413,9 +453,11 @@ use Bot::Runtime::RaidFlow qw(do_raid);
 
   like(
     $bot->{sent}[0]{msg},
-    qr/could not find a reliable match/i,
-    'tool-loop failure for warm human gets uncertainty fallback instead of generic crash message',
+    qr/hit the tool-call limit/i,
+    'tool-loop failure gets a truthful bounded fallback',
   );
+  is($bot->{sent}[0]{channel}, '#mateu-test', 'tool-loop fallback stays in the triggering channel');
+  unlike($bot->{sent}[0]{msg}, qr/castle|architect/i, 'tool-loop fallback does not invent request-specific facts');
   like(
     join("\n", @{$bot->{errors}}),
     qr/Raider error: Raider tool loop exceeded 13 iterations/,
@@ -429,9 +471,9 @@ use Bot::Runtime::RaidFlow qw(do_raid);
   my $bot = Local::RaidFlowBot->new(
     pending => {
       input    => 'prompt',
-      channel  => '#ai',
+      channel  => '#mateu-test',
       messages => [
-        { nick => 'mateu', channel => '#ai', msg => 'hello', source_kind => 'conversation' },
+        { nick => 'mateu', channel => '#mateu-test', msg => 'hello', source_kind => 'conversation' },
       ],
     },
     replies => [{ die => '429 Too Many Requests: rate limit exceeded' }],
@@ -446,6 +488,7 @@ use Bot::Runtime::RaidFlow qw(do_raid);
   isnt($bot->_pending_raid, undef, '429: pending raid is retained');
   ok($bot->_rate_limit_wait > 0, '429: rate_limit_wait is increased');
   is($bot->{sent}[0]{msg}, '*brainfreeze*', '429: brainfreeze message sent on first rate-limit hit');
+  is($bot->{sent}[0]{channel}, '#mateu-test', '429: notice stays in the triggering channel');
   is(scalar @POE::Kernel::delayed, 1, '429: exactly one retry delay is scheduled');
   is($POE::Kernel::delayed[0][0], '_retry_raid', '429: scheduled event is _retry_raid');
 }
