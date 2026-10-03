@@ -135,7 +135,7 @@ sub _tool_specs {
     },
     {
       name         => 'summarize_url',
-      description  => 'Use when the human gives a specific http(s) URL and asks what is on that page or asks for a summary of that exact page. Prefer this over web search for requests like "can you summarize <url>" or "what does this page say?".',
+      description  => 'Use when the human gives a specific http(s) URL and asks what is on that page or asks for a summary of that exact page. Prefer this over web search for requests like "can you summarize <url>" or "what does this page say?". Returns extracted page text (not a finished IRC reply); write the final short answer yourself from that text.',
       input_schema => {
         type       => 'object',
         properties => {

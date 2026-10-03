@@ -66,12 +66,33 @@ sub do_raid {
     }
   }
 
+  # Nested raid (e.g. a tool calling raid again) deadlocks POE/IO::Async.
+  if ($self->can('_raid_in_progress') && $self->_raid_in_progress) {
+    $self->error('Refusing nested raid; tool path attempted re-entrant raider call');
+    $self->_send_to_channel(
+      $channel || $self->_default_channel,
+      'My brain hiccuped on a nested thought. Try that again.',
+    );
+    $self->_pending_raid(undef);
+    $self->_processing(0);
+    $self->_schedule_pending_buffers;
+    return;
+  }
+
+  if ($self->can('_raid_in_progress')) {
+    $self->_raid_in_progress(1);
+  }
+
   my $answer = eval {
     my $result = $raider->raid($input);
     "$result";
   };
+  my $raid_error = $@;
+  if ($self->can('_raid_in_progress')) {
+    $self->_raid_in_progress(0);
+  }
 
-  if ($@ && $@ =~ /429|rate.limit/i) {
+  if ($raid_error && $raid_error =~ /429|rate.limit/i) {
     my $total_wait = $self->_rate_limit_wait;
     my $err_channel = $self->_default_channel;
     if ($total_wait == 0 && @{$brainfreeze}) {
@@ -92,8 +113,8 @@ sub do_raid {
   $self->_rate_limit_wait(0);
   $self->_pending_raid(undef);
 
-  if ($@) {
-    my $err = "$@";
+  if ($raid_error) {
+    my $err = "$raid_error";
     $err =~ s/\s+$//;
     $self->error("Raider error: $err");
 

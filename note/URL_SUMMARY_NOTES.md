@@ -1,5 +1,16 @@
 # URL summary notes
 
+## 2026-10-03 — no nested raid from summarize_url
+
+Live hang on clawd: burt/treb froze after Ollama `/api/chat` returned when the
+model called `summarize_url` for a gist URL. Root cause in-repo:
+`Bot::Runtime::WebTools::summarize_url` called `$self->_raider->raid(...)`
+while already inside an active raid/tool loop. That re-enters the
+single-threaded POE/IO::Async stack and never returns.
+
+Fix: `summarize_url` returns extractive page text only. The outer raid writes
+the IRC answer. `RaidFlow` also refuses nested `do_raid` if `_raid_in_progress`.
+
 ## 2026-03-28 — curl 63 on large pages can still be acceptable
 
 Observed case:

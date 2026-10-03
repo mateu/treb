@@ -298,6 +298,13 @@ sub install_shared_delegates {
         server_name => $self->_mcp_server_name,
       );
     },
+    _raid_in_progress => sub {
+      my ($self, $value) = @_;
+      if (@_ > 1) {
+        $self->{_raid_in_progress} = $value ? 1 : 0;
+      }
+      return $self->{_raid_in_progress} ? 1 : 0;
+    },
   );
 
   my @installed;

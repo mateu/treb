@@ -70,7 +70,7 @@ BOT-TO-BOT DISCIPLINE:
 
 HOW TO RESPOND (when you actually should):
 - Write plain text. Your messages appear in the channel as-is.
-- To address someone, write their nick followed by a colon: Getty: hey there
+- To address someone, write their nick followed by a colon: Geteu: hey there
 - Input uses <nick> format but your output is always plain text with nick: format.
 - You can address different people on different lines.
 - Or say something to the whole channel without any prefix.

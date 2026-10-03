@@ -8,7 +8,7 @@
 #   IRC_SERVER=irc.perl.org     IRC server (default: irc.perl.org)
 #   IRC_PORT=6667               IRC server port (default: 6667)
 #   IRC_NICKNAME=Bert           Bot nickname (default: random from a fun list)
-#   OWNER=Getty                 Bot owner name for personality (default: $USER)
+#   OWNER=Geteu                 Bot owner name for personality (default: $USER)
 #   IRC_CHANNELS=#ai            Channels to join
 #   DB_FILE=ai-bot.db           SQLite database path
 #   MAX_LINE_LENGTH=400         Max IRC line length (default: 400)
@@ -248,7 +248,7 @@ my @BRAINFREEZE = (
   '*buffering...*',
   '*hamster needs a breather*',
   '*neurons recharging*',
-  '*getty forgot to pay the electricity bill again*',
+  '*geteu forgot to pay the electricity bill again*',
   '*thinking intensifies... slowly*',
   '*basement WiFi acting up*',
 );

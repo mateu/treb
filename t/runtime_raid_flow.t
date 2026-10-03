@@ -108,6 +108,12 @@ use Bot::Runtime::RaidFlow qw(do_raid);
     return $self->{_processing};
   }
 
+  sub _raid_in_progress {
+    my ($self, $value) = @_;
+    $self->{_raid_in_progress} = $value if @_ > 1;
+    return $self->{_raid_in_progress} ? 1 : 0;
+  }
+
   sub _raider {
     my ($self, $value) = @_;
     $self->{raider} = $value if @_ > 1;
@@ -442,6 +448,32 @@ use Bot::Runtime::RaidFlow qw(do_raid);
   is($bot->{sent}[0]{msg}, '*brainfreeze*', '429: brainfreeze message sent on first rate-limit hit');
   is(scalar @POE::Kernel::delayed, 1, '429: exactly one retry delay is scheduled');
   is($POE::Kernel::delayed[0][0], '_retry_raid', '429: scheduled event is _retry_raid');
+}
+
+{
+  my $bot = Local::RaidFlowBot->new(
+    pending => {
+      input    => 'nested',
+      channel  => '#ai',
+      messages => [
+        { nick => 'mateu', channel => '#ai', msg => 'hello', source_kind => 'conversation', warm_human => 1 },
+      ],
+    },
+    replies => ['should-not-run'],
+  );
+  $bot->_raid_in_progress(1);
+
+  do_raid(
+    self        => $bot,
+    max_line    => 400,
+    brainfreeze => ['*brainfreeze*'],
+  );
+
+  like($bot->{sent}[0]{msg}, qr/nested thought/i, 'nested raid is refused with a recovery message');
+  like(join("\n", @{$bot->{errors}}), qr/Refusing nested raid/, 'nested raid refusal is logged');
+  is($bot->_pending_raid, undef, 'pending raid cleared on nested refusal');
+  is($bot->_processing, 0, 'processing reset on nested refusal');
+  is($bot->{scheduled}, 1, 'buffers rescheduled after nested refusal');
 }
 
 done_testing;
