@@ -59,7 +59,7 @@ subtest 'format_extractive_url_summary returns page text without raider' => sub 
   like($out, qr/^Extracted page text for https:\/\/gist\.github\.com\/mateu\/example/m, 'labels source URL');
   like($out, qr/Gist Title/, 'includes title');
   like($out, qr/First paragraph with enough characters/, 'includes long chunk');
-  unlike($out, qr/^short$/m, 'skips short fragments');
+  like($out, qr/^short$/m, 'preserves short code and text fragments');
 };
 
 {

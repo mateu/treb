@@ -222,18 +222,9 @@ sub do_raid {
     }
   }
 
-  my @lines = grep { length } map { s/^\s+//r =~ s/\s+$//r } split(/\n/, $answer);
-  my $too_long = grep { length($_) > $max_line } @lines;
-  if ($too_long) {
-    $self->info('Response too long, asking to shorten');
-    $answer = eval {
-      my $retry = $raider->raid(
-        "Your last response had lines over $max_line characters. "
-        . "Rewrite it shorter. Every line must be under $max_line chars."
-      );
-      "$retry";
-    } || $answer;
-  }
+  # Dispatch::send_to_channel already wraps long lines locally. Do not ask the
+  # model to rewrite "your last response": history compression can replace that
+  # response with an internal state summary, which would then be sent to IRC.
 
   my $answer_is_empty_artifact = ($answer =~ /^\(Empty response:/s) ? 1 : 0;
   my $answer_is_non_substantive = $self->_is_non_substantive_output($answer) ? 1 : 0;

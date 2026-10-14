@@ -12,7 +12,8 @@ require './treb.pl';
     sub _mcp_tool_logging_enabled { 0 }
 
     sub _summarize_url {
-        my ($self, $url) = @_;
+        my ($self, $url, $offset) = @_;
+        $self->{_last_summary_offset} = $offset;
         $self->{_last_summary_url} = $url;
         return "summary:$url";
     }
@@ -47,6 +48,9 @@ subtest 'summarize_url delegates to _summarize_url' => sub {
     my $out = $sum_tool->{code}->($tool, { url => '  https://example.com/post  ' });
     is($bot->{_last_summary_url}, 'https://example.com/post', 'URL is trimmed before delegation');
     is($out, 'summary:https://example.com/post', 'delegated summary returned');
+    is($bot->{_last_summary_offset}, 0, 'offset defaults to zero');
+    $sum_tool->{code}->($tool, {url => 'https://example.com/post', offset => 12000});
+    is($bot->{_last_summary_offset}, 12000, 'continuation offset reaches URL fetcher');
 };
 
 subtest 'search_web delegates with MCP default limit=2' => sub {

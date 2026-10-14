@@ -179,5 +179,8 @@ Notes:
 
 - Only `http://` and `https://` URLs are accepted.
 - URL summary is command-only; Treb will not summarize pasted links automatically.
-- The summarizer fetches a single page, extracts readable text, and asks the LLM for a short factual summary.
+- The URL tool returns readable page text to the active model without a nested LLM call. Markdown, source code, and patches retain their formatting.
+- GitHub PR URLs use the public API to retrieve the description and changed-file patches rather than navigation HTML (up to 100 files, with omissions disclosed).
+- Results are bounded to 12,000 characters per call. The MCP `offset` parameter continues explicitly marked truncated results.
+- The IRC sender wraps long reply lines locally; it does not ask the model to rewrite potentially compressed history.
 

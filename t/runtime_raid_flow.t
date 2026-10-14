@@ -519,4 +519,21 @@ use Bot::Runtime::RaidFlow qw(do_raid);
   is($bot->{scheduled}, 1, 'buffers rescheduled after nested refusal');
 }
 
+{
+  my $long_answer = 'oalders: ' . ('Meaningful article text. ' x 30) . 'Done.';
+  my $raider = Local::RaidFlowRaider->new(
+    replies => [$long_answer, '**burt_bot state — condensed** internal profiles'],
+  );
+  my $bot = Local::RaidFlowBot->new(
+    pending => {
+      input => '<oalders> read this article', channel => '#ai',
+      messages => [{nick => 'oalders', channel => '#ai', msg => 'read this article', source_kind => 'conversation'}],
+    }, raider => $raider,
+  );
+  do_raid(self => $bot, max_line => 400, silent_name => 'Burt');
+  is($bot->{sent}[0]{msg}, $long_answer, 'long answer goes to existing local IRC wrapper unchanged');
+  is(scalar @{$raider->{replies}}, 1, 'no second raid that could rewrite an internal compaction summary');
+  is($bot->memory->{rows}[0]{response}, $long_answer, 'stores the human-facing answer rather than internal state');
+}
+
 done_testing;
