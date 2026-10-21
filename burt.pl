@@ -21,6 +21,11 @@ use strict;
 use warnings;
 use lib 'lib';
 
+BEGIN {
+  binmode(STDOUT, ':encoding(UTF-8)');
+  binmode(STDERR, ':encoding(UTF-8)');
+}
+
 use Bot::MemoryStore;
 use Bot::Runtime::Buffering qw(
   buffer_message
