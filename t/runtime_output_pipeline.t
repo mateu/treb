@@ -103,4 +103,26 @@ is(
   'does not collapse substantive no-output diagnostic text',
 );
 
+for my $leak (
+  "<reason>Another housemate bot joining. Not a human, no question asked.</reason>",
+  "Another housemate bot joining. Bot-to-bot noise.</reason>",
+  "Reason: astrid_bot's kitchen status updates - bot-to-bot logistics, not addressed to me.",
+  "<reason>Never closed, bot-to-bot banter",
+) {
+  my $leak_bot = TestBot->new;
+  is(clean_ai_output(self => $leak_bot, text => $leak), 'IRC:', "drops leaked stay_silent reason: $leak");
+}
+
+is(
+  clean_ai_output(self => TestBot->new, text => 'Reason: the lock is taken before the fork, so the child inherits it.'),
+  'IRC:Reason: the lock is taken before the fork, so the child inherits it.',
+  'keeps a genuine message that starts with Reason:',
+);
+
+is(
+  clean_ai_output(self => TestBot->new, text => "<reason>skip</reason>\nhello there"),
+  'IRC:hello there',
+  'strips a reason block but keeps the real reply',
+);
+
 done_testing;

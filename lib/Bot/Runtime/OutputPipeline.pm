@@ -18,6 +18,14 @@ sub clean_ai_output {
   $text =~ s/<think\b[^>]*>.*?<\/think>\s*//gsi;
   $text =~ s/<thinking\b[^>]*>.*?<\/thinking>\s*//gsi;
   $text =~ s/^\s*(?:Thought|Reasoning|Chain[ -]?of[ -]?Thought|Internal Reasoning)\s*:\s*.*?(?=^\S|\z)//gims;
+  # Some models print the stay_silent tool's `reason` argument as plain text instead of calling the tool.
+  $text =~ s/<reason\b[^>]*>.*?<\/reason>\s*//gsi;
+  $text =~ s/<reason\b[^>]*>.*\z//gsi;
+  if ($text =~ /<\/reason>/i
+      || ($text =~ /\A\s*reason\s*:/i && length($text) < 400
+          && $text =~ /not addressed|bot-to-bot|not a human|no human|no question|stay(?:ing)? (?:silent|quiet)|banter|not my (?:moment|place)|noise/i)) {
+    $text = '';
+  }
   $self->_log_cleanup_change($prefix . 'strip_reasoning', $before_strip, $text);
 
   my $before_markup = $text;
