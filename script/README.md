@@ -4,16 +4,19 @@
 - `run-treb.sh` — start Treb normally
 - `run-burt.sh` — start Burt normally
 - `run-astrid.sh` — start Astrid normally
+- `run-critic.sh` — start Critic normally
 
 ## Optional sandbox launchers
-- `run-treb-sandbox.sh` — start Treb in a transient user `systemd-run` sandbox
+- `run-treb-sandbox.sh` — start Treb via the persistent user `treb-sandbox.service`
 - `run-burt-sandbox.sh` — start Burt via the persistent user `burt-sandbox.service`
-- `run-astrid-sandbox.sh` — start Astrid in a transient user `systemd-run` sandbox
+- `run-astrid-sandbox.sh` — start Astrid via the persistent user `astrid-sandbox.service`
+- `run-critic-sandbox.sh` — start Critic via the persistent user `critic-sandbox.service`
 
 ## Helper env wrappers
 - `with-treb-env.sh <cmd>` — run an arbitrary command with Treb's environment loaded
 - `with-burt-env.sh <cmd>` — run an arbitrary command with Burt's environment loaded
 - `with-astrid-env.sh <cmd>` — run an arbitrary command with Astrid's environment loaded
+- `with-critic-env.sh <cmd>` — run an arbitrary command with Critic's environment loaded
 
 ## Quick examples
 - Run the primary live theater regression against Treb's real model:
@@ -119,3 +122,24 @@ systemctl --user disable --now burt-sandbox.service # stop and disable boot star
 ```
 
 Do not start `run-burt.sh` separately while this service is running.
+
+## Treb, Astrid and Critic persistent services
+
+`treb-sandbox.service`, `astrid-sandbox.service` and `critic-sandbox.service` are identical in shape to
+Burt's unit (same sandbox properties, `Restart=always`, 10-second delay) and wrap
+`run-treb.sh` / `run-astrid.sh` / `run-critic.sh`. The matching `run-*-sandbox.sh`
+launchers now just start the unit. Install a bot's unit, then enable it only when you want
+the bot on IRC and starting at boot:
+
+```sh
+install -m 644 script/treb-sandbox.service ~/.config/systemd/user/treb-sandbox.service   # or astrid/critic
+systemctl --user daemon-reload
+systemctl --user enable --now treb-sandbox.service                                       # or astrid/critic
+```
+
+Controls mirror Burt's (swap the name): `systemctl --user restart|stop|status
+treb-sandbox.service`, `journalctl --user -u treb-sandbox.service -f`, and
+`systemctl --user disable --now treb-sandbox.service`. Stop any transient
+`<bot>-sandbox` unit started by the old launcher before enabling the permanent
+one. Critic needs a `critic.env` first (copy `critic.env.example`); without it
+the bot runs on defaults instead of `critic_bot`.
