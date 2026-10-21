@@ -41,7 +41,7 @@ sub build_context_and_input {
 
   my $context = '';
   for my $nick (sort keys %seen_nicks) {
-    my $notes = $self->memory->recall_notes($nick, '', 5);
+    my $notes = $self->memory->recall_notes($nick, '', 5, $ENV{PINNED_NOTE_PCT} // 75);
     if ($notes) {
       $context .= "[Your notes about $nick: $notes]\n";
     }

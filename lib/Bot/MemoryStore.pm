@@ -57,20 +57,33 @@ sub save_note {
 }
 
 sub recall_notes {
-  my ($self, $nick, $query, $limit) = @_;
+  my ($self, $nick, $query, $limit, $pin_pct) = @_;
   $limit //= 10;
+  $pin_pct //= 100;
   my $rows;
   if ($nick) {
     $rows = $self->_dbh->selectall_arrayref(
-      'SELECT id, nick, content FROM notes WHERE nick = ? AND content LIKE ? ORDER BY id DESC LIMIT ?',
-      { Slice => {} }, $nick, "%$query%", $limit,
+      'SELECT id, nick, content FROM notes WHERE nick = ? AND content LIKE ? ORDER BY id DESC',
+      { Slice => {} }, $nick, "%$query%",
     );
   } else {
     $rows = $self->_dbh->selectall_arrayref(
-      'SELECT id, nick, content FROM notes WHERE content LIKE ? ORDER BY id DESC LIMIT ?',
-      { Slice => {} }, "%$query%", $limit,
+      'SELECT id, nick, content FROM notes WHERE content LIKE ? ORDER BY id DESC',
+      { Slice => {} }, "%$query%",
     );
   }
+  # Each pinned note leads with probability $pin_pct; otherwise it ranks by recency like any note.
+  my (@lead, @rest);
+  for my $row (@$rows) {
+    if ($row->{content} =~ /^PINNED:/i && rand(100) < $pin_pct) {
+      push @lead, $row;
+    } else {
+      push @rest, $row;
+    }
+  }
+  my @ordered = (@lead, @rest);
+  splice(@ordered, $limit) if @ordered > $limit;
+  $rows = \@ordered;
   return join("\n", map { "#$_->{id} [$_->{nick}] $_->{content}" } @$rows);
 }
 
