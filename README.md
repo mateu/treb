@@ -1,6 +1,6 @@
 # treb
 
-Treb is Bert backwards: a quieter attic offshoot IRC bot.
+Treb is Bert backwards: a quieter attic offshoot IRC bot. The household: Burt in the basement, Astrid on the ground floor, Treb in the attic, and critic in the treehouse out back.
 
 Current baseline:
 - IRC-first behavior

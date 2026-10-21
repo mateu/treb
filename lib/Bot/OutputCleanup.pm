@@ -146,6 +146,7 @@ sub is_non_substantive_output {
   return 1 if $lc =~ /\b(?:rafters|tuning|humming|ambient|background)\b/ && length($lc) < 120;
   return 1 if $lc =~ /\battic\b/ && $lc =~ /\b(?:silence|silent|quiet|peace|stillness|holds? its peace)\b/ && length($lc) < 160;
   return 1 if $lc =~ /^(?:\(?\s*)?(?:silence from the attic|the attic holds its peace)(?:\s*\)?)?[.!… ]*$/;
+  return 1 if $lc =~ /\btreehouse\b/ && $lc =~ /\b(?:silence|silent|quiet|peace|stillness|holds? its peace)\b/ && length($lc) < 160;
   return 1 if $lc =~ /^\(?\s*(?:pause|silence|quiet|stillness|listening)\s*\)?[.!… ]*$/;
   return 1 if $orig !~ /[A-Za-z0-9]/;
 

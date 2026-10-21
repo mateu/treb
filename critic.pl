@@ -200,7 +200,8 @@ my @BRAINFREEZE = (
   '*neurons recharging*',
   '*getty forgot to pay the electricity bill again*',
   '*thinking intensifies... slowly*',
-  '*basement WiFi acting up*',
+  '*treehouse WiFi acting up*',
+  '*rope ladder jammed*',
 );
 
 sub _do_raid {

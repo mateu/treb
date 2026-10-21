@@ -123,6 +123,7 @@ use Bot::Runtime::RaiderSetup (qw(setup_raider));
 
 subtest 'setup_raider wires mcp, mission, and raider with defaults' => sub {
     local %ENV = %ENV;
+    delete $ENV{FALLBACK_MODELS};
     delete @ENV{qw(ENGINE MODEL API_KEY OLLAMA_URL SYSTEM_PROMPT)};
 
     my @loaded;
@@ -174,6 +175,7 @@ subtest 'setup_raider wires mcp, mission, and raider with defaults' => sub {
 
 subtest 'setup_raider respects Ollama-specific args and custom context' => sub {
     local %ENV = %ENV;
+    delete $ENV{FALLBACK_MODELS};
     $ENV{ENGINE} = 'Ollama';
     $ENV{MODEL} = 'kimi-k2.5:cloud';
     $ENV{API_KEY} = 'test-key';
