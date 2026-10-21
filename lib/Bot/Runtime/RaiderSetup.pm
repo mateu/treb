@@ -77,6 +77,13 @@ sub setup_raider {
     plugins            => \@plugins,
   );
 
+  my $n = 0;
+  for my $fallback_model (grep { length } map { s/^\s+|\s+$//gr } split /,/, $ENV{FALLBACK_MODELS} // '') {
+    next if $fallback_model eq $engine_args{model};
+    my $fallback_engine = $engine_class->new(%engine_args, model => $fallback_model);
+    $raider->add_engine('fallback' . ++$n, engine => $fallback_engine, description => $fallback_model);
+  }
+
   $self->_raider($raider);
   $self->info("Raider ready: $engine_class / " . ($engine->model));
   return $raider;

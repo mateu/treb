@@ -19,6 +19,33 @@ sub _terminal_silence_cancelled {
   return 0;
 }
 
+sub _transient_engine_error {
+  my ($err) = @_;
+  return 0 if $err =~ /tool loop exceeded/i;
+  return $err =~ /\b50[0-4]\b|overload|temporarily|unavailable|timed? ?out/i ? 1 : 0;
+}
+
+# Primary engine first on every raid; fallbacks only for transient failures within this raid.
+sub _raid_with_fallback {
+  my ($self, $raider, $input) = @_;
+  my $can_switch = $raider->can('switch_engine') && $raider->can('engine_catalog');
+  $raider->reset_engine if $can_switch && defined $raider->active_engine_name;
+  my @fallbacks = $can_switch ? sort keys %{ $raider->engine_catalog } : ();
+
+  my $result = eval { $raider->raid($input) };
+  my $err = $@;
+  while ($err && @fallbacks && _transient_engine_error("$err")) {
+    my $name = shift @fallbacks;
+    (my $short = "$err") =~ s/\s+/ /g;
+    $self->info("Engine failed (" . substr($short, 0, 160) . "); switching to $name");
+    $raider->switch_engine($name);
+    $result = eval { $raider->raid($input) };
+    $err = $@;
+  }
+  die $err if $err;
+  return $result;
+}
+
 sub do_raid {
   my (%args) = @_;
 
@@ -94,7 +121,7 @@ sub do_raid {
   }
 
   my $answer = eval {
-    my $result = $raider->raid($input);
+    my $result = _raid_with_fallback($self, $raider, $input);
     _terminal_silence_cancelled($raider, $result) ? '__SILENT__' : "$result";
   };
   my $raid_error = $@;
