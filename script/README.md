@@ -6,6 +6,12 @@
 - `run-astrid.sh` — start Astrid normally
 - `run-critic.sh` — start Critic normally
 
+All four source `connect-stagger.sh` first. The bots share one IP, and
+irc.perl.org (ircd-hybrid 7.2.3) refuses a connection within ~10s of the
+previous attempt from that IP (`ERROR :Trying to reconnect too fast.`), so
+launches queue behind a lock in `log/connect-slot/` and start
+`IRC_CONNECT_GAP` seconds apart (default 15; 0 disables).
+
 ## Optional sandbox launchers
 - `run-treb-sandbox.sh` — start Treb via the persistent user `treb-sandbox.service`
 - `run-burt-sandbox.sh` — start Burt via the persistent user `burt-sandbox.service`
