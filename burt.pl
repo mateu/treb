@@ -24,6 +24,8 @@ use lib 'lib';
 BEGIN {
   binmode(STDOUT, ':encoding(UTF-8)');
   binmode(STDERR, ':encoding(UTF-8)');
+  STDOUT->autoflush(1);
+  STDERR->autoflush(1);
 }
 
 use Bot::MemoryStore;

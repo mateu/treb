@@ -23,6 +23,8 @@ use utf8;
 use Encode qw();
 binmode(STDOUT, ":utf8");
 binmode(STDERR, ":utf8");
+STDOUT->autoflush(1);
+STDERR->autoflush(1);
 use lib 'lib';
 
 use Bot::MemoryStore;
