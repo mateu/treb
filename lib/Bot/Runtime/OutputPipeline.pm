@@ -58,6 +58,13 @@ sub clean_ai_output {
   $text =~ s/^\s*\*system\*\s*[^\n]*still just observing[^\n]*\n?//img;
   $text =~ s/^\s+//;
   $text =~ s/\s+$//;
+  # Models sometimes address themselves ("burt_bot: mateu: hi"); drop a leading own-nick prefix.
+  my $own_nick = $self->can('get_nickname') ? ($self->get_nickname // '') : '';
+  if (length $own_nick) {
+    (my $short = $own_nick) =~ s/(?:_bot|_agent)\z//i;
+    my $nick_re = join '|', map { quotemeta } grep { length } ($own_nick, $short);
+    $text =~ s/^[ \t]*(?:$nick_re)[ \t]*[:,][ \t]*(?=\S)//img;
+  }
   $self->_log_cleanup_change($prefix . 'strip_markup', $before_markup, $text);
 
   my $before_normalize = $text;

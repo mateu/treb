@@ -125,4 +125,34 @@ is(
   'strips a reason block but keeps the real reply',
 );
 
+{
+  package NickedTestBot;
+  our @ISA = ('TestBot');
+  sub get_nickname { 'burt_bot' }
+}
+
+is(
+  clean_ai_output(self => NickedTestBot->new, text => 'burt_bot: mateu: back again.'),
+  'IRC:mateu: back again.',
+  'strips a leading own-nick self-address',
+);
+
+is(
+  clean_ai_output(self => NickedTestBot->new, text => "Burt, hello\nburt_bot: second line"),
+  "IRC:hello\nsecond line",
+  'strips short-alias and per-line own-nick prefixes case-insensitively',
+);
+
+is(
+  clean_ai_output(self => NickedTestBot->new, text => 'treb_bot: burt_bot: is here'),
+  'IRC:treb_bot: burt_bot: is here',
+  'keeps other nick prefixes and mid-line own-nick mentions',
+);
+
+is(
+  clean_ai_output(self => NickedTestBot->new, text => 'burtle: hi'),
+  'IRC:burtle: hi',
+  'does not strip a nick that merely starts with the bot name',
+);
+
 done_testing;
