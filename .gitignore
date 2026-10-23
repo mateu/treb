@@ -12,3 +12,4 @@ burt.env
 log/irc-harness/
 astrid.env
 critic.env
+log/connect-slot/

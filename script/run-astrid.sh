@@ -13,4 +13,7 @@ if [ -f "$ROOT/astrid.env" ]; then
   source "$ROOT/astrid.env"
 fi
 
+# shellcheck disable=SC1091
+source "$ROOT/script/connect-stagger.sh"
+
 exec perl "$ROOT/astrid.pl"

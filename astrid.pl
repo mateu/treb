@@ -40,6 +40,7 @@ use Bot::Runtime::Dispatch ();
 use Bot::Runtime::OutputPipeline ();
 use Bot::Runtime::MethodDelegates ();
 use Bot::Runtime::PresenceEvents ();
+use Bot::Runtime::ConnectionEvents ();
 use Bot::Runtime::PublicMessages ();
 use Bot::Runtime::WebTools ();
 use Bot::Runtime::RaidFlow ();
@@ -313,6 +314,30 @@ event irc_whois => sub {
   Bot::Runtime::PresenceEvents::handle_irc_whois(
     self => $self,
     info => $info,
+  );
+};
+
+event irc_error => sub {
+  my ( $self, $message ) = @_[ OBJECT, ARG0 ];
+  Bot::Runtime::ConnectionEvents::handle_irc_error(
+    self    => $self,
+    message => $message,
+  );
+};
+
+event irc_disconnected => sub {
+  my ( $self, $server ) = @_[ OBJECT, ARG0 ];
+  Bot::Runtime::ConnectionEvents::handle_irc_disconnected(
+    self   => $self,
+    server => $server,
+  );
+};
+
+event irc_socketerr => sub {
+  my ( $self, $error ) = @_[ OBJECT, ARG0 ];
+  Bot::Runtime::ConnectionEvents::handle_irc_socketerr(
+    self  => $self,
+    error => $error,
   );
 };
 

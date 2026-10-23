@@ -13,4 +13,7 @@ if [ -f "$ROOT/critic.env" ]; then
   source "$ROOT/critic.env"
 fi
 
+# shellcheck disable=SC1091
+source "$ROOT/script/connect-stagger.sh"
+
 exec perl "$ROOT/critic.pl"

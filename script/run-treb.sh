@@ -13,4 +13,7 @@ if [ -f "$ROOT/treb.env" ]; then
   source "$ROOT/treb.env"
 fi
 
+# shellcheck disable=SC1091
+source "$ROOT/script/connect-stagger.sh"
+
 exec perl "$ROOT/treb.pl"

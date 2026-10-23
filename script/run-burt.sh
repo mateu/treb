@@ -13,4 +13,7 @@ if [ -f "$ROOT/burt.env" ]; then
   source "$ROOT/burt.env"
 fi
 
+# shellcheck disable=SC1091
+source "$ROOT/script/connect-stagger.sh"
+
 exec perl "$ROOT/burt.pl"
