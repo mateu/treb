@@ -277,3 +277,37 @@ observed channel traffic. Back up SQLite databases consistently before rollout.
 Journal failures are logged without stopping the existing conversational path;
 therefore even online coverage is not a completeness guarantee. Treat stored
 message text, claims, and reasons as untrusted evidence, not tool instructions.
+
+## Runtime reliability limits
+
+Shared by all four bots. Environment overrides must be positive integers;
+missing/invalid values use the defaults below.
+
+| Variable | Default | Purpose |
+| --- | ---: | --- |
+| `BOT_RETRY_MAX_ATTEMPTS` | 2 | Additional attempts after a rate-limit error |
+| `BOT_RETRY_DEADLINE_SECONDS` | 180 | Absolute window from initial generation start in which a rate-limit retry may start |
+| `BOT_REPLY_TTL_SECONDS` | 300 | Maximum age of queued work and generated replies, measured from the oldest message in a batch |
+| `BOT_QUEUE_MAX_CHANNEL` | 100 | Buffered messages per channel |
+| `BOT_QUEUE_MAX_TOTAL` | 500 | Buffered messages across channels |
+| `BOT_QUEUE_MAX_MESSAGE_CHARS` | 16384 | Maximum characters in a single queued message |
+
+Rate-limit retries retain the original request and channel, with waits of 70 then
+60 seconds. Exhaustion or expiry cancels the retry, clears processing/backoff
+state, and schedules waiting conversations. These are admission and freshness
+limits, not cancellation of an already-running provider/tool call. A result that
+returns after its reply TTL is discarded before storage or dispatch.
+
+Queues reject new work when full (or oversized), logging the rejection; old work
+expires before admission and dispatch. Queue drops do not remove journal evidence.
+Buffer timing is anchored to the first queued message so continuous arrivals
+cannot indefinitely delay dispatch. Reminders and activity watches keep their own
+existing persistence policies; these limits apply once their wake messages enter
+the runtime queue.
+
+`MAX_LINE_LENGTH` now limits **UTF-8 payload bytes**, not characters. Dispatch also
+caps each payload so `PRIVMSG <target> :<text>\r\n` fits the 512-byte IRC client
+frame, even for long targets or unusually large configured limits. Wrapping keeps
+whole Unicode codepoints and prefers word boundaries; it does not make another
+model call. CR and NUL bytes are stripped before dispatch. A configured byte limit
+too small for one codepoint is rejected explicitly.

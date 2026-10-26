@@ -5,12 +5,31 @@ use warnings;
 
 use Exporter 'import';
 use Bot::Runtime::Context ();
+use Bot::Runtime::Limits qw(runtime_limit now);
 our @EXPORT_OK = qw(
   buffer_message
   split_priority_messages
   process_buffer_event
   schedule_pending_buffers
 );
+
+# Expire old context before admitting or dispatching messages. Journal evidence
+# lives separately; dropping work here never deletes the conversation journal.
+sub _prune_buffers {
+  my ($self) = @_;
+  my $cutoff = now() - runtime_limit('REPLY_TTL_SECONDS', 300);
+  for my $ch (keys %{$self->_msg_buffer}) {
+    my $queue = $self->_msg_buffer->{$ch};
+    my $before = @$queue;
+    @$queue = grep { ($_->{queued_at} // now()) > $cutoff } @$queue;
+    $self->info("Expired buffered messages for $ch: " . ($before - @$queue)) if $before > @$queue;
+    next if @$queue;
+    delete $self->_msg_buffer->{$ch};
+    if (my $id = delete $self->_buffer_timers->{$ch}) {
+      POE::Kernel->alarm_remove($id);
+    }
+  }
+}
 
 sub buffer_message {
   my (%args) = @_;
@@ -22,18 +41,28 @@ sub buffer_message {
   my $delay   = $args{delay};
   die 'buffer_message requires delay' unless defined $delay;
 
+  _prune_buffers($self);
+  my $total = 0;
+  $total += @$_ for values %{$self->_msg_buffer};
+  if ($total >= runtime_limit('QUEUE_MAX_TOTAL', 500)
+      || @{$self->_msg_buffer->{$channel} || []} >= runtime_limit('QUEUE_MAX_CHANNEL', 100)
+      || length($msg // '') > runtime_limit('QUEUE_MAX_MESSAGE_CHARS', 16384)) {
+    $self->info("Buffer capacity exceeded for $channel; ignoring new work (journal retained)");
+    return;
+  }
   push @{$self->_msg_buffer->{$channel} ||= []}, {
+    %{$extra},
     channel => $channel,
     nick    => $nick,
     msg     => $msg,
-    %{$extra},
+    queued_at => now(),
   };
 
   if (my $id = delete $self->_buffer_timers->{$channel}) {
     POE::Kernel->alarm_remove($id);
   }
 
-  my $id = POE::Kernel->alarm_set(_process_buffer => time() + $delay, $channel);
+  my $id = POE::Kernel->alarm_set(_process_buffer => ($self->_msg_buffer->{$channel}[0]{queued_at} + $delay), $channel);
   $self->_buffer_timers->{$channel} = $id;
 }
 
@@ -56,6 +85,7 @@ sub process_buffer_event {
 
   delete $self->_buffer_timers->{$channel};
 
+  _prune_buffers($self);
   return if $self->_processing;
   my @incoming_messages = @{$self->_msg_buffer->{$channel} || []};
   return unless @incoming_messages;
@@ -88,7 +118,17 @@ sub process_buffer_event {
 
   unless ($raider) {
     $self->info('Raider unavailable; deferring buffered messages');
-    unshift @{$self->_msg_buffer->{$channel} ||= []}, @messages;
+    _prune_buffers($self);
+    my $total = 0;
+    $total += @$_ for values %{$self->_msg_buffer};
+    my $queue = $self->_msg_buffer->{$channel} ||= [];
+    my $room = runtime_limit('QUEUE_MAX_CHANNEL', 100) - @$queue;
+    my $global_room = runtime_limit('QUEUE_MAX_TOTAL', 500) - $total;
+    $room = $global_room if $global_room < $room;
+    $room = 0 if $room < 0;
+    $self->info("Requeue capacity exceeded for $channel; dropping excess work") if @messages > $room;
+    splice @messages, $room if @messages > $room;
+    unshift @$queue, @messages;
     $self->_schedule_pending_buffers if $self->can('_schedule_pending_buffers');
     return;
   }
@@ -104,7 +144,12 @@ sub process_buffer_event {
 
   $self->info("Processing buffer for $channel:\n$input");
 
-  $self->_pending_raid({ input => $input, channel => $channel, messages => \@messages });
+  my $oldest = now();
+  for my $m (@messages) {
+    $oldest = $m->{queued_at} if defined $m->{queued_at} && $m->{queued_at} < $oldest;
+  }
+  $self->_pending_raid({ input => $input, channel => $channel, messages => \@messages,
+    expires_at => $oldest + runtime_limit('REPLY_TTL_SECONDS', 300) });
   $self->_do_raid;
 }
 
@@ -114,6 +159,7 @@ sub schedule_pending_buffers {
   my $delay = $args{delay};
   die 'schedule_pending_buffers requires delay' unless defined $delay;
 
+  _prune_buffers($self);
   for my $ch (keys %{$self->_msg_buffer}) {
     next unless @{$self->_msg_buffer->{$ch} || []};
     next if $self->_buffer_timers->{$ch};
