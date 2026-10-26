@@ -1,6 +1,7 @@
 package Bot::Runtime::MCPServer;
 
 use strict;
+use Bot::Runtime::ConversationMemory ();
 use warnings;
 
 use Exporter 'import';
@@ -451,7 +452,7 @@ sub build_mcp_server {
   my $server_name = $args{server_name} || 'bot-tools';
 
   my $server = MCP::Server->new(name => $server_name, version => '1.0');
-  for my $spec (@{_tool_specs(self => $self)}) {
+  for my $spec (@{_tool_specs(self => $self)}, @{Bot::Runtime::ConversationMemory::conversation_tool_specs($self)}) {
     $server->tool(%{$spec});
   }
 

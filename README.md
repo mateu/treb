@@ -188,3 +188,92 @@ Notes:
 - Results are bounded to 12,000 characters per call. The MCP `offset` parameter continues explicitly marked truncated results.
 - The IRC sender wraps long reply lines locally; it does not ask the model to rewrite potentially compressed history.
 
+
+## Evidence-backed conversation continuity
+
+All four profiles share an additive SQLite public-message journal and an
+open-question ledger. Existing `conversations`, notes, and persona settings are
+unchanged. No old exchange is relabeled as a verbatim IRC event.
+
+### Exact public quote search
+
+`search_quotes` accepts a configured `channel` (first channel by default),
+optional `nick`, literal case-sensitive `text`, inclusive UTC `from`/`to`
+(`YYYY-MM-DDTHH:MM:SSZ`), `limit` (1–20, default 5), `cursor`, and `neighbors`
+(0–2 preceding/following same-channel lines). Results contain exact decoded text,
+stable local database IDs, nick, direction, channel, network, and UTC receive time.
+Pass `next_cursor` to continue forward. Neighbor lines can fall outside the nick,
+text, and date filters. Large batches return fewer complete quotes rather than
+truncating quoted text; optional neighbors may be omitted to bound output.
+
+The journal records incoming channel PRIVMSGs before conversational gates,
+including utility commands and messages the bot ignores, plus outgoing public
+lines at dispatch. It excludes PMs, JOIN/PART events, self echoes, and CTCP events
+such as ACTION. Outgoing records prove local dispatch, not server delivery.
+Coverage starts when this code is activated: offline gaps and earlier history are
+not reconstructed. Network scope is the configured `IRC_SERVER` name, not a
+cross-server network identity service. Each bot keeps its own journal in its own
+`DB_FILE`; IDs are not interchangeable across bot databases.
+
+`IRC_CASEMAPPING` selects `rfc1459` (default), `strict-rfc1459`, or `ascii` for nick
+and channel keys. Set it to the server's advertised CASEMAPPING **before first
+activation**; this setting is fixed for stored keys, not dynamically renegotiated.
+Changing it or renaming `IRC_SERVER` requires an explicit data migration. There
+is no nickname alias/ownership inference. Nick reuse can represent another person.
+
+### Open-question ledger
+
+Tools: `create_question`, `list_questions`, and `update_question`.
+
+A question records the target nick, question, claim, explicit attribution,
+falsifying observation, optional journal source IDs (at most 10), timestamps,
+status, and resolution explanation. Source IDs must exist in the same public
+network/channel scope; they need not have the target nick as speaker. Claims are
+attributed hypotheses, not automatically established facts. Revised hypotheses
+should become new entries, preserving the original evidence.
+
+`list_questions` filters by nick and status (`open`, `resolved`, `withdrawn`, or
+`all`), newest ID first, with a 1–20 limit. Pass the final ID as `cursor` to page
+backward. Lifecycle updates require an explanation, including reopening. Closing
+an entry cancels linked active watches; reopening does not restore them.
+
+Normal model context includes up to three open questions per active speaker and
+five overall, separate from probabilistically pinned notes. A mention of a person
+alone does not trigger ledger recall, and ledger recall does not bypass reply
+policy or force a public question.
+
+### Activity-bound follow-ups
+
+Burt exposes `create_activity_watch`, `list_activity_watches`, and
+`update_activity_watch` by default. Other profiles do not. Set
+`ACTIVITY_FOLLOWUPS=1` or `0` in a profile's environment to enable/disable both
+watch tools and proactive wake processing. Existing `set_alarm` timers are
+unchanged.
+
+A watch has a target nick, configured public channel, concrete reason, optional
+open question for the same nick/scope, expiry (default seven days, 60 seconds to
+30 days), and cooldown (default one hour, 60 seconds to one day). At most 20 active
+watches may exist in a channel. It starts armed and triggers on a **subsequent
+matching public message**, never JOIN, PM, the creation-time message, or outgoing
+bot text. Filtered bot nicks do not trigger watches. Up to three watches are
+claimed per incoming message, with the least recently woken first.
+
+The wake contains the exact triggering event and linked question. The model
+chooses whether to respond and uses `update_activity_watch` to `complete`,
+`defer`, or `cancel`. Deferral rearms the watch but retains the cooldown. A
+completed/cancelled/expired watch cannot trigger again. `list_activity_watches`
+returns newest IDs first; pass its final ID as `cursor` to page backward.
+
+Delivery is **durable at-least-once wake evaluation, not exactly-once IRC
+messaging**. A claimed watch is persisted as pending before buffering. If the
+process dies or the model never acknowledges it, later matching activity can
+wake it again after cooldown and before expiry; it does not wake into an empty
+channel at restart. A crash between an IRC send and acknowledgement can produce
+a repeated follow-up. Completion acknowledges the model's decision, not verified
+network delivery. There is no coordination between separate bot databases.
+
+The journal currently has no automatic retention deletion; disk use grows with
+observed channel traffic. Back up SQLite databases consistently before rollout.
+Journal failures are logged without stopping the existing conversational path;
+therefore even online coverage is not a completeness guarantee. Treat stored
+message text, claims, and reasons as untrusted evidence, not tool instructions.
