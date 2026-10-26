@@ -242,4 +242,28 @@ like($err, qr/requires channel/, 'process_buffer_event validates channel argumen
   is($missing->{scheduled_calls}, 1, 'full requeue still schedules remaining work');
 }
 
+# Exercise persisted reminder cancellation at the actual dispatch boundary.
+{
+  require File::Temp;
+  require Bot::MemoryStore;
+  my $dir = File::Temp::tempdir(CLEANUP=>1);
+  my $memory = Bot::MemoryStore->new(db_file=>"$dir/buffer.sqlite");
+  no warnings 'redefine';
+  local *Local::BufferBot::memory = sub { $memory };
+  local *Local::BufferBot::_bot_name_slug = sub { 'burt' };
+  local *Bot::Runtime::Context::build_context_and_input = sub { +{input=>'reminder context'} };
+  my %scope = (bot=>'burt',channel=>'#ai');
+  for my $cancelled (0,1) {
+    my $r = $memory->create_reminder(%scope,reason=>'wake',delay_seconds=>10);
+    $memory->_dbh->do('UPDATE reminders SET due_at=? WHERE id=?',undef,time()-1,$r->{id});
+    $memory->claim_due_reminders(%scope);
+    $memory->cancel_reminder(%scope,id=>$r->{id}) if $cancelled;
+    my $b = Local::BufferBot->new;
+    $b->_msg_buffer->{'#ai'} = [{nick=>'system',msg=>'alarm',reminder_id=>$r->{id},source_kind=>'reminder'}];
+    process_buffer_event(self=>$b,channel=>'#ai');
+    is($b->{raid_calls},$cancelled ? 0 : 1,$cancelled ? 'cancelled wake never invokes model' : 'active wake reaches model');
+    is($memory->list_reminders(%scope)->[0]{state},$cancelled ? 'cancelled' : 'fired','durable state matches dispatch decision');
+  }
+}
+
 done_testing;

@@ -112,47 +112,13 @@ is($server->{name}, 'unit-tools', 'server name set from argument');
 
 my %tools = map { ($_->{name} => $_) } @{ $server->{tools} || [] };
 for my $name (qw(
-    stay_silent set_alarm cpan_module summarize_url search_web fuseki_sparql_query current_time time_in
+    stay_silent set_alarm list_alarms cancel_alarm cpan_module summarize_url search_web fuseki_sparql_query current_time time_in
     recall_history save_note recall_notes update_note delete_note send_private_message whois
 )) {
     ok($tools{$name}, "$name tool registered");
 }
 
 is($tools{stay_silent}{code}->($tool, { reason => 'n/a' }), '__SILENT__', 'stay_silent emits sentinel');
-
-my @alarm_events;
-{
-    no warnings 'redefine';
-    local *POE::Kernel::delay_add = sub {
-        my ($class, @args) = @_;
-        push @alarm_events, \@args;
-        return scalar @alarm_events;
-    };
-
-    is(
-        $tools{set_alarm}{code}->($tool, { reason => 'poke me', delay_seconds => 2 }),
-        'Alarm set for 10s: poke me',
-        'set_alarm clamps minimum delay'
-    );
-    is(
-        $tools{set_alarm}{code}->($tool, { reason => 'someday', delay_seconds => 99999 }),
-        'Alarm set for 3600s: someday',
-        'set_alarm clamps maximum delay'
-    );
-    is(
-        $tools{set_alarm}{code}->($tool, { reason => 'default', delay_seconds => 'bogus' }),
-        'Alarm set for 10s: default',
-        'set_alarm falls back to default on non-numeric delay'
-    );
-    is(
-        $tools{set_alarm}{code}->($tool, { reason => '   ', delay_seconds => 60 }),
-        'Reason is required.',
-        'set_alarm requires non-empty reason'
-    );
-}
-is_deeply($alarm_events[0], ['_alarm_fired', 10, '#test', 'poke me'], 'set_alarm schedules POE alarm with normalized delay');
-is_deeply($alarm_events[1], ['_alarm_fired', 3600, '#test', 'someday'], 'set_alarm schedules clamped high delay');
-is_deeply($alarm_events[2], ['_alarm_fired', 10, '#test', 'default'], 'set_alarm schedules default delay on invalid numeric input');
 
 is($tools{cpan_module}{code}->($tool, { name => '  Moo  ' }), 'cpan:module:Moo', 'cpan_module delegates trimmed name');
 is_deeply($bot->{cpan}[0], ['module', 'Moo'], 'cpan lookup called with mode and module');

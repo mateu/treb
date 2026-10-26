@@ -2,6 +2,7 @@ package Bot::Runtime::MCPServer;
 
 use strict;
 use Bot::Runtime::ConversationMemory ();
+use Bot::Runtime::Reminders ();
 use warnings;
 
 use Exporter 'import';
@@ -87,32 +88,6 @@ sub _tool_specs {
       code => sub {
         my ($tool, $tool_args) = @_;
         return $tool->text_result('__SILENT__');
-      },
-    },
-    {
-      name         => 'set_alarm',
-      description  => 'Set an alarm that wakes you up after a delay in seconds. Like a timer or reminder - when it fires, you get woken up with the reason and can decide what to do: respond, call tools, or stay silent. You do NOT pre-write a message; you decide what to do when the alarm fires.',
-      input_schema => {
-        type       => 'object',
-        properties => {
-          reason        => { type => 'string', description => 'Why you are setting this alarm - this will be shown to you when it fires' },
-          delay_seconds => { type => 'number', description => 'How many seconds to wait (10-3600)' },
-        },
-        required => ['reason', 'delay_seconds'],
-      },
-      code => sub {
-        my ($tool, $tool_args) = @_;
-        my $reason = _trim($tool_args->{reason});
-        return $tool->text_result('Reason is required.') unless length $reason;
-        my $delay = _clamp_numeric(
-          value   => $tool_args->{delay_seconds},
-          default => 10,
-          min     => 10,
-          max     => 3600,
-        );
-        my $channel = $self->_default_channel;
-        POE::Kernel->delay_add( _alarm_fired => $delay, $channel, $reason );
-        return $tool->text_result("Alarm set for ${delay}s: $reason");
       },
     },
     {
@@ -452,7 +427,7 @@ sub build_mcp_server {
   my $server_name = $args{server_name} || 'bot-tools';
 
   my $server = MCP::Server->new(name => $server_name, version => '1.0');
-  for my $spec (@{_tool_specs(self => $self)}, @{Bot::Runtime::ConversationMemory::conversation_tool_specs($self)}) {
+  for my $spec (@{_tool_specs(self => $self)}, @{Bot::Runtime::Reminders::tool_specs($self)}, @{Bot::Runtime::ConversationMemory::conversation_tool_specs($self)}) {
     $server->tool(%{$spec});
   }
 

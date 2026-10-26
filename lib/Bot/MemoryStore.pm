@@ -8,7 +8,7 @@ use DBI;
 
 has db_file => ( is => 'ro', default => sub { $ENV{DB_FILE} || 'ai-bot.db' } );
 has _dbh => ( is => 'ro', lazy => 1, builder => '_build_dbh' );
-with 'Bot::ConversationStore';
+with 'Bot::ConversationStore', 'Bot::ReminderStore';
 
 sub _build_dbh {
   my ($self) = @_;
@@ -33,6 +33,7 @@ sub _build_dbh {
     UNIQUE(bot_name, trait_key)
   )');
   $self->initialize_conversation_schema($dbh);
+  $self->initialize_reminder_schema($dbh);
   return $dbh;
 }
 
