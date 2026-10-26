@@ -5,6 +5,7 @@ use warnings;
 
 use Exporter 'import';
 use Bot::Runtime::Context ();
+use Bot::Runtime::Reminders ();
 use Bot::Runtime::Limits qw(runtime_limit now);
 our @EXPORT_OK = qw(
   buffer_message
@@ -130,6 +131,17 @@ sub process_buffer_event {
     splice @messages, $room if @messages > $room;
     unshift @$queue, @messages;
     $self->_schedule_pending_buffers if $self->can('_schedule_pending_buffers');
+    return;
+  }
+
+  # A cancelled/expired reminder may still have a volatile queued wake. Filter it
+  # before context/model work. A lease recovers queue loss after restart or TTL.
+  @messages = grep {
+    !defined($_->{reminder_id}) || $self->memory->consume_reminder(
+      bot=>Bot::Runtime::Reminders::bot_identity($self),channel=>$channel,id=>$_->{reminder_id})
+  } @messages;
+  unless (@messages) {
+    $self->_schedule_pending_buffers;
     return;
   }
 

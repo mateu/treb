@@ -52,6 +52,8 @@ use Bot::Runtime::PresenceEvents ();
 use Bot::Runtime::ConnectionEvents ();
 use Bot::Runtime::PublicMessages ();
 use Bot::Runtime::ConversationMemory ();
+use Bot::Runtime::Reminders ();
+use Bot::IRCIdentity qw(irc_fold);
 use Bot::Runtime::WebTools ();
 use Bot::Runtime::RaidFlow ();
 use Bot::Runtime::EntrypointConfig qw(
@@ -317,11 +319,10 @@ event _retry_raid => sub {
   $self->_do_raid;
 };
 
-event _alarm_fired => sub {
-  my ( $self, $channel, $reason ) = @_[ OBJECT, ARG0, ARG1 ];
-  $self->info("Alarm fired: $reason");
-  $self->_buffer_message($channel, 'system',
-    "ALARM FIRED: $reason — You set this alarm earlier. Decide what to do now.");
+has _reminder_channels => (is => 'rw', traits => ['NoGetopt'], default => sub { {} });
+
+event _reminder_tick => sub {
+  Bot::Runtime::Reminders::poll($_[OBJECT]);
 };
 
 event _idle_check => sub {
@@ -367,6 +368,11 @@ event irc_public => sub {
 
 event irc_join => sub {
   my ( $self, $nickstr, $channel ) = @_[ OBJECT, ARG0, ARG1 ];
+  my ($nick) = split /!/, $nickstr;
+  if (irc_fold($nick) eq irc_fold($self->get_nickname)) {
+    $self->_reminder_channels->{irc_fold($channel)} = 1;
+    Bot::Runtime::Reminders::poll($self);
+  }
   Bot::Runtime::PresenceEvents::handle_irc_join(
     self    => $self,
     nickstr => $nickstr,
@@ -374,8 +380,17 @@ event irc_join => sub {
   );
 };
 
+event irc_kick => sub {
+  my ($self, $channel, $kicked) = @_[OBJECT, ARG1, ARG2];
+  delete $self->_reminder_channels->{irc_fold($channel)}
+    if irc_fold($kicked) eq irc_fold($self->get_nickname);
+};
+
 event irc_part => sub {
   my ( $self, $nickstr, $channel, $reason ) = @_[ OBJECT, ARG0, ARG1, ARG2 ];
+  my ($nick) = split /!/, $nickstr;
+  delete $self->_reminder_channels->{irc_fold($channel)}
+    if irc_fold($nick) eq irc_fold($self->get_nickname);
   Bot::Runtime::PresenceEvents::handle_irc_part(
     self    => $self,
     nickstr => $nickstr,
@@ -429,6 +444,7 @@ event irc_error => sub {
 
 event irc_disconnected => sub {
   my ( $self, $server ) = @_[ OBJECT, ARG0 ];
+  $self->_reminder_channels({});
   Bot::Runtime::ConnectionEvents::handle_irc_disconnected(
     self   => $self,
     server => $server,

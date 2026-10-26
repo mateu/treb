@@ -247,8 +247,8 @@ policy or force a public question.
 Burt exposes `create_activity_watch`, `list_activity_watches`, and
 `update_activity_watch` by default. Other profiles do not. Set
 `ACTIVITY_FOLLOWUPS=1` or `0` in a profile's environment to enable/disable both
-watch tools and proactive wake processing. Existing `set_alarm` timers are
-unchanged.
+watch tools and proactive wake processing. Timed reminders are separate and
+available to all profiles (see below).
 
 A watch has a target nick, configured public channel, concrete reason, optional
 open question for the same nick/scope, expiry (default seven days, 60 seconds to
@@ -311,3 +311,36 @@ frame, even for long targets or unusually large configured limits. Wrapping keep
 whole Unicode codepoints and prefers word boundaries; it does not make another
 model call. CR and NUL bytes are stripped before dispatch. A configured byte limit
 too small for one codepoint is rejected explicitly.
+
+## Restart-safe timed reminders
+
+All profiles expose `set_alarm`, `list_alarms`, and `cancel_alarm`. `set_alarm`
+keeps the existing delay normalization (default/minimum 10 seconds), extends the
+maximum to 30 days, and persists the reason (up to 1000 characters), stable ID,
+creation time and UTC epoch deadline in an additive SQLite `reminders` table.
+The default channel is the current generation's originating channel, not always
+the first channel. An explicit `channel` must be a configured public channel;
+PM targets and model-supplied network/bot overrides are rejected. Rows are scoped
+to bot identity, network and IRC-casemapped channel, even in shared databases.
+Maximum 20 active reminders per bot/channel. List returns up to 20 newest rows,
+including terminal states; pass its last ID as `cursor` to page backward.
+
+One ten-second poll runs after the bot joins a channel. Only currently joined,
+configured channels wake; reconnects do not add duplicate poll loops. Busy model
+work defers polling. A reminder up to **one hour overdue** wakes once after
+reconnect/restart; older reminders become `expired` without a wake (also on list).
+Each poll claims at most three due reminders per channel. Claims have a ten-minute
+lease: a crash, rejected queue admission or queue TTL loss does not permanently
+lose an unevaluated reminder. Admission failure releases the lease immediately;
+after process death or queue loss it is eligible again after lease expiry, within
+the overdue window. No automatic deletion or retroactive conversion of old
+in-memory timers is performed. Back up SQLite consistently before rollout.
+
+States: `armed` -> `queued` -> `fired`, or `cancelled` / `expired`.
+Cancellation is checked again before a queued wake starts evaluation. `fired`
+means the runtime admitted the reminder for model evaluation, **not** confirmed
+IRC delivery or a promise the bot speaks. The model can choose silence. A crash
+between this durable admission and model invocation can lose that evaluation;
+there is deliberately no repeated automatic model invocation after `fired`.
+Normal reply TTL/retry/output gates still apply. This is restart-safe scheduling
+and recoverable queue admission, not exactly-once end-to-end messaging.
