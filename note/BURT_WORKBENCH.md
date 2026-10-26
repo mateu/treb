@@ -135,3 +135,35 @@ To roll back: stop Burt, preserve the new live DB, restore the saved service
 configuration and (if retaining new conversation/reminder state) SQLite-backup
 the new DB back to its original DB path. Reload systemd and start only the
 original `burt-sandbox.service`. Do not delete the new DB or publication journal.
+
+## Current clawd deployment
+
+The repository tools run from pinned source
+`/home/hunter/.local/share/burt-irc/releases/fabf3cb`, not `~/dev/treb`.
+The bot database remains `~/.local/share/burt-irc/data/burt.sqlite`, and the
+broker journal remains `~/.local/share/burt-workbench/jobs.sqlite`.
+The host deployment ledger is `~/.local/share/burt-irc/deployment.json`.
+The pre-repository-tools service drop-in, broker sources, and SQLite backups
+are at `~/.local/share/burt-irc/backup-repo-tools-20261026T215021Z/`.
+
+To revert only this extension: stop `burt-sandbox.service`, then
+`burt-workbench.service`; preserve the current databases; restore that backup's
+`80-workbench.conf` to the bot service drop-in directory and its `broker.py`,
+`runner.py`, and `launch.py` to `~/.local/share/burt-workbench/`. Leave the live
+bot database and publication journal in place: the added table is compatible
+with the older broker and avoids losing publication history. Reload systemd,
+start the broker, then start only the canonical bot service. The old release
+`47fb0ed` remains available. Do not restore the older journal over new writes.
+
+Acceptance evidence: a fresh model turn created the project, then a separate
+turn read it, preserved addition and added subtraction with 35 passing
+assertions. The public project files matched the exact stored tested bundle.
+No IRC messages were sent by these synthetic checks. Read-only IRC WHOIS
+confirmed the live `burt_bot` in `#ai` after deployment; both services had zero
+restarts and the namespace isolation probe passed.
+
+* Initial: <https://github.com/burt-agent/workspace/commit/a9c79c8dd48d17c9c65c855b7810f7c1e8d7d7aa>
+* Continuation: <https://github.com/burt-agent/workspace/commit/3935003b9b0ae37b57d8ba2876cae000154a1ec9>
+
+These are synthetic model/tool acceptance checks, not a completed dictionary
+project or evidence of a real channel user's task succeeding.
