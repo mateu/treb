@@ -5,9 +5,13 @@ repo="${BURT_SOURCE_ROOT:-$HOME/dev/treb}"
 state="$HOME/.local/share/burt-irc"
 ipc="$HOME/.local/share/burt-workbench/ipc"
 mode="${1:-start}"
+extra_mounts=()
 case "$mode" in
   start) command=(/usr/bin/perl /app/burt.pl) ;;
   check) command=(/usr/bin/perl -c /app/burt.pl) ;;
+  model-check)
+    extra_mounts=(--ro-bind "$repo/script/workbench/model-smoke.pl" /smoke.pl)
+    command=(/usr/bin/perl -I/app/lib /smoke.pl) ;;
   probe) command=(/usr/bin/python3 -I -c '
 import os, pathlib, socket
 hidden=["/home/hunter", "/run/user", "/app/astrid.env", "/app/treb.sqlite", "/app/script", "/publisher", "/state/gist.token"]
@@ -26,7 +30,7 @@ assert result.get("state")=="passed" and result["result"]["output"]=="42\n", res
 assert not any(k in os.environ for k in ("SSH_AUTH_SOCK","DBUS_SESSION_BUS_ADDRESS","GH_TOKEN","GITHUB_TOKEN"))
 print("bot namespace: hidden host/credentials/other bots; readonly code; own state; clean environment; broker execution passed")
 ') ;;
-  *) echo 'Expected start, check, or probe' >&2; exit 2 ;;
+  *) echo 'Expected start, check, probe, or model-check (creates a public gist)' >&2; exit 2 ;;
 esac
 exec /usr/bin/bwrap --unshare-user --unshare-pid --unshare-ipc --unshare-uts \
   --unshare-cgroup --die-with-parent --new-session --cap-drop ALL \
@@ -42,6 +46,7 @@ exec /usr/bin/bwrap --unshare-user --unshare-pid --unshare-ipc --unshare-uts \
   --ro-bind "$repo/burt.mission.txt" /app/burt.mission.txt \
   --ro-bind "$state/burt.env" /app/burt.env \
   --bind "$state/data" /state --ro-bind "$ipc" /broker \
+  "${extra_mounts[@]}" \
   --size 33554432 --tmpfs /tmp --chdir /app --remount-ro / \
   --clearenv --setenv PATH /usr/bin:/bin --setenv HOME /tmp \
   --setenv USER burt --setenv LANG C.UTF-8 \

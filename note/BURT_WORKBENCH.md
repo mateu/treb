@@ -77,6 +77,13 @@ own state and broker connectivity. `t/workbench.t` checks runtime gates.
 immutability/idempotence/failure isolation/quotas. Existing `verify.py` in the
 operator prototype checks real runner isolation/resource bounds.
 
+Optional **publishing** acceptance check: `script/run-burt-isolated.sh model-check`
+creates a real model-backed FizzBuzz project and public gist through the same
+tools, inside the same filesystem boundary. It uses an explicit synthetic
+operator #ai envelope, without connecting another IRC client or sending any IRC
+messages. This is not a no-side-effect diagnostic; run only when publication is
+authorized. The normal start mode never mounts this smoke script.
+
 To roll back: stop Burt, preserve the new live DB, restore the saved service
 configuration and (if retaining new conversation/reminder state) SQLite-backup
 the new DB back to its original DB path. Reload systemd and start only the
