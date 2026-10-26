@@ -9,9 +9,12 @@ extra_mounts=()
 case "$mode" in
   start) command=(/usr/bin/perl /app/burt.pl) ;;
   check) command=(/usr/bin/perl -c /app/burt.pl) ;;
-  model-check)
+  model-check|model-repo-check|model-repo-continue-check)
     extra_mounts=(--ro-bind "$repo/script/workbench/model-smoke.pl" /smoke.pl)
-    command=(/usr/bin/perl -I/app/lib /smoke.pl) ;;
+    smoke_mode=gist
+    [[ "$mode" != model-repo-check ]] || smoke_mode=repo-start
+    [[ "$mode" != model-repo-continue-check ]] || smoke_mode=repo-continue
+    command=(/usr/bin/perl -I/app/lib /smoke.pl "$smoke_mode") ;;
   probe) command=(/usr/bin/python3 -I -c '
 import os, pathlib, socket
 hidden=["/home/hunter", "/run/user", "/app/astrid.env", "/app/treb.sqlite", "/app/script", "/publisher", "/state/gist.token"]
@@ -30,7 +33,7 @@ assert result.get("state")=="passed" and result["result"]["output"]=="42\n", res
 assert not any(k in os.environ for k in ("SSH_AUTH_SOCK","DBUS_SESSION_BUS_ADDRESS","GH_TOKEN","GITHUB_TOKEN"))
 print("bot namespace: hidden host/credentials/other bots; readonly code; own state; clean environment; broker execution passed")
 ') ;;
-  *) echo 'Expected start, check, probe, or model-check (creates a public gist)' >&2; exit 2 ;;
+  *) echo 'Expected start, check, probe, model-check, model-repo-check, or model-repo-continue-check (publish public artifacts)' >&2; exit 2 ;;
 esac
 exec /usr/bin/bwrap --unshare-user --unshare-pid --unshare-ipc --unshare-uts \
   --unshare-cgroup --die-with-parent --new-session --cap-drop ALL \

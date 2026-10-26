@@ -13,6 +13,7 @@ import urllib.request
 import uuid
 
 from runner import run, validate
+from repository import Repository, validate_destination, validate_files
 
 BASE = Path.home() / '.local/share/burt-workbench'
 TOKEN = Path.home() / '.config/burt-publisher/gist.token'
@@ -29,32 +30,50 @@ class Broker:
             (id TEXT PRIMARY KEY, scope TEXT, digest TEXT, created REAL,
              files TEXT, title TEXT, result TEXT, state TEXT, url TEXT,
              UNIQUE(scope,digest))''')
+        self.db.execute('CREATE TABLE IF NOT EXISTS repo_jobs (id TEXT PRIMARY KEY, destination TEXT NOT NULL)')
         self.db.commit()
+        self.repository = Repository()
 
     def handle(self, req):
         if not isinstance(req, dict):
             raise ValueError('object required')
         action = req.get('action')
         allowed = {'action', 'scope', 'channel', 'network'}
-        allowed |= {'files', 'argv', 'title'} if action == 'run' else {'id'}
-        if set(req) != allowed or action not in ('run', 'publish'):
+        fields = {'run': {'files','argv','title'}, 'publish': {'id'},
+                  'repo_read': {'branch','project'},
+                  'repo_run': {'files','argv','title','branch','project','base_sha'},
+                  'repo_publish': {'id'}}
+        allowed |= fields.get(action, set())
+        if set(req) != allowed or action not in fields:
             raise ValueError('invalid action or fields')
         if req['channel'] != '#ai' or req['network'] != 'irc.perl.org':
             raise ValueError('workbench is restricted to irc.perl.org #ai')
         scope = req['scope']
         if not isinstance(scope, str) or not re.fullmatch(r'[a-f0-9]{64}', scope):
             raise ValueError('invalid turn scope')
-        if action == 'run':
+        destination = None
+        if action == 'repo_read':
+            validate_destination(req['branch'], req['project'])
+            return self.repository.snapshot(req['branch'], req['project'])
+        if action == 'repo_run':
+            validate_destination(req['branch'], req['project'], req['base_sha'])
+            snapshot = self.repository.snapshot(req['branch'], req['project'])
+            if snapshot['base_sha'] != req['base_sha']:
+                raise ValueError('branch changed; read project and retest against the new base')
+            destination = {k: snapshot[k] for k in ('branch','project','base_sha','exists')}
+        if action in ('run', 'repo_run'):
             files, argv = validate({'files': req['files'], 'argv': req['argv']})
             # Gists use flat filenames. No extraction, generated paths, symlinks,
             # stdout-as-files, or host file reads are part of publishing.
-            if any(not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}', n)
+            if action == 'repo_run':
+                validate_files(files)
+            elif any(not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}', n)
                    or '\x00' in v for n, v in files.items()):
                 raise ValueError('use flat ASCII filenames and text without NUL')
             title = req['title']
             if not isinstance(title, str) or not 1 <= len(title) <= 200 or any(ord(c) < 32 for c in title):
                 raise ValueError('invalid title')
-            digest = hashlib.sha256(json.dumps([files, argv, title], sort_keys=True).encode()).hexdigest()
+            digest = hashlib.sha256(json.dumps([files, argv, title, destination], sort_keys=True).encode()).hexdigest()
             old = self.db.execute('SELECT * FROM jobs WHERE scope=? AND digest=?', (scope, digest)).fetchone()
             if old:
                 return self.result(old)
@@ -69,6 +88,9 @@ class Broker:
             job_id = uuid.uuid4().hex
             self.db.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?)',
                             (job_id, scope, digest, now, json.dumps(files), title, '{}', 'running', None))
+            if destination:
+                self.db.execute('INSERT INTO repo_jobs VALUES (?,?)', (job_id, json.dumps(destination)))
+            self.db.execute('DELETE FROM repo_jobs WHERE id NOT IN (SELECT id FROM jobs)')
             self.db.commit()
             try:
                 result = self.execute({'files': files, 'argv': argv})
@@ -86,10 +108,15 @@ class Broker:
         job = self.db.execute('SELECT * FROM jobs WHERE id=? AND scope=?', (job_id, scope)).fetchone()
         if not job:
             raise ValueError('job not found in this request')
+        repo_job = self.db.execute('SELECT destination FROM repo_jobs WHERE id=?', (job_id,)).fetchone()
+        if bool(repo_job) != (action == 'repo_publish'):
+            raise ValueError('job publication destination does not match tool')
         if job['state'] == 'published':
             return self.result(job)
         if job['state'] != 'passed' or job['created'] < time.time() - 900:
             raise ValueError('only a successful, recent, unsubmitted job can be published')
+        if repo_job:
+            return self.publish_repository(job, json.loads(repo_job['destination']))
         if not self.token.is_file():
             raise ValueError('Burt gist credential is not installed; ask the operator')
         if self.token.stat().st_mode & 0o077:
@@ -114,6 +141,28 @@ class Broker:
         self.db.execute("UPDATE jobs SET state='published',url=? WHERE id=?", (url, job_id))
         self.db.commit()
         return self.result(self.db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())
+
+    def publish_repository(self, job, destination):
+        # Read/preflight before marking submitted; no writes on stale bases.
+        snapshot = self.repository.snapshot(destination['branch'], destination['project'])
+        if any(snapshot[k] != destination[k] for k in ('base_sha','exists')):
+            raise ValueError('branch changed; read project and retest before publishing')
+        n = self.db.execute("SELECT COUNT(*) FROM jobs WHERE created>? AND state IN ('published','publishing','uncertain')", (time.time()-86400,)).fetchone()[0]
+        if n >= 10:
+            raise ValueError('global limit: 10 submissions per day')
+        if self.db.execute("SELECT COUNT(*) FROM jobs WHERE scope=? AND state IN ('published','publishing','uncertain')", (job['scope'],)).fetchone()[0]:
+            raise ValueError('limit: one submission per IRC request')
+        self.db.execute("UPDATE jobs SET state='publishing' WHERE id=?", (job['id'],))
+        self.db.commit()
+        try:
+            url = self.repository.publish(snapshot, json.loads(job['files']), job['title'])
+        except Exception:
+            self.db.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (job['id'],))
+            self.db.commit()
+            raise ValueError('repository submission failed or response lost; operator reconciliation required; do not retry') from None
+        self.db.execute("UPDATE jobs SET state='published',url=? WHERE id=?", (url, job['id']))
+        self.db.commit()
+        return self.result(self.db.execute('SELECT * FROM jobs WHERE id=?', (job['id'],)).fetchone())
 
     def post_gist(self, payload):
         # No caller-supplied URL, credential, proxy, redirect or GitHub identity.

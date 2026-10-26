@@ -21,7 +21,7 @@ is($scope,Bot::Runtime::Workbench::request_scope($bot,1),'run and publish bind t
 like($scope,qr/^[a-f0-9]{64}$/,'scope is bounded digest');
 my $tool=bless {},'WorkbenchTool';
 my %defs=map {$_->{name}=>$_} @{Bot::Runtime::Workbench::tool_specs($bot)};
-is(scalar keys %defs,2,'two narrow tools');
+is(scalar keys %defs,5,'five narrow tools');
 like($defs{publish_gist}{code}->($tool,{id=>'x',channel=>'#ai'}),qr/Invalid tool fields/,'model cannot choose scope/channel');
 for my $case (
   ['private channel',sub {$_[0]{pending}{channel}='mateu'}],
@@ -42,6 +42,18 @@ $bot->{pending}{messages}[0]{msg}='burt_bot: write a script';
 ok(Bot::Runtime::Workbench::request_scope($bot,0),'run without publish permission');
 eval {Bot::Runtime::Workbench::request_scope($bot,1)};
 like($@,qr/explicitly asking for a gist/,'publishing needs explicit current request');
+$bot->{pending}{messages}[0]{msg}='burt_bot: write tests and publish to the repository';
+is(Bot::Runtime::Workbench::request_scope($bot,0),Bot::Runtime::Workbench::request_scope($bot,'repo'),'repo run and publish share envelope');
+eval {Bot::Runtime::Workbench::request_scope($bot,1)};
+like($@,qr/gist/,'repo permission does not authorize gist');
+for my $text ('burt_bot: write tests and publish a gist', 'burt_bot: inspect the repo code', 'burt_bot: commit this code') {
+  $bot->{pending}{messages}[0]{msg}=$text;
+  eval {Bot::Runtime::Workbench::request_scope($bot,'repo')};
+  like($@,qr/explicitly asking to publish/,'repo publication needs both destination and action');
+}
+$bot->{pending}{messages}[0]{msg}='burt_bot: update code and push to repo';
+ok(Bot::Runtime::Workbench::request_scope($bot,'repo'),'explicit push admitted');
+like($defs{publish_repo}{code}->($tool,{id=>'x',branch=>'main'}),qr/Invalid tool fields/,'publication cannot substitute destination');
 {
   local $ENV{IRC_SERVER}='elsewhere';
   eval {Bot::Runtime::Workbench::request_scope($bot,0)};

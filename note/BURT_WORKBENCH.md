@@ -1,6 +1,7 @@
-# Burt coding and public gists on clawd
+# Burt coding and public publishing on clawd
 
-Opt-in tools: `run_code` and `publish_gist`. Disabled unless
+Opt-in tools: `run_code`, `publish_gist`, `read_repo_project`,
+`run_repo_project`, and `publish_repo`. Disabled unless
 `BURT_WORKBENCH_SOCKET` is set, and never registered for another bot profile.
 Example in irc.perl.org `#ai`:
 
@@ -39,7 +40,8 @@ Classic PAT owned by `burt-agent`, **gist scope only**, stored at
 repository-scoped token or operator's `gh` login. Identity is checked before
 POST. Only api.github.com is used; redirects/proxy environment are disabled.
 Every gist is **public**, with a flat filename set supplied to `run_code`.
-No repository pushes, package installs, secret access or arbitrary HTTP tool.
+No package installs, secret access or arbitrary HTTP tool. Repository publishing
+uses a separate fine-grained credential as described below.
 
 Authorization is derived from the active runtime envelope: Burt identity,
 irc.perl.org, #ai, unexpired directly addressed human coding request. Publication
@@ -48,6 +50,47 @@ network/channel/request scope. Any human in #ai can ask; nick matching is **not
 authenticated owner identity**. Reminder/bot/ambient/history-only turns cannot
 publish. No independent external-source instructions can create authority,
 although this is not a semantic intent or prompt-injection proof.
+
+Repository tools are fixed to public `burt-agent/workspace`. The separate
+`~/.config/burt-publisher/github.token` must authenticate as `burt-agent`, with
+push access to this repository; parent 0700/file 0600. It never enters either
+namespace. The publisher uses GitHub's tree/commit/ref API, not a shell or Git
+checkout, and refuses redirects/proxies.
+
+* `read_repo_project(branch, project)`: only `burt/<lowercase-slug>` branches;
+  missing branches read from `main`. Returns the current `base_sha` and complete
+  project text bundle, relative to `projects/<project>/`.
+* `run_repo_project(branch, project, base_sha, files, argv, title)`: test the
+  **complete desired project**, including unchanged source/tests/docs. Safe
+  nested paths are supported. 32 files/64 KiB; no hidden files, symlinks,
+  submodules or binary files. Omitted existing project files are deleted upon
+  publication; everything outside the selected project is preserved.
+* `publish_repo(id)`: publishes only that stored successful bundle. Requires a
+  current addressed human coding request containing `repo`/`repository` and
+  `publish`/`push`/`commit`. It cannot change destination or publish gist jobs.
+  Rechecks branch head; stale bases require rereading and retesting. Creates
+  `burt/*` branches or non-force updates them; never writes `main`, opens PRs,
+  merges or executes repository content. Returns an actual commit URL.
+
+Example initial request (after recovering API details):
+
+> burt_bot: read branch burt/dictionary, project dictionary in the workspace repo.
+> Write a Perl dictionary client with fixture-based tests. If endpoint or schema
+> details are missing, use a clearly labelled configurable stub, document all
+> assumptions, and do not claim live API compatibility. Test the complete project
+> and publish it to that repository branch; return the commit link and results.
+
+Continuation:
+
+> burt_bot: read project dictionary on branch burt/dictionary in the workspace
+> repo. Add URL-encoding edge-case tests and fix any failures. Preserve existing
+> files, test the complete project and publish the update to the same repo branch.
+
+All channel humans have the same narrow publishing authority as for gists;
+this is not authenticated owner-only access. Gist/repository submission quotas
+are shared. Repository partial-write/lost-reply failures remain uncertain, even
+if only unreachable Git objects may have been created. The operator must inspect
+GitHub branch heads and the journal; do not blindly resubmit.
 
 Exact bundles/results survive service restart. Up to 5 attempts and 1 submission
 per turn, 30 executions/hour, 10 submissions/day globally. Runs/publications are
@@ -73,7 +116,7 @@ service cap. Other bot units remain stopped. Never start a duplicate IRC bot.
 `script/run-burt-isolated.sh check` compiles inside the actual bot namespace.
 `... probe` asserts hidden host/other-bot files and credentials, read-only code,
 own state and broker connectivity. `t/workbench.t` checks runtime gates.
-`python3 -m unittest test_broker.py` in `script/workbench/` checks publisher
+`python3 -m unittest discover -s script/workbench -p 'test_*.py'` from the repository root checks publisher
 immutability/idempotence/failure isolation/quotas. Existing `verify.py` in the
 operator prototype checks real runner isolation/resource bounds.
 
@@ -83,6 +126,10 @@ tools, inside the same filesystem boundary. It uses an explicit synthetic
 operator #ai envelope, without connecting another IRC client or sending any IRC
 messages. This is not a no-side-effect diagnostic; run only when publication is
 authorized. The normal start mode never mounts this smoke script.
+`model-repo-check` and `model-repo-continue-check` perform real model-backed
+initial/continuation acceptance checks in `projects/repository-smoke/` on branch
+`burt/tool-smoke`. These publish real commits but send no IRC messages. Verify
+the public tree against the immutable journal bundle after both steps.
 
 To roll back: stop Burt, preserve the new live DB, restore the saved service
 configuration and (if retaining new conversation/reminder state) SQLite-backup
