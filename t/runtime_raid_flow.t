@@ -54,6 +54,7 @@ use Bot::Runtime::RaidFlow qw(do_raid);
     my $next = shift @{$self->{replies}};
     die "No queued raid response for prompt: $prompt" unless defined $next;
     die $next->{die} if ref($next) eq 'HASH' && exists $next->{die};
+    return $next->() if ref($next) eq 'CODE';
     return $next;
   }
 
@@ -534,6 +535,66 @@ use Bot::Runtime::RaidFlow qw(do_raid);
   is($bot->{sent}[0]{msg}, $long_answer, 'long answer goes to existing local IRC wrapper unchanged');
   is(scalar @{$raider->{replies}}, 1, 'no second raid that could rewrite an internal compaction summary');
   is($bot->memory->{rows}[0]{response}, $long_answer, 'stores the human-facing answer rather than internal state');
+}
+
+{
+  no warnings 'redefine';
+  my $clock = 1000;
+  local *Bot::Runtime::RaidFlow::now = sub { $clock };
+  local $ENV{BOT_RETRY_MAX_ATTEMPTS} = 2;
+  local $ENV{BOT_RETRY_DEADLINE_SECONDS} = 180;
+  local $ENV{BOT_REPLY_TTL_SECONDS} = 300;
+  my $pending = sub { +{ input=>'prompt', channel=>'#other', messages=>[
+    {nick=>'alice', msg=>'hi', channel=>'#other', source_kind=>'conversation'}] } };
+  my $bot = Local::RaidFlowBot->new(pending=>$pending->(), replies=>[
+    {die=>'429 rate limit'}, {die=>'429 rate limit'}, {die=>'429 rate limit'}, 'unused']);
+  @POE::Kernel::delayed = ();
+  do_raid(self=>$bot);
+  $clock += 70;
+  do_raid(self=>$bot);
+  $clock += 60;
+  do_raid(self=>$bot);
+  is($bot->_pending_raid, undef, 'repeated 429s exhaust finite retry budget');
+  is($bot->_processing, 0, 'exhausted retries release shared processing flag');
+  is($bot->_rate_limit_wait, 0, 'exhaustion clears backoff state for next request');
+  is($bot->{scheduled}, 1, 'other buffered conversations are rescheduled');
+  is(scalar @{$bot->{sent}}, 0, 'exhaustion does not send a stale answer');
+  is(scalar @{$POE::Kernel::delayed[-1]}, 1, 'old retry timer cancelled');
+
+  $bot = Local::RaidFlowBot->new(pending=>$pending->(), replies=>[{die=>'429'}]);
+  $bot->_pending_raid->{retry_deadline} = $clock + 60;
+  do_raid(self=>$bot);
+  is($bot->_pending_raid, undef, 'retry not scheduled beyond absolute deadline');
+
+  $bot = Local::RaidFlowBot->new(pending=>$pending->(), replies=>['unused']);
+  $bot->_pending_raid->{expires_at} = $clock;
+  do_raid(self=>$bot);
+  is(scalar @{$bot->_raider->{replies}}, 1, 'expired request never calls model');
+  is($bot->_processing, 0, 'preflight expiry releases queue');
+
+  $bot = Local::RaidFlowBot->new(pending=>$pending->(), replies=>[sub { $clock += 301; 'late answer' }]);
+  do_raid(self=>$bot);
+  is(scalar @{$bot->{sent}}, 0, 'answer generated after TTL is suppressed');
+  is(scalar @{$bot->memory->{rows}}, 0, 'late answer not stored as a delivered response');
+  is($bot->_processing, 0, 'late generation releases queue');
+
+  $bot = Local::RaidFlowBot->new(pending=>$pending->(), replies=>[{die=>'429'}, 'fresh answer']);
+  do_raid(self=>$bot);
+  $clock += 70;
+  do_raid(self=>$bot);
+  is($bot->{sent}[0]{msg}, 'fresh answer', 'successful bounded retry still replies');
+  is($bot->{sent}[0]{channel}, '#other', 'successful retry retains originating channel');
+  is($bot->_rate_limit_wait, 0, 'successful retry resets backoff');
+
+  $bot = Local::RaidFlowBot->new(pending=>$pending->(), replies=>['', sub {
+    is($bot->_processing, 1, 'warm-human repair holds processing lock until generation completes');
+    $clock += 301;
+    return 'late repair';
+  }]);
+  $bot->_pending_raid->{messages}[0]{warm_human} = 1;
+  do_raid(self=>$bot);
+  is(scalar @{$bot->{sent}}, 0, 'expired warm-human repair is suppressed');
+  is($bot->_processing, 0, 'expired repair releases processing lock');
 }
 
 done_testing;

@@ -1,5 +1,7 @@
 use strict;
 use warnings;
+use utf8;
+use Encode qw(encode decode FB_CROAK);
 use Test::More;
 
 use lib 'lib';
@@ -128,6 +130,42 @@ for my $bad_max_line (0, -1, 'abc') {
     );
   };
   like($@, qr/positive integer/, "send_to_channel dies on invalid max_line: '$bad_max_line'");
+}
+
+{
+  no warnings 'redefine';
+  local *POE::Kernel::delay_add = sub { push @scheduled, [ @_[1..$#_] ]; 1 };
+  for my $case (
+    ['emoji', '🙂' x 300, '#ai', 400],
+    ['accents/CJK', 'é漢字' x 180, '#ai', 400],
+    ['long target', '🙂' x 300, '#' . ('a' x 200), 10000],
+    ['exact boundary', 'é' x 200, '#ai', 400],
+    ['ASCII', 'a' x 900, '#ai', 400],
+    ['mixed words', 'hello é漢字 🙂 ' x 40, '#ai', 41],
+  ) {
+    my ($label, $input, $channel, $limit) = @$case;
+    @scheduled = ();
+    send_to_channel(channel => $channel, text => $input, max_line => $limit);
+    ok(@scheduled, "$label: chunks scheduled");
+    my $joined = '';
+    for my $event (@scheduled) {
+      my $chunk = $event->[3];
+      my $bytes = encode('UTF-8', $chunk);
+      ok(length($bytes) <= $limit, "$label: configured byte budget respected");
+      ok(length(encode('UTF-8', "PRIVMSG $channel :$chunk\r\n")) <= 512, "$label: wire frame fits");
+      is(decode('UTF-8', $bytes, FB_CROAK), $chunk, "$label: whole UTF-8 characters preserved");
+      $joined .= $chunk;
+    }
+    # Existing wrapping normalizes whitespace; all substantive text must survive.
+    (my $expected = $input) =~ s/\s//g;
+    $joined =~ s/\s//g;
+    is($joined, $expected, "$label: no text loss or duplication");
+  }
+  @scheduled = ();
+  send_to_channel(channel => '#ai', text => "hello\r\0world", max_line => 400);
+  is($scheduled[0][3], 'helloworld', 'protocol control bytes removed');
+  eval { send_to_channel(channel => '#ai', text => '🙂', max_line => 1) };
+  like($@, qr/too small/, 'impossible codepoint budget fails without looping');
 }
 
 done_testing;

@@ -4,6 +4,7 @@ use strict;
 use warnings;
 
 use Exporter 'import';
+use Encode qw(encode);
 our @EXPORT_OK = qw(
   parse_public_addressee
   is_public_message_addressed_to_self
@@ -72,21 +73,33 @@ sub send_to_channel {
   my $event_name = $args{event_name} || '_send_line';
   my $return_cumulative = $args{return_cumulative} ? 1 : 0;
 
+  die 'invalid IRC target' if $channel =~ /[\s\x00:]/;
+  # RFC 2812: 512 octets including PRIVMSG, target, separator and CRLF.
+  my $wire_budget = 512 - length(encode('UTF-8', "PRIVMSG $channel :\r\n"));
+  $max_line = $wire_budget if $max_line > $wire_budget;
+  die 'IRC target leaves no payload space' if $max_line < 1;
+  # Never allow raw CR/NUL to reach a protocol command.
+  $text =~ s/[\r\x00]//g;
   my @chunks;
   for my $line (split(/\n/, $text)) {
-    $line =~ s/^\s+//;
-    $line =~ s/\s+$//;
-    next unless length $line;
-    while (length($line) > $max_line) {
-      my $chunk = substr($line, 0, $max_line);
-      if ($chunk =~ /^(.{1,$max_line})\s/) {
+    $line =~ s/^\s+|\s+$//g;
+    while (length $line) {
+      my ($count, $bytes) = (0, 0);
+      for my $char (split //, $line) {
+        my $size = length(encode('UTF-8', $char));
+        last if $bytes + $size > $max_line;
+        $bytes += $size;
+        $count++;
+      }
+      die 'max_line too small for a UTF-8 character' unless $count;
+      my $chunk = substr($line, 0, $count);
+      if ($count < length($line) && $chunk =~ /^(.*\S)\s+\S*$/s) {
         $chunk = $1;
       }
       push @chunks, $chunk;
-      $line = substr($line, length($chunk));
+      substr($line, 0, length($chunk), '');
       $line =~ s/^\s+//;
     }
-    push @chunks, $line if length $line;
   }
 
   my $cumulative = 0;

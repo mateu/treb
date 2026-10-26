@@ -195,4 +195,51 @@ eval { process_buffer_event(self => $bot) };
 $err = $@;
 like($err, qr/requires channel/, 'process_buffer_event validates channel argument');
 
+{
+  no warnings qw(redefine once);
+  my $clock = 1000;
+  my @alarms;
+  local *Bot::Runtime::Buffering::now = sub { $clock };
+  local *POE::Kernel::alarm_set = sub { push @alarms, [ @_[1..$#_] ]; scalar @alarms };
+  local *POE::Kernel::alarm_remove = sub { 1 };
+  local $ENV{BOT_QUEUE_MAX_CHANNEL} = 2;
+  local $ENV{BOT_QUEUE_MAX_TOTAL} = 3;
+  local $ENV{BOT_QUEUE_MAX_MESSAGE_CHARS} = 10;
+  local $ENV{BOT_REPLY_TTL_SECONDS} = 300;
+  my $bot = Local::BufferBot->new;
+  my $enqueue = sub {
+    Bot::Runtime::Buffering::buffer_message(self=>$bot, channel=>$_[0], nick=>'alice', msg=>$_[1], delay=>5);
+  };
+  $enqueue->('#a', 'first');
+  $clock++;
+  $enqueue->('#a', 'second');
+  is($alarms[-1][1], 1005, 'arrivals cannot postpone first queued message indefinitely');
+  $enqueue->('#a', 'overflow');
+  is(scalar @{$bot->_msg_buffer->{'#a'}}, 2, 'per-channel queue is bounded');
+  $enqueue->('#b', 'third');
+  $enqueue->('#c', 'fourth');
+  ok(!exists $bot->_msg_buffer->{'#c'}, 'global bound applies across channels');
+  $clock = 1301;
+  $enqueue->('#c', 'new');
+  ok(!exists $bot->_msg_buffer->{'#a'}, 'expired queue pruned before admission');
+  ok(!exists $bot->_buffer_timers->{'#a'}, 'expired channel timer removed');
+  $enqueue->('#d', 'x' x 11);
+  ok(!exists $bot->_msg_buffer->{'#d'}, 'oversized messages do not enter work queue');
+  $clock = 1601;
+  process_buffer_event(self=>$bot, channel=>'#c');
+  is($bot->{raid_calls}, 0, 'expired messages never call the model');
+  ok(!exists $bot->_msg_buffer->{'#c'}, 'expired dispatch removes empty queue key');
+  my $missing = Local::BufferBot->new(raider=>undef, setup_success=>0);
+  $missing->_msg_buffer->{'#a'} = [{nick=>'alice', msg=>'old', queued_at=>$clock}];
+  local *Local::BufferBot::_setup_raider = sub {
+    # Simulate arrivals while runtime setup yields to the event loop.
+    $_[0]->_msg_buffer->{'#a'} = [{nick=>'bob', msg=>'new', queued_at=>$clock}];
+    $_[0]->_msg_buffer->{'#b'} = [map { +{msg=>'other', queued_at=>$clock} } 1..2];
+    return Local::BufferFuture->new;
+  };
+  process_buffer_event(self=>$missing, channel=>'#a');
+  is(scalar @{$missing->_msg_buffer->{'#a'}}, 1, 'setup failure cannot bypass global queue limit when requeuing');
+  is($missing->{scheduled_calls}, 1, 'full requeue still schedules remaining work');
+}
+
 done_testing;

@@ -5,6 +5,7 @@ use warnings;
 
 use Exporter 'import';
 use POE::Kernel ();
+use Bot::Runtime::Limits qw(runtime_limit now);
 use Bot::Runtime::OutputPipeline 'clean_ai_output';
 
 our @EXPORT_OK = qw(do_raid);
@@ -46,6 +47,16 @@ sub _raid_with_fallback {
   return $result;
 }
 
+sub _expire_raid {
+  my ($self, $reason) = @_;
+  $self->info("Abandoning pending raid: $reason");
+  POE::Kernel->delay('_retry_raid'); # cancel the old retry before admitting new work
+  $self->_pending_raid(undef);
+  $self->_rate_limit_wait(0);
+  $self->_processing(0);
+  $self->_schedule_pending_buffers;
+}
+
 sub do_raid {
   my (%args) = @_;
 
@@ -59,6 +70,14 @@ sub do_raid {
 
   my $pending = $self->_pending_raid;
   return unless $pending;
+  $pending->{started_at} //= now();
+  $pending->{expires_at} //= $pending->{started_at} + runtime_limit('REPLY_TTL_SECONDS', 300);
+  $pending->{retry_deadline} //= $pending->{started_at} + runtime_limit('RETRY_DEADLINE_SECONDS', 180);
+  if (now() >= $pending->{expires_at}
+      || (($pending->{retry_count} // 0) && now() >= $pending->{retry_deadline})) {
+    _expire_raid($self, 'reply/retry deadline reached');
+    return;
+  }
 
   my $input    = $pending->{input};
   my $channel  = $pending->{channel};
@@ -87,6 +106,7 @@ sub do_raid {
       'My brain is still booting. Try again in a moment.',
     );
     $self->_pending_raid(undef);
+    $self->_rate_limit_wait(0);
     $self->_processing(0);
     $self->_schedule_pending_buffers;
     return;
@@ -111,6 +131,7 @@ sub do_raid {
       'My brain hiccuped on a nested thought. Try that again.',
     );
     $self->_pending_raid(undef);
+    $self->_rate_limit_wait(0);
     $self->_processing(0);
     $self->_schedule_pending_buffers;
     return;
@@ -129,7 +150,16 @@ sub do_raid {
     $self->_raid_in_progress(0);
   }
 
+  if (now() >= $pending->{expires_at}) {
+    _expire_raid($self, 'reply expired during generation');
+    return;
+  }
+
   if ($raid_error && $raid_error =~ /429|rate.limit/i) {
+    if (($pending->{retry_count} // 0) >= runtime_limit('RETRY_MAX_ATTEMPTS', 2)) {
+      _expire_raid($self, 'rate-limit retry budget exhausted');
+      return;
+    }
     my $total_wait = $self->_rate_limit_wait;
     my $err_channel = $channel || $self->_default_channel;
     if ($total_wait == 0 && @{$brainfreeze}) {
@@ -137,12 +167,14 @@ sub do_raid {
       $self->_send_to_channel($err_channel, $msg);
     }
     my $wait = $total_wait < 70 ? (70 - $total_wait) : 60;
+    if (now() + $wait >= $pending->{retry_deadline}
+        || now() + $wait >= $pending->{expires_at}) {
+      _expire_raid($self, 'next retry would exceed deadline');
+      return;
+    }
+    $pending->{retry_count}++;
     $self->_rate_limit_wait($total_wait + $wait);
     $self->info('Rate limited, total wait: ' . $self->_rate_limit_wait . "s, next retry in ${wait}s");
-    if ($total_wait > 0 && int($total_wait / 180) != int($self->_rate_limit_wait / 180) && @{$brainfreeze}) {
-      my $msg = $brainfreeze->[rand @{$brainfreeze}];
-      $self->_send_to_channel($err_channel, $msg);
-    }
     POE::Kernel->delay(_retry_raid => $wait);
     return;
   }
@@ -178,10 +210,9 @@ sub do_raid {
     }
   };
 
-  $self->_processing(0);
-
   if ($answer =~ /__SILENT__/) {
     $self->info("${silent_name} chose to stay silent");
+    $self->_processing(0);
     $self->_schedule_pending_buffers;
     return;
   }
@@ -209,11 +240,13 @@ sub do_raid {
   if ($answer !~ /\S/) {
     $self->_log_cleanup_empty($raw_answer, $answer);
     $self->info('Answer empty after cleanup; staying silent');
+    $self->_processing(0);
     $self->_schedule_pending_buffers;
     return;
   }
 
   if ($post_cleanup_guard && $post_cleanup_guard->($self, $channel, $answer)) {
+    $self->_processing(0);
     return;
   }
 
@@ -244,6 +277,7 @@ sub do_raid {
       $self->info("Allowing non-substantive output due to non_substantive_allow_pct=$non_substantive_allow_pct");
     } else {
       $self->info('Suppressing non-substantive output');
+      $self->_processing(0);
       $self->_schedule_pending_buffers;
       return;
     }
@@ -252,6 +286,11 @@ sub do_raid {
   # Dispatch::send_to_channel already wraps long lines locally. Do not ask the
   # model to rewrite "your last response": history compression can replace that
   # response with an internal state summary, which would then be sent to IRC.
+
+  if (now() >= $pending->{expires_at}) {
+    _expire_raid($self, 'reply expired during output cleanup/retry');
+    return;
+  }
 
   my $answer_is_empty_artifact = ($answer =~ /^\(Empty response:/s) ? 1 : 0;
   my $answer_is_non_substantive = $self->_is_non_substantive_output($answer) ? 1 : 0;
@@ -284,6 +323,7 @@ sub do_raid {
     $on_bert_reply_consumed->($self);
   }
 
+  $self->_processing(0);
   $self->_schedule_pending_buffers;
 }
 
