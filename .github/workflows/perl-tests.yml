@@ -32,6 +32,9 @@ jobs:
           RUN_IRC_HARNESS_DETERMINISTIC: '1'
         run: prove -lv t/irc_harness_deterministic.t
 
+      - name: Check isolated coding broker contracts
+        run: python3 -m unittest discover -s script/workbench -p 'test_*.py' -v
+
       - name: Upload IRC harness artifacts on failure
         if: failure()
         uses: actions/upload-artifact@v4
