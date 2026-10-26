@@ -51,6 +51,7 @@ use Bot::Runtime::MethodDelegates ();
 use Bot::Runtime::PresenceEvents ();
 use Bot::Runtime::ConnectionEvents ();
 use Bot::Runtime::PublicMessages ();
+use Bot::Runtime::ConversationMemory ();
 use Bot::Runtime::WebTools ();
 use Bot::Runtime::RaidFlow ();
 use Bot::Runtime::EntrypointConfig qw(
@@ -174,6 +175,8 @@ sub _send_to_channel_return_cumulative { $P->{return_cumulative_send} ? 1 : 0 }
 event _send_line => sub {
   my ( $self, $channel, $line ) = @_[ OBJECT, ARG0, ARG1 ];
   $self->privmsg($channel => Encode::encode_utf8($line));
+  eval { Bot::Runtime::ConversationMemory::record_outgoing_line(self=>$self,channel=>$channel,line=>$line); 1 }
+    or $self->info("Public-message journal failed: $@");
 };
 
 sub _default_filtered_bot_nicks { $P->{default_filtered_bot_nicks} }
@@ -337,6 +340,9 @@ event _idle_check => sub {
 
 event irc_public => sub {
   my ( $self, $nickstr, $channels, $msg ) = @_[ OBJECT, ARG0, ARG1, ARG2 ];
+  eval { Bot::Runtime::ConversationMemory::observe_public_message(
+    self=>$self,nickstr=>$nickstr,channels=>$channels,msg=>$msg); 1 }
+    or $self->info("Public-message observation failed: $@");
   if ($P->{public_messages} eq 'ambient') {
     return Bot::Runtime::PublicMessages::handle_ambient_irc_public_event(
       self               => $self,

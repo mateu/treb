@@ -32,4 +32,21 @@ if ($rc != 0) {
 
 is($rc, 0, 'deterministic IRC harness exits cleanly');
 
+# Exercise the real IRC event wiring, not just the observer helper in isolation.
+if ($rc == 0 && $run_dir) {
+    require DBI;
+    for my $bot (qw(burt treb)) {
+        my $db="$run_dir/$bot-harness.sqlite";
+        ok(-f $db, "$bot harness database exists");
+        my $dbh=DBI->connect("dbi:SQLite:dbname=$db",'','',{RaiseError=>1});
+        cmp_ok($dbh->selectrow_array("SELECT COUNT(*) FROM public_messages WHERE nick='Alice' AND direction='in'"),'>',0,
+            "$bot captures human channel messages in real event path");
+        cmp_ok($dbh->selectrow_array("SELECT COUNT(*) FROM public_messages WHERE direction='out'"),'>',0,
+            "$bot captures outgoing dispatches");
+        is($dbh->selectrow_array("SELECT COUNT(*) FROM public_messages WHERE message='time:' AND nick='Alice'"),1,
+            "$bot journals exact utility command before command handler consumes it");
+        $dbh->disconnect;
+    }
+}
+
 done_testing;

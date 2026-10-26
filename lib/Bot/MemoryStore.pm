@@ -8,12 +8,14 @@ use DBI;
 
 has db_file => ( is => 'ro', default => sub { $ENV{DB_FILE} || 'ai-bot.db' } );
 has _dbh => ( is => 'ro', lazy => 1, builder => '_build_dbh' );
+with 'Bot::ConversationStore';
 
 sub _build_dbh {
   my ($self) = @_;
   my $dbh = DBI->connect('dbi:SQLite:dbname=' . $self->db_file, '', '', {
     RaiseError => 1, sqlite_unicode => 1,
   });
+  $dbh->sqlite_busy_timeout(3000);
   $dbh->do('CREATE TABLE IF NOT EXISTS conversations (
     id INTEGER PRIMARY KEY, nick TEXT, message TEXT, response TEXT,
     channel TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -30,6 +32,7 @@ sub _build_dbh {
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(bot_name, trait_key)
   )');
+  $self->initialize_conversation_schema($dbh);
   return $dbh;
 }
 
