@@ -1,0 +1,16 @@
+[Unit]
+Description=Burt isolated coding and gist broker
+Before=burt-sandbox.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I %h/.local/share/burt-workbench/launch.py
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=yes
+MemoryMax=192M
+TasksMax=24
+
+[Install]
+WantedBy=default.target
