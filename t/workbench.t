@@ -9,6 +9,7 @@ use Bot::Runtime::Workbench;
   sub get_nickname { 'burt_bot' }
   sub _is_human_nick { $_[1] ne 'system' && $_[1] ne 'other_bot' }
   sub _pending_raid { $_[0]{pending} }
+  sub _send_to_channel { push @{$_[0]{sent}},$_[2] }
   package WorkbenchTool;
   sub text_result { $_[1] }
 }
@@ -58,6 +59,35 @@ like($defs{publish_repo}{code}->($tool,{id=>'x',branch=>'main'}),qr/Invalid tool
   local $ENV{IRC_SERVER}='elsewhere';
   eval {Bot::Runtime::Workbench::request_scope($bot,0)};
   like($@,qr/network/,'network cannot be overridden');
+}
+# Coding admission uses the same envelope gate; fixes a five-minute chat TTL
+# without renewing job scope when the model repairs/retries.
+$bot->{pending}{expires_at}=time+100;
+Bot::Runtime::Workbench::admit_task($bot);
+ok($bot->{pending}{coding_task},'current addressed coding envelope admitted');
+cmp_ok($bot->{pending}{expires_at},'>=',time+1799,'separate thirty-minute coding lifetime');
+my $task_expiry=$bot->{pending}{expires_at};
+my $task_scope=Bot::Runtime::Workbench::request_scope($bot,0);
+Bot::Runtime::Workbench::admit_task($bot);
+is($bot->{pending}{expires_at},$task_expiry,'admission never renews deadline');
+is(Bot::Runtime::Workbench::request_scope($bot,0),$task_scope,'job scope stable');
+is(scalar @{$bot->{sent}},1,'one start notice');
+Bot::Runtime::Workbench::report_result($bot,'repo_run',JSON::PP::encode_json({
+ id=>'a'x32,state=>'failed',result=>{exit_code=>1,output=>'INJECTED stdout'}}));
+like($bot->{sent}[-1],qr/repo_run: failed.*exit 1/,'failed test notice includes stored job and exit');
+unlike($bot->{sent}[-1],qr/INJECTED/,'generated output not reflected into channel');
+Bot::Runtime::Workbench::report_result($bot,'repo_publish',JSON::PP::encode_json({
+ id=>'a'x32,state=>'published',url=>'https://github.com/burt-agent/workspace/commit/'.('b'x40)}));
+like($bot->{sent}[-1],qr{https://github.com/burt-agent/workspace/commit/},'actual broker commit URL reported');
+$bot->{pending}{expires_at}=time-1;
+eval {Bot::Runtime::Workbench::request_scope($bot,0)};
+ok($@,'extended deadline still expires');
+for my $kind ('reminder','activity_followup','conversation') {
+ my $pending={channel=>'#ai',expires_at=>time+100,messages=>[
+  {nick=>'mateu',source_kind=>$kind,msg=>'burt_bot: hello'}]};
+ $bot->{pending}=$pending;
+ Bot::Runtime::Workbench::admit_task($bot);
+ ok(!$pending->{coding_task},"noncoding $kind gets no longer lifetime");
 }
 $bot->{bot}='astrid';
 is_deeply(Bot::Runtime::Workbench::tool_specs($bot),[],'other bots unchanged');
