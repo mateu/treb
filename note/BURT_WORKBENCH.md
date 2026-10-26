@@ -194,3 +194,17 @@ results were exported read-only from the clawd journal into
 `~/.local/share/burt-recovery/`, keyed by original job ID. They are untrusted
 source snapshots, not a passing or published project. Do not execute them on
 the operator host; repair/test through the isolated runner.
+
+### Coding-status rollout (2026-10-26)
+
+Active Burt source is now `~/.local/share/burt-irc/releases/9d98315` on clawd.
+The broker has not changed. Backup/rollback instructions and SQLite backups:
+`~/.local/share/burt-irc/backup-coding-status-20261026T231449Z/`.
+Restore only its saved `80-workbench.conf`, daemon-reload and restart Burt to
+revert this change; keep the live databases and broker journal in place.
+
+Verification: 52 Perl test files / 1,036 assertions; 17 Python broker tests;
+namespace probe; both database quick_checks; read-only WHOIS confirms `#ai`
+and `#mateu-test`; zero service restarts. No live coding task or IRC progress
+message delivery was exercised during rollout. Dictionary recovery archive on
+Forge: `~/.local/share/burt-recovery/dictionary-recovery.tar.gz`.
