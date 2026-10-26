@@ -4,7 +4,7 @@ use Test::More;
 
 require './treb.pl';
 
-my $bot = bless {}, 'BertBot';
+my $bot = bless {}, 'Bot::HouseBot';
 my $server = $bot->_build_mcp_server;
 ok($server, 'built mcp server');
 

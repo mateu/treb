@@ -6,7 +6,7 @@ require './treb.pl';
 
 {
     package TestSummaryBot;
-    our @ISA = ('BertBot');
+    our @ISA = ('Bot::HouseBot');
     sub new_minimal { bless {}, shift }
     sub _metacpan_get_json {
         my ($self, $url) = @_;

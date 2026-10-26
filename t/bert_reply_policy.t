@@ -5,7 +5,7 @@ use Test::More;
 local $ENV{BOT_FILTER_NICKS} = 'Bert,burt_bot';
 require './treb.pl';
 
-{ package TestBertPolicyBot; our @ISA = ('BertBot'); sub get_nickname { 'squirt' } }
+{ package TestBertPolicyBot; our @ISA = ('Bot::HouseBot'); sub get_nickname { 'squirt' } }
 my $bot = bless {}, 'TestBertPolicyBot';
 
 ok($bot->_is_filtered_bot_nick('burt_bot'), 'burt_bot is filtered bot nick');

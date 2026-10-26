@@ -6,7 +6,7 @@ require './treb.pl';
 
 {
     package TestMetaBot;
-    our @ISA = ('BertBot');
+    our @ISA = ('Bot::HouseBot');
     sub new_minimal { bless {}, shift }
     sub _metacpan_get_text {
         my ($self, $url) = @_;
@@ -72,7 +72,7 @@ subtest 'describe formatter returns DESCRIPTION section text directly' => sub {
 };
 
 subtest 'mojibake cleanup for module output' => sub {
-    my $bot = bless {}, 'BertBot';
+    my $bot = bless {}, 'Bot::HouseBot';
     my $line = $bot->_format_cpan_module_result('MCP::Server', {
         documentation => 'MCP::Server',
         distribution  => 'MCP',

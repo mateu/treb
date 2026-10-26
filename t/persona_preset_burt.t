@@ -8,7 +8,7 @@ local $ENV{IRC_NICKNAME} = 'burt_bot';
 local $ENV{BOT_IDENTITY_SLUG} = 'burt';
 
 require './burt.pl';
-my $bot = BurtBot->new();
+my $bot = Bot::HouseBot->new();
 
 # Test preset 0 (silent)
 my ($ok0, $line0) = $bot->_apply_persona_preset(0);

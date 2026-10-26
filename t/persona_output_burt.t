@@ -14,7 +14,7 @@ local $ENV{BOT_REPLY_MAX_TURNS} = 5;
 local $ENV{NON_SUBSTANTIVE_ALLOW_PCT} = 6;
 
 require './burt.pl';
-my $bot = BurtBot->new();
+my $bot = Bot::HouseBot->new();
 $bot->_load_persona_settings;
 
 my $summary = $bot->_persona_summary_text;

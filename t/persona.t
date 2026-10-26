@@ -17,7 +17,7 @@ local $ENV{BOT_REPLY_MAX_TURNS} = 3;
 local $ENV{NON_SUBSTANTIVE_ALLOW_PCT} = 9;
 
 require './treb.pl';
-my $bot = BertBot->new();
+my $bot = Bot::HouseBot->new();
 $bot->_load_persona_settings;
 
 is($bot->_persona_trait('join_greet_pct'), 88, 'join_greet_pct loaded');

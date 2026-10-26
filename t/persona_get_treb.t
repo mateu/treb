@@ -9,7 +9,7 @@ local $ENV{BOT_IDENTITY_SLUG} = 'treb';
 local $ENV{JOIN_GREET_PCT} = 17;
 
 require './treb.pl';
-my $bot = BertBot->new();
+my $bot = Bot::HouseBot->new();
 $bot->_load_persona_settings;
 
 is($bot->_persona_trait_text('join_greet_pct'), 'join_greet_pct=17', 'treb explicit trait read');

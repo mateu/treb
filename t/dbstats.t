@@ -5,7 +5,7 @@ use Test::More;
 require './treb.pl';
 
 local $ENV{DB_FILE} = ':memory:';
-my $obj = bless {}, 'BertBot';
+my $obj = bless {}, 'Bot::HouseBot';
 my $memory = $obj->memory;
 my $dbh = $memory->_dbh;
 

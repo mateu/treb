@@ -4,7 +4,7 @@ use strict;
 use warnings;
 
 use Exporter 'import';
-our @EXPORT_OK = qw(handle_standard_irc_public_event);
+our @EXPORT_OK = qw(handle_standard_irc_public_event handle_ambient_irc_public_event);
 
 use Bot::Runtime::UtilityCommands ();
 
@@ -120,6 +120,110 @@ sub handle_standard_irc_public_event {
     source_kind => 'conversation',
     warm_human  => $warm_human,
   });
+  return 1;
+}
+
+# Burt's conversational lane: ambient replies gated by ambient_public_reply_pct,
+# an open-thread window after direct address, and a one-reply lock (rather than
+# a turn counter) for filtered-bot conversation that any human message resets.
+sub handle_ambient_irc_public_event {
+  my (%args) = @_;
+
+  my $self = $args{self} or die 'handle_ambient_irc_public_event requires self';
+  my $nickstr = $args{nickstr} // '';
+  my $channels = $args{channels};
+  my $msg = defined $args{msg} ? $args{msg} : '';
+  my $utility_style = $args{utility_style} // 'relaxed';
+  my $utility_notes_mode = $args{utility_notes_mode} // 'direct_only';
+
+  my ($nick) = split /!/, $nickstr;
+  return 0 if defined($nick) && $nick eq $self->get_nickname;
+  my $channel = ref $channels ? $channels->[0] : $channels;
+  $self->info("$channel <$nick> $msg");
+  $self->_last_activity(time());
+
+  if ($self->_is_human_nick($nick) && $self->_bert_reply_lock) {
+    $self->_bert_reply_lock(0);
+    $self->info("Reset burt conversational lock by human nick=$nick");
+  }
+
+  if (Bot::Runtime::UtilityCommands::handle_public_utility_command(
+    self       => $self,
+    channel    => $channel,
+    msg        => $msg,
+    style      => $utility_style,
+    notes_mode => $utility_notes_mode,
+  )) {
+    return 1;
+  }
+
+  my $speaker_is_filtered_bot = $self->_is_filtered_bot_nick($nick);
+
+  my $bot_nick = $self->get_nickname;
+  my $nick_re = quotemeta($bot_nick);
+  my $direct_mention = ($msg =~ /(?:^|\W)$nick_re(?:\W|$)/i) ? 1 : 0;
+  my $direct_addressee = $self->_is_public_message_addressed_to_self($msg) ? 1 : 0;
+  my $direct_address = ($direct_mention || $direct_addressee) ? 1 : 0;
+  my $thread_open = ($self->_public_thread_open_until && time() <= $self->_public_thread_open_until) ? 1 : 0;
+  my $addressed_other_human_turn = 0;
+  if ($self->_is_human_nick($nick) && !$direct_address) {
+    my ($target) = $self->_parse_public_addressee($msg);
+    $addressed_other_human_turn = 1 if defined($target) && lc($target) ne lc($bot_nick) && lc($target) ne 'hey';
+  }
+
+  my $open_thread_window = sub {
+    my ($why) = @_;
+    my $public_thread_window_seconds = $self->_persona_trait('public_thread_window_seconds');
+    return unless $public_thread_window_seconds > 0;
+    $self->_public_thread_open_until(time() + $public_thread_window_seconds);
+    $self->info("Opened public thread window for ${public_thread_window_seconds}s ($why)");
+  };
+
+  if ($speaker_is_filtered_bot) {
+    return 0 unless $direct_address;
+    if ($self->_bert_reply_lock) {
+      $self->info('Suppressing Burt conversational message: lock set');
+      return 1;
+    }
+    my $bot_reply_pct = $self->_persona_trait('bot_reply_pct');
+    if ($bot_reply_pct < 100 && int(rand(100)) >= $bot_reply_pct) {
+      $self->info("Suppressing Burt conversational message: probability gate bot_reply_pct=$bot_reply_pct");
+      return 1;
+    }
+    $self->info('Allowing Burt conversational message (direct address, unlocked)');
+    $open_thread_window->('filtered bot lane');
+    $self->_buffer_message($channel, $nick, $msg, { source_kind => 'bert_conversation' });
+    return 1;
+  }
+
+  if ($direct_address) {
+    $open_thread_window->('direct address');
+    $self->_buffer_message($channel, $nick, $msg, {
+      source_kind => 'conversation',
+      warm_human  => 1,
+    });
+    return 1;
+  }
+
+  if ($addressed_other_human_turn) {
+    $self->info('Suppressing public conversational message: human addressed someone else');
+    return 1;
+  }
+
+  if ($thread_open) {
+    $self->info('Allowing public conversational message due to open thread window');
+    $self->_buffer_message($channel, $nick, $msg, { source_kind => 'conversation' });
+    return 1;
+  }
+
+  my $ambient_public_reply_pct = $self->_persona_trait('ambient_public_reply_pct');
+  if ($ambient_public_reply_pct < 100 && int(rand(100)) >= $ambient_public_reply_pct) {
+    $self->info("Suppressing public conversational message: probability gate ambient_public_reply_pct=$ambient_public_reply_pct");
+    return 1;
+  }
+
+  $self->info('Allowing public conversational message via ambient probability gate');
+  $self->_buffer_message($channel, $nick, $msg, { source_kind => 'conversation' });
   return 1;
 }
 

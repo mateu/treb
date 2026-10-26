@@ -4,10 +4,10 @@ use Test::More;
 
 require './treb.pl';
 
-my $obj = bless {}, 'BertBot';
+my $obj = bless {}, 'Bot::HouseBot';
 
-ok(BertBot->can('_current_local_time_text'), 'has _current_local_time_text helper');
-ok(BertBot->can('_time_text_for_zone'), 'has _time_text_for_zone helper');
+ok(Bot::HouseBot->can('_current_local_time_text'), 'has _current_local_time_text helper');
+ok(Bot::HouseBot->can('_time_text_for_zone'), 'has _time_text_for_zone helper');
 
 my $text = $obj->_current_local_time_text;
 ok(defined $text && $text ne '', 'time text returned');

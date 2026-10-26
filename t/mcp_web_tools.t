@@ -6,7 +6,7 @@ require './treb.pl';
 
 {
     package TestMcpWebBot;
-    our @ISA = ('BertBot');
+    our @ISA = ('Bot::HouseBot');
 
     sub new { bless {}, shift }
     sub _mcp_tool_logging_enabled { 0 }

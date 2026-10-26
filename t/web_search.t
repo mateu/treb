@@ -7,7 +7,7 @@ require './treb.pl';
 
 {
     package TestBot;
-    our @ISA = ('BertBot');
+    our @ISA = ('Bot::HouseBot');
 
     sub new {
         my ($class) = @_;

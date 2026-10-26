@@ -8,7 +8,7 @@ local $ENV{IRC_NICKNAME} = 'treb_bot';
 local $ENV{BOT_IDENTITY_SLUG} = 'treb';
 require './treb.pl';
 
-my $bot = BertBot->new();
+my $bot = Bot::HouseBot->new();
 $bot->_load_persona_settings;
 
 my ($ok, $msg) = $bot->_set_persona_trait('bot_reply_max_turns', '2');

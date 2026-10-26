@@ -136,17 +136,24 @@ for my $msg (':persona', 'persona:') {
   );
 }
 
-# treb.pl delegates public-message flow; burt.pl still delegates utility parsing directly
+# Every bot's public-message flow (and with it utility parsing) runs through the
+# shared runtime module; burt.pl selects the ambient lane via its profile.
 sub slurp { my ($f) = @_; do { local (@ARGV, $/) = $f; <> } }
+my $house = slurp('lib/Bot/HouseBot.pm');
 like(
-  slurp('treb.pl'),
+  $house,
   qr/Bot::Runtime::PublicMessages::handle_standard_irc_public_event\s*\(/,
-  'treb.pl delegates public message handling to runtime module',
+  'HouseBot delegates standard public message handling to runtime module',
 );
 like(
-  slurp('burt.pl'),
+  $house,
+  qr/Bot::Runtime::PublicMessages::handle_ambient_irc_public_event\s*\(/,
+  'HouseBot delegates ambient (Burt) public message handling to runtime module',
+);
+like(
+  slurp('lib/Bot/Runtime/PublicMessages.pm'),
   qr/Bot::Runtime::UtilityCommands::handle_public_utility_command\s*\(/,
-  'burt.pl delegates utility parsing to runtime module',
+  'public message handling delegates utility parsing to runtime module',
 );
 
 done_testing;

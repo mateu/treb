@@ -4,7 +4,7 @@ use Test::More;
 
 BEGIN { require './treb.pl'; }
 
-my $bot = BertBot->new();
+my $bot = Bot::HouseBot->new();
 
 my @mixed = (
   { nick => 'Alice', msg => 'treb_bot, help', source_kind => 'conversation' },

@@ -1,5 +1,6 @@
 use strict;
 use warnings;
+use utf8;
 use Test::More;
 
 local $ENV{DB_FILE} = 't/burt_non_substantive.sqlite';
@@ -8,7 +9,7 @@ local $ENV{IRC_NICKNAME} = 'burt_bot';
 local $ENV{BOT_IDENTITY_SLUG} = 'burt';
 
 require './burt.pl';
-my $bot = BurtBot->new();
+my $bot = Bot::HouseBot->new();
 
 ok($bot->_is_trivial_parenthetical('( ... )'), 'dot parenthetical is trivial');
 ok($bot->_is_trivial_parenthetical('(…)'), 'unicode ellipsis parenthetical is trivial');

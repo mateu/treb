@@ -5,7 +5,7 @@ use Test::More;
 require './treb.pl';
 
 local $ENV{DB_FILE} = ':memory:';
-my $obj = bless {}, 'BertBot';
+my $obj = bless {}, 'Bot::HouseBot';
 my $dbh = $obj->memory->_dbh;
 $dbh->do(q{INSERT INTO notes (nick, content) VALUES (?, ?)}, undef, 'mateu', 'likes practical tooling');
 $dbh->do(q{INSERT INTO notes (nick, content) VALUES (?, ?)}, undef, 'mateu', 'prefers concise replies');

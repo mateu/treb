@@ -8,7 +8,7 @@ local $ENV{IRC_NICKNAME} = 'burt_bot';
 local $ENV{BOT_IDENTITY_SLUG} = 'burt';
 require './burt.pl';
 
-my $bot = BurtBot->new();
+my $bot = Bot::HouseBot->new();
 $bot->_load_persona_settings;
 
 my ($ok, $msg) = $bot->_set_persona_trait('ambient_public_reply_pct', '17');

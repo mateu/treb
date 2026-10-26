@@ -4,7 +4,7 @@ use Test::More;
 
 require './treb.pl';
 
-my $obj = bless {}, 'BertBot';
+my $obj = bless {}, 'Bot::HouseBot';
 
 {
     local $ENV{MCP_TOOL_LOGGING};

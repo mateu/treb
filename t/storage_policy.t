@@ -4,7 +4,7 @@ use Test::More;
 
 require './treb.pl';
 
-my $bot = bless {}, 'BertBot';
+my $bot = bless {}, 'Bot::HouseBot';
 
 {
     local $ENV{STORE_SYSTEM_ROWS} = undef;

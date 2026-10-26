@@ -10,6 +10,10 @@ Current baseline:
 
 This repo is the clean home for the bot, separate from the earlier Squirt/Koan testbed history.
 
+## Layout: one runtime, four profiles
+
+All bots run the same class, `lib/Bot/HouseBot.pm`. Each `<bot>.pl` (`treb.pl`, `burt.pl`, `astrid.pl`, `critic.pl`) is a small entry script that selects a profile and runs it. Per-bot differences (persona trait defaults, filtered bot nicks, utility-command style, brainfreeze lines, Burt's ambient public-message lane and parenthetical guards) live in `lib/Bot/Profiles.pm`. To change one bot's behaviour, edit its profile; to change everyone's, edit `HouseBot.pm` or the shared `lib/Bot/Runtime/` modules.
+
 
 ## critic / critic_bot
 

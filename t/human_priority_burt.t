@@ -4,7 +4,7 @@ use Test::More;
 
 BEGIN { require './burt.pl'; }
 
-my $bot = BurtBot->new();
+my $bot = Bot::HouseBot->new();
 
 my @mixed = (
   { nick => 'Alice', msg => 'burt_bot, help', source_kind => 'conversation' },
