@@ -12,14 +12,14 @@ import urllib.error
 import urllib.request
 import uuid
 
-from runner import run, validate
+from runner import run, validate, MAX_JSON_BYTES, InputSizeError
 from repository import Repository, validate_destination, validate_files
 from verification import Verification
 from references import References
 
 BASE = Path.home() / '.local/share/burt-workbench'
 TOKEN = Path.home() / '.config/burt-publisher/gist.token'
-MAX_REQUEST = 300000
+MAX_REQUEST = MAX_JSON_BYTES
 MAX_ATTEMPTS = 5
 
 # Operator-only audit: fixed strings, never arbitrary exception/source text.
@@ -58,7 +58,7 @@ SAFE_REASONS = frozenset({
     'invalid title',
     'invalid turn scope',
     'invalid verification policy',
-    'job JSON exceeds 256 KiB',
+    'job JSON exceeds 2 MiB',
     'job not found in this request',
     'job publication destination does not match tool',
     'job requires exactly files and argv',
@@ -149,7 +149,7 @@ class Broker:
         digest = hashlib.sha256(raw if raw is not None else
             json.dumps(original, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
         message = str(exc)
-        reason = message if message in SAFE_REASONS else 'unclassified broker error'
+        reason = message if message in SAFE_REASONS or isinstance(exc, InputSizeError) else 'unclassified broker error'
         for prefix in ('baseline files cannot be deleted: ', 'protected baseline file changed: ',
                        'new files restricted to approved regression directories: ', 'unknown reference; available: '):
             if message.startswith(prefix):

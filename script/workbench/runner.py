@@ -10,7 +10,23 @@ import tempfile
 import time
 import uuid
 
-MAX_BYTES = 65536
+# UTF-8 source contents and captured stdout/stderr are independent budgets.
+MAX_INPUT_BYTES = 128 * 1024
+MAX_OUTPUT_BYTES = 64 * 1024
+# Worst-case JSON escaping for source + 32 argv entries (4096 chars each),
+# plus filenames/envelope. This is a transport bound, not extra source space.
+MAX_JSON_BYTES = 2 * 1024 * 1024
+
+
+class InputSizeError(ValueError):
+    def __init__(self, submitted_bytes, subject='input files'):
+        self.submitted_bytes = submitted_bytes
+        self.allowed_bytes = MAX_INPUT_BYTES
+        self.excess_bytes = submitted_bytes - MAX_INPUT_BYTES
+        prefix = 'project exceeds' if subject == 'project' else 'input files exceed'
+        super().__init__(f'{prefix} 128 KiB: '
+                         f'submitted_bytes={submitted_bytes} allowed_bytes={MAX_INPUT_BYTES} '
+                         f'excess_bytes={self.excess_bytes}')
 
 
 def validate(job):
@@ -26,8 +42,8 @@ def validate(job):
                 or len(name) > 200 or not isinstance(content, str)):
             raise ValueError('invalid text file')
         total += len(content.encode())
-    if total > MAX_BYTES:
-        raise ValueError('input files exceed 64 KiB')
+    if total > MAX_INPUT_BYTES:
+        raise InputSizeError(total)
     if (not isinstance(argv, list) or not 1 <= len(argv) <= 32
             or any(not isinstance(a, str) or '\x00' in a or len(a) > 4096 for a in argv)
             or argv[0] not in ('/usr/bin/python3', '/usr/bin/perl', '/bin/sh')):
@@ -103,7 +119,7 @@ def run(job, seconds=20, checks=None):
                         if not chunk:
                             sel.unregister(key.fileobj)
                             continue
-                        remaining = MAX_BYTES - len(output)
+                        remaining = MAX_OUTPUT_BYTES - len(output)
                         output.extend(chunk[:remaining])
                         if len(chunk) > remaining:
                             reason = 'output_limit'
@@ -128,9 +144,9 @@ def run(job, seconds=20, checks=None):
 
 if __name__ == '__main__':
     try:
-        raw = sys.stdin.buffer.read(262145)
-        if len(raw) > 262144:
-            raise ValueError('job JSON exceeds 256 KiB')
+        raw = sys.stdin.buffer.read(MAX_JSON_BYTES + 1)
+        if len(raw) > MAX_JSON_BYTES:
+            raise ValueError('job JSON exceeds 2 MiB')
         print(json.dumps(run(json.loads(raw))))
     except Exception as exc:
         print(json.dumps({'error': str(exc)}))

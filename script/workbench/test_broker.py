@@ -79,7 +79,7 @@ class BrokerTests(unittest.TestCase):
 
     def test_invalid_host_command_and_fields(self):
         for change in ({'argv':['/usr/bin/curl','https://example.com']}, {'token':'x'},
-                       {'files':{'main.py':'x'*65537}}, {'title':'a\nb'}):
+                       {'files':{'main.py':'x'*131073}}, {'title':'a\nb'}):
             with self.assertRaises(ValueError): self.b.handle(self.req | change)
 
     def test_missing_or_open_token_blocks(self):
