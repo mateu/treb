@@ -625,4 +625,23 @@ use Bot::Runtime::RaidFlow qw(do_raid);
   ok(!$bot->_processing,'coding lane released after final answer');
 }
 
+# Publication uncertainty must reach IRC even when the model cannot report it.
+for my $ending ('error','silent') {
+  my $pending={channel=>'#ai',expires_at=>time+100,coding_task=>1,
+    input=>'publish tested bundle',messages=>[]};
+  my $bot;
+  $bot=Local::RaidFlowBot->new(pending=>$pending,replies=>[sub {
+    Bot::Runtime::Workbench::report_result($bot,'repo_publish',
+      '{"error":"repository submission failed or response lost; operator reconciliation required; do not retry"}');
+    die "model failed after publication\n" if $ending eq 'error';
+    return '__SILENT__';
+  }]);
+  do_raid(self=>$bot);
+  like($bot->{sent}[0]{msg},qr/public write may already have succeeded.*operator reconciliation.*do not retry/,
+    "publication warning delivered independently before model $ending");
+  ok(!$bot->_pending_raid,"publication task released after model $ending");
+  like($bot->{sent}[-1]{msg},qr/operator reconciliation.*do not retry/,
+    'model failure fallback preserves publication uncertainty') if $ending eq 'error';
+}
+
 done_testing;
