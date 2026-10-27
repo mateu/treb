@@ -208,3 +208,21 @@ namespace probe; both database quick_checks; read-only WHOIS confirms `#ai`
 and `#mateu-test`; zero service restarts. No live coding task or IRC progress
 message delivery was exercised during rollout. Dictionary recovery archive on
 Forge: `~/.local/share/burt-recovery/dictionary-recovery.tar.gz`.
+
+## Bounded repair loop
+
+`inspect_repo_job(id)` recovers complete saved files, result, destination and
+remaining quota within the **same current request**. `repair_repo_project(id,
+changes, delete, argv, title)` applies complete replacements only to named files;
+all omitted files survive exactly. Deletions must be explicit. It revalidates
+paths, input sizes, fresh branch base and the shared five-run quota, and creates
+a new immutable repository job. Publishing still requires that new job to pass,
+current publication permission, a recent result and an unchanged remote base.
+No previous request gains renewed publication authority.
+
+Runtime budget reminders survive in-loop context compaction and point to the
+latest saved repository job. Failed final attempts stop before another model
+call, with a deterministic quota notice. Verbose results retain the error head
+and terminal summary tail, marked `output_truncated`; new results record `argv`.
+The ordinary 13-iteration bound, 30-minute task deadline, five execution attempts,
+offline runner and credential-isolated publisher are unchanged.

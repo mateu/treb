@@ -195,7 +195,7 @@ sub do_raid {
     $self->error("Raider error: $err");
 
     my $fallback = $pending->{coding_task}
-      ? 'Coding task stopped before completion. ' . ($pending->{coding_last_result}//'No test result recorded.') . ' Saved bundles/results remain in the workbench journal; this task is not continuing.'
+      ? 'Coding task stopped: ' . ($pending->{coding_stop_reason}//($err =~ /tool loop exceeded/i ? 'tool iteration budget exhausted' : 'runtime error')) . '. ' . ($pending->{coding_last_result}//'No test result recorded.') . ' Saved bundles/results remain in the workbench journal; this task is not continuing.'
       : $err =~ /tool loop exceeded/i
       ? 'I hit the tool-call limit before I could finish that request. Please try again with a narrower question.'
       : 'My brain is fried. Someone forgot to feed the gerbils that power my CPU.';

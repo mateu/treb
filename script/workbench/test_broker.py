@@ -118,6 +118,15 @@ class BrokerTests(unittest.TestCase):
                                | {'action':'publish','id':r['id']})
         self.assertEqual(result['url'], 'https://gist.github.com/burt-agent/abcdef')
 
+    def test_verbose_failure_keeps_error_head_and_suite_summary_tail(self):
+        self.b.execute=lambda job: {'reason':'exited','exit_code':1,
+                                   'output':'FAILURE DETAIL\n'+'x'*12000+'\nResult: FAIL'}
+        result=self.b.handle(self.req)
+        self.assertTrue(result['result']['output_truncated'])
+        self.assertTrue(result['result']['output'].startswith('FAILURE DETAIL'))
+        self.assertTrue(result['result']['output'].endswith('Result: FAIL'))
+        self.assertEqual(result['state'],'failed')
+        with self.assertRaises(ValueError): self.publish(result)
 
 if __name__ == '__main__':
     unittest.main()
