@@ -60,6 +60,7 @@ print JSON::PP->new->utf8->canonical->encode([map { +{name=>$_, tags=>$rows{$_}}
         task = dict(id=name, branch='burt/'+name, project=name, prompt=prompt, files=files, argv=argv)
         result.append(dict(task=task, editable=[source],
                            checks={'verify.py':checker(command, gate, argv)},
+                           semantic={'verify.py':checker(command, public + gate + hidden)},
                            hidden={'verify.py':checker(command, hidden)}))
     return result
 

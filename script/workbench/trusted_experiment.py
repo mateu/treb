@@ -45,7 +45,7 @@ def assess(task_dir, bundle_path, output_dir, **kwargs):
     bundle = json.loads(bundle_path.read_text())
     files = bundle['files']
     preserve = all(files.get(n) == c for n, c in spec['task']['files'].items() if n not in spec['editable'])
-    checks = {'verify.py': spec['checks']['verify.py'] + '\n' + spec['hidden']['verify.py']}
+    checks = spec['semantic']
     result = run({'files':files, 'argv':['/usr/bin/python3', '-I', '/checks/verify.py']}, checks=checks)
     r.write_json(output_dir/'independent-result.json', result)
     return dict(status='scored', semantic_passed=result['reason']=='exited' and result['exit_code']==0,
@@ -55,7 +55,8 @@ def assess(task_dir, bundle_path, output_dir, **kwargs):
 def score(task, bundle, acceptance):
     return dict(semantic_accepted=acceptance.get('semantic_passed') is True,
                 preservation_passed=acceptance.get('preservation_passed') is True,
-                model_command_passed=bool(bundle and bundle['state']=='passed'),
+                broker_reported_passed=bool(bundle and bundle['state']=='passed'),
+                model_command_passed=(None if ARM=='gated32k' else bool(bundle and bundle['state']=='passed')),
                 trusted_gate_passed=bool(bundle and bundle['state']=='passed' and
                     bundle['result'].get('verification',{}).get('kind')=='trusted_checks'))
 
