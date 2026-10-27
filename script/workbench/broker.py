@@ -55,8 +55,8 @@ class Broker:
         allowed |= fields.get(action, set())
         if set(req) != allowed or action not in fields:
             raise ValueError('invalid action or fields')
-        if req['channel'] != '#ai' or req['network'] != 'irc.perl.org':
-            raise ValueError('workbench is restricted to irc.perl.org #ai')
+        if req['channel'] not in ('#ai', '#mateu-test') or req['network'] != 'irc.perl.org':
+            raise ValueError('workbench is restricted to irc.perl.org #ai or #mateu-test')
         scope = req['scope']
         if not isinstance(scope, str) or not re.fullmatch(r'[a-f0-9]{64}', scope):
             raise ValueError('invalid turn scope')
