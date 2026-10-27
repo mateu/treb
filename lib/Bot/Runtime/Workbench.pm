@@ -44,6 +44,8 @@ sub admit_task {
   $ttl=3600 if $ttl>3600;
   $pending->{expires_at}=now()+$ttl;
   $pending->{coding_task}=1;
+  $pending->{coding_scope}=request_scope($self,0);
+  task_status($pending,'started','admitted');
   task_notice($self,$pending,"Started coding task (up to ${ttl}s; bounded test/tool attempts). I will report test results and publication status.");
 }
 
@@ -52,6 +54,37 @@ sub task_notice {
   return unless $pending && $pending->{coding_task};
   $self->info("Coding task: $text") if $self->can('info');
   $self->_send_to_channel($pending->{channel},$text);
+}
+
+# Internal lifecycle IPC, never a model tool and never a caller-selected scope.
+# The admitted scope is frozen before generation so expiry/cleanup can reconcile it.
+sub task_status {
+  my ($pending,$phase,$reason)=@_;
+  return unless $pending && $pending->{coding_task}
+    && ($pending->{coding_scope}//'') =~ /\A[a-f0-9]{64}\z/;
+  return eval {
+    my $r=JSON::PP::decode_json(broker_call({action=>'task_status',
+      scope=>$pending->{coding_scope},channel=>lc($pending->{channel}),network=>'irc.perl.org',
+      phase=>$phase,reason=>$reason}));
+    die "Invalid task status" unless ref($r) eq 'HASH' && !exists($r->{error}) && ref($r->{jobs}) eq 'ARRAY'
+      && @{$r->{jobs}}<=5;
+    for my $job (@{$r->{jobs}}) {
+      die "Invalid job status" unless ref($job) eq 'HASH'
+        && ($job->{id}//'') =~ /\A[a-f0-9]{32}\z/
+        && ($job->{state}//'') =~ /\A(?:running|passed|failed|published|publishing|uncertain)\z/;
+    }
+    $r->{jobs};
+  };
+}
+
+sub finish_task {
+  my ($self,$pending,$reason)=@_;
+  return '' unless $pending && $pending->{coding_task};
+  my $jobs=task_status($pending,$reason eq 'final_report' ? 'reported' : 'stopped',$reason);
+  my $saved=!defined($jobs) ? 'Saved-bundle status unavailable; operator inspection required.'
+    : !@$jobs ? 'No project bundle was saved.'
+    : 'Saved jobs: ' . join(', ',map { "$_->{id} ($_->{state})" } @$jobs) . '.';
+  return $saved . ' This task is not continuing.';
 }
 
 sub report_result {

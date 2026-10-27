@@ -644,4 +644,26 @@ for my $ending ('error','silent') {
     'model failure fallback preserves publication uncertainty') if $ending eq 'error';
 }
 
+# Lifecycle IPC reconciles actual jobs after pending cleanup and loop exhaustion.
+for my $ending (qw(error silent empty deadline report)) {
+  no warnings 'redefine';
+  my @status;
+  local *Bot::Runtime::Workbench::broker_call=sub {
+    push @status,$_[0]; return '{"jobs":[]}';
+  };
+  my $pending={channel=>'#mateu-test',expires_at=>time+100,coding_task=>1,
+    coding_scope=>'e'x64,input=>'code',messages=>[]};
+  $pending->{expires_at}=time-1 if $ending eq 'deadline';
+  my $reply=$ending eq 'error' ? {die=>'tool loop exceeded'}
+    : $ending eq 'silent' ? '__SILENT__' : $ending eq 'empty' ? '' : 'Completed report.';
+  my $bot=Local::RaidFlowBot->new(pending=>$pending,replies=>[$reply]);
+  do_raid(self=>$bot);
+  is($status[-1]{scope},'e'x64,"$ending retains admitted scope after cleanup");
+  is($status[-1]{phase},$ending eq 'report' ? 'reported' : 'stopped',"$ending persists lifecycle");
+  is($status[-1]{reason},$ending eq 'report' ? 'final_report' : $ending eq 'error' ? 'iteration_limit'
+    : $ending eq 'deadline' ? 'deadline' : 'no_report',"$ending persists safe reason");
+  like($bot->{sent}[-1]{msg},qr/No project bundle was saved/,
+    "$ending zero-job notice is truthful") unless $ending eq 'report';
+}
+
 done_testing;
