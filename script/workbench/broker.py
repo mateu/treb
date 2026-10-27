@@ -12,7 +12,7 @@ import urllib.error
 import urllib.request
 import uuid
 
-from runner import run, validate, MAX_JSON_BYTES, InputSizeError
+from runner import run, validate, MAX_JSON_BYTES, MAX_INPUT_BYTES, MAX_GIST_INPUT_BYTES, InputSizeError
 from repository import Repository, validate_destination, validate_files
 from verification import Verification
 from references import References
@@ -266,7 +266,8 @@ class Broker:
             if _diagnostic:
                 destination['diagnostic_only'] = True
         if action in ('run', 'repo_run'):
-            files, argv = validate({'files': req['files'], 'argv': req['argv']})
+            files, argv = validate({'files': req['files'], 'argv': req['argv']},
+                                   max_input_bytes=MAX_INPUT_BYTES if action == 'repo_run' else MAX_GIST_INPUT_BYTES)
             # Gists use flat filenames. No extraction, generated paths, symlinks,
             # stdout-as-files, or host file reads are part of publishing.
             if action == 'repo_run':

@@ -13,23 +13,24 @@ import uuid
 # UTF-8 source contents and captured stdout/stderr are independent budgets.
 MAX_INPUT_BYTES = 128 * 1024
 MAX_OUTPUT_BYTES = 64 * 1024
+MAX_GIST_INPUT_BYTES = 64 * 1024
 # Worst-case JSON escaping for source + 32 argv entries (4096 chars each),
 # plus filenames/envelope. This is a transport bound, not extra source space.
 MAX_JSON_BYTES = 2 * 1024 * 1024
 
 
 class InputSizeError(ValueError):
-    def __init__(self, submitted_bytes, subject='input files'):
+    def __init__(self, submitted_bytes, subject='input files', allowed_bytes=MAX_INPUT_BYTES):
         self.submitted_bytes = submitted_bytes
-        self.allowed_bytes = MAX_INPUT_BYTES
-        self.excess_bytes = submitted_bytes - MAX_INPUT_BYTES
+        self.allowed_bytes = allowed_bytes
+        self.excess_bytes = submitted_bytes - allowed_bytes
         prefix = 'project exceeds' if subject == 'project' else 'input files exceed'
-        super().__init__(f'{prefix} 128 KiB: '
-                         f'submitted_bytes={submitted_bytes} allowed_bytes={MAX_INPUT_BYTES} '
+        super().__init__(f'{prefix} {allowed_bytes // 1024} KiB: '
+                         f'submitted_bytes={submitted_bytes} allowed_bytes={allowed_bytes} '
                          f'excess_bytes={self.excess_bytes}')
 
 
-def validate(job):
+def validate(job, max_input_bytes=MAX_INPUT_BYTES):
     if not isinstance(job, dict) or set(job) != {'files', 'argv'}:
         raise ValueError('job requires exactly files and argv')
     files, argv = job['files'], job['argv']
@@ -42,8 +43,8 @@ def validate(job):
                 or len(name) > 200 or not isinstance(content, str)):
             raise ValueError('invalid text file')
         total += len(content.encode())
-    if total > MAX_INPUT_BYTES:
-        raise InputSizeError(total)
+    if total > max_input_bytes:
+        raise InputSizeError(total, allowed_bytes=max_input_bytes)
     if (not isinstance(argv, list) or not 1 <= len(argv) <= 32
             or any(not isinstance(a, str) or '\x00' in a or len(a) > 4096 for a in argv)
             or argv[0] not in ('/usr/bin/python3', '/usr/bin/perl', '/bin/sh')):

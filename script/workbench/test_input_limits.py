@@ -82,16 +82,24 @@ class LargeWireTests(unittest.TestCase):
     setUp = test_rejection_audit.RejectionAuditTests.setUp
     wire = test_rejection_audit.RejectionAuditTests.wire
     def test_escaped_large_wire_roundtrip(self):
-        # Use run rather than repository policy fixtures: the real wire handler,
-        # no network or sandbox execution needed for this transport contract.
-        req = {k: self.req[k] for k in ('scope', 'channel', 'network')}
-        req |= dict(action='run', files={'large.txt': '\x01' * 131072},
-                    argv=['/bin/sh'], title='large wire')
+        # Preserve the trusted baseline; add escaped text only under the policy's
+        # allowed regression directory. Exercise the real broker wire handler.
+        req = self.req.copy()
+        req['files'] = self.files | {'tests/large.txt': '\x01' *
+                                    (131072 - sum(len(v.encode()) for v in self.files.values()))}
         result = self.wire(json.dumps(req).encode() + b'\n')
         self.assertNotIn('error', result)
         saved = self.b.db.execute('SELECT files FROM jobs WHERE id=?', (result['id'],)).fetchone()[0]
         self.assertEqual(json.loads(saved), req['files'])
-        req['files']['large.txt'] += 'x'
+        req['files']['tests/large.txt'] += 'x'
         result = self.wire(json.dumps(req).encode() + b'\n')
         self.assertIn('submitted_bytes=131073 allowed_bytes=131072 excess_bytes=1', result['error'])
         self.assertEqual(self.b.db.execute('SELECT COUNT(*) FROM jobs').fetchone()[0], 1)
+
+    def test_gist_input_budget_is_not_widened(self):
+        req = {k: self.req[k] for k in ('scope', 'channel', 'network')}
+        req |= dict(action='run', files={'main.py': 'x' * 65537},
+                    argv=['/bin/sh'], title='unchanged gist bound')
+        with self.assertRaisesRegex(InputSizeError, 'submitted_bytes=65537 allowed_bytes=65536 excess_bytes=1'):
+            self.b.handle(req)
+        self.assertEqual(self.b.db.execute('SELECT COUNT(*) FROM jobs').fetchone()[0], 0)

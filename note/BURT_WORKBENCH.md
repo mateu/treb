@@ -328,9 +328,10 @@ not a development checkout. Record exact release and rollback in deployment.json
 
 ## Project headroom (128 KiB)
 
-Source bundles (including unchanged tests/docs) now allow exactly 131,072 UTF-8
+Repository source bundles (including unchanged tests/docs) now allow exactly 131,072 UTF-8
 content bytes across at most 32 files. Runner, repository read, repair and
-publication use the same bound. Captured stdout/stderr remains 65,536 bytes;
+publication use the same bound. Captured stdout/stderr remains 65,536 bytes; standalone run_code/gist admission also
+remains 65,536 input bytes;
 output overflow still fails the job. Transport/standalone JSON envelopes allow
 2 MiB to accommodate worst-case JSON escaping and the separately bounded argv;
 this does not increase source, output, execution, model or publication quotas.
