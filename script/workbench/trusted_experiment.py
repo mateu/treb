@@ -115,6 +115,12 @@ print('namespace controls passed')
     boundary = run({'files':{'probe.py':probe},'argv':['/usr/bin/python3','-I','/checks/verify.py']}, checks={'verify.py':probe})
     r.write_json(output/'boundary.json',boundary)
     report.append(dict(control='namespace-boundaries',matched=boundary['reason']=='exited' and boundary['exit_code']==0))
+    for label, code, seconds, reason in [
+        ('timeout', 'import time; time.sleep(30)', 2, None),
+        ('output-limit', 'while True: print("x"*4096)', 5, 'output_limit')]:
+        result = run({'files':{'probe.py':code},'argv':['/usr/bin/python3','-I','/work/probe.py']}, seconds=seconds)
+        r.write_json(output/(label+'.json'),result)
+        report.append(dict(control=label,matched=(result['reason']==reason if reason else result['exit_code']!=0)))
     # Exercise exact model-process setup with networking disabled; exit before raid.
     expected = None
     for arm in ['current32k','gated32k']:
