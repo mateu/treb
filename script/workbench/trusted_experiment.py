@@ -53,8 +53,12 @@ def assess(task_dir, bundle_path, output_dir, **kwargs):
 
 
 def score(task, bundle, acceptance):
-    return dict(semantic_accepted=acceptance.get('semantic_passed') is True,
-                preservation_passed=acceptance.get('preservation_passed') is True,
+    scored = (acceptance.get('status') == 'scored'
+              and type(acceptance.get('semantic_passed')) is bool
+              and type(acceptance.get('preservation_passed')) is bool)
+    return dict(assessment_status=acceptance.get('status'), independently_scored=scored,
+                semantic_accepted=acceptance['semantic_passed'] if scored else None,
+                preservation_passed=acceptance['preservation_passed'] if scored else None,
                 broker_reported_passed=bool(bundle and bundle['state']=='passed'),
                 model_command_passed=(None if ARM=='gated32k' else bool(bundle and bundle['state']=='passed')),
                 trusted_gate_passed=bool(bundle and bundle['state']=='passed' and
@@ -209,6 +213,8 @@ def main():
         summaries.append(trial)
         r.write_json(root/'summary.json',summaries)
         print(json.dumps(dict(completed=len(summaries),total=len(plan),identity=item,score=trial['score'])),flush=True)
+        if trial['acceptance'].get('status') == 'evaluator_error':
+            raise ValueError('independent evaluator failed; retained unscored trial; comparison stopped')
     (root/'COMPLETE').write_text('12 scheduled trials finished; inspect scores and limitations\n')
 
 
