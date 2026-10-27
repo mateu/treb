@@ -2,6 +2,7 @@ name: Perl tests
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 jobs:
