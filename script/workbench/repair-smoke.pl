@@ -52,3 +52,8 @@ my $result=$raider->raid("Current #ai operator request: $request\nThe original f
 print "$result\n";
 print 'FINAL_METADATA: '.encode_json($bot->_pending_raid)."\n";
 die 'acceptance failed: no passed repository repair' unless ($bot->_pending_raid->{coding_last_repo_state}//'') eq 'passed';
+my $final=decode_json(Bot::Runtime::Workbench::broker_call({%envelope,action=>'repo_inspect',
+  id=>$bot->_pending_raid->{coding_last_repo_job}}));
+die 'acceptance changed the complete-project test argv' unless
+  encode_json($final->{result}{argv}) eq encode_json(['/usr/bin/perl','-Ilib','t/dictionary.t']);
+die 'acceptance dropped original project files' if grep {!exists $final->{files}{$_}} keys %{$fixture->{files}};

@@ -226,3 +226,10 @@ call, with a deterministic quota notice. Verbose results retain the error head
 and terminal summary tail, marked `output_truncated`; new results record `argv`.
 The ordinary 13-iteration bound, 30-minute task deadline, five execution attempts,
 offline runner and credential-isolated publisher are unchanged.
+
+`diagnose_repo_job(id, argv, title)` runs diagnostics against the saved complete
+repository source without copying it through the gist-oriented flat-file tool.
+It consumes the same execution quota but is durably marked diagnostic-only;
+even exit 0 can never be published, including after broker restart. Diagnostics
+cannot replace the latest complete-project result. Once a repository test job
+exists, the runtime directs run_code attempts to this diagnostic tool instead.

@@ -200,3 +200,22 @@ class RepositoryBrokerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'5 sandbox attempts'): self.repair(job,title='sixth')
         self.repo_publish(fixed)
         with self.assertRaises(ValueError): self.repair(fixed,title='after publication')
+
+    def test_diagnostics_keep_exact_source_and_can_never_publish(self):
+        self.b.execute=lambda job: {'reason':'exited','exit_code':1,'output':'failure'}
+        original=self.b.handle(self.repo_req)
+        self.b.execute=lambda job: self.runs.append(job) or {'reason':'exited','exit_code':0,'output':'diagnostic'}
+        request={k:self.req[k] for k in ('scope','channel','network')} | dict(
+            action='repo_diagnose',id=original['id'],argv=['/usr/bin/perl','-e','print 42'],title='diagnostic')
+        diagnostic=self.b.handle(request)
+        self.assertEqual(self.runs[-1]['files'],self.repo_req['files'])
+        self.assertEqual(diagnostic['attempts_remaining'],3)
+        self.assertEqual(diagnostic['state'],'passed')
+        with self.assertRaisesRegex(ValueError,'diagnostic jobs cannot be published'): self.repo_publish(diagnostic)
+        with self.assertRaisesRegex(ValueError,'original repository test job'): self.repair(diagnostic)
+        from broker import Broker
+        second=Broker(self.tmp.name,self.token);self.addCleanup(second.db.close)
+        with self.assertRaisesRegex(ValueError,'diagnostic jobs cannot be published'):
+            second.handle({k:self.req[k] for k in ('scope','channel','network')} | dict(action='repo_publish',id=diagnostic['id']))
+        with self.assertRaises(ValueError): self.b.handle(request | {'scope':'b'*64})
+        self.assertFalse(any(p is not None for _,p,_ in self.repo.calls))

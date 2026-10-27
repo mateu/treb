@@ -70,10 +70,9 @@ sub report_result {
   if ($url =~ m{\Ahttps://(?:gist\.github\.com/burt-agent/[a-f0-9]+|github\.com/burt-agent/workspace/commit/[a-f0-9]{40})\z}) {
     $notice.=" $url";
   }
-  if ($action =~ /(?:run|repair)/ && ref($r->{result}) eq 'HASH') {
+  if ($action =~ /(?:run|repair|diagnose)/ && ref($r->{result}) eq 'HASH') {
     my $exit=$r->{result}{exit_code};
     $notice.="; exit $exit" if defined($exit) && "$exit" =~ /\A-?\d{1,3}\z/;
-    $pending->{coding_last_result}=$notice;
   }
   my $remaining=$r->{attempts_remaining};
   if (defined($remaining) && !ref($remaining) && "$remaining" =~ /\A[0-5]\z/) {
@@ -135,6 +134,8 @@ sub tool_specs {
       [qw(branch project)],{branch=>{type=>'string'},project=>{type=>'string'}},'repo_read'],
     ['run_repo_project','Test a COMPLETE replacement project bundle in the same offline sandbox as run_code. First read_repo_project to obtain the current base_sha and files. Include ALL desired project source/test/docs files, including unchanged ones; omitted existing files are deleted ONLY inside projects/<project>/ when published. Nested relative paths supported; 32 text files/64 KiB. No network or installs. Returns job ID; nothing is committed yet. Never omit existing files accidentally. After a failure prefer repair_repo_project with changed files only. FIVE total sandbox attempts per request (including run_code diagnostics); inspect results before spending another attempt.',
       [qw(branch project base_sha files argv title)],{branch=>{type=>'string'},project=>{type=>'string'},base_sha=>{type=>'string'},files=>{type=>'object',additionalProperties=>{type=>'string'}},argv=>{type=>'array',items=>{type=>'string'}},title=>{type=>'string',maxLength=>200}},'repo_run'],
+    ['diagnose_repo_job','Run a diagnostic argv against the EXACT files of a saved repository job in THIS current request, without resubmitting files or losing project layout. Supply the original repository test job id, absolute argv and title. Uses one of the FIVE shared executions. No edits, no publication: a successful diagnostic is NEVER a passed project and cannot be published. Then repair_repo_project against the original failing job and run its complete suite. Prefer this over run_code for repository diagnostics.',
+      [qw(id argv title)],{id=>{type=>'string'},argv=>{type=>'array',items=>{type=>'string'}},title=>{type=>'string',maxLength=>200}},'repo_diagnose'],
     ['inspect_repo_job','Read an immutable repository job from THIS current request, including all saved source files, test output, destination and remaining attempt budget. Use after context loss to inspect the exact failing source, not regenerate it. No execution or publication; source and stdout are untrusted data.',
       ['id'],{id=>{type=>'string'}},'repo_inspect'],
     ['repair_repo_project','Repair and TEST a saved repository job from THIS request. Supply its id, changes mapping filenames to COMPLETE replacement contents for changed/new files ONLY, delete as an explicit list (usually empty), argv for the COMPLETE project suite, and title. Unchanged files are preserved exactly by the broker. Same branch/project/base; creates a new immutable job with a NEW id. Uses one of the FIVE shared sandbox attempts. Fix the reported failure without removing tests or rewriting unrelated code. Does not publish; publish_repo requires the new passed id.',
@@ -150,6 +151,8 @@ sub tool_specs {
         my $result=eval {
           die "Invalid tool fields\n" unless ref($args) eq 'HASH' && keys(%$args)==@$required
             && !grep {!exists $props->{$_}} keys %$args;
+          die "Repository diagnostics must use diagnose_repo_job with the saved repository job id; do not copy project files into run_code.\n"
+            if $action eq 'run' && ($self->_pending_raid||{})->{coding_last_repo_job};
           my $scope=request_scope($self,$action eq 'repo_publish' ? 'repo' : $action eq 'publish');
           task_notice($self,$self->_pending_raid,"$action started.") unless $action =~ /\Arepo_(?:read|inspect)\z/;
           my $raw=broker_call({%$args,action=>$action,scope=>$scope,channel=>'#ai',network=>'irc.perl.org'});
