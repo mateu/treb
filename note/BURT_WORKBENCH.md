@@ -233,3 +233,34 @@ It consumes the same execution quota but is durably marked diagnostic-only;
 even exit 0 can never be published, including after broker restart. Diagnostics
 cannot replace the latest complete-project result. Once a repository test job
 exists, the runtime directs run_code attempts to this diagnostic tool instead.
+
+### Repair-loop deployment and acceptance (2026-10-27 UTC)
+
+Clawd runs pinned runtime `d8cd8c565ac3308eff9cbeee0bb375d4c93197c7` at
+`~/.local/share/burt-irc/releases/d8cd8c5`; rollback files and consistent database
+backups are in `~/.local/share/burt-irc/backup-repair-loop-20261027T001741Z`.
+Restore its broker files and `80-workbench.conf`, daemon-reload, and restart the
+canonical broker then Burt to roll back code; do not replace live journals with
+old backups. No schema change was made. Other bots remained stopped.
+
+Verification: 53 Perl files / 1,052 assertions; 23 broker tests; both hosted CI
+runs on the deployed runtime commit passed. Isolated namespace/IPC probe,
+database quick checks, source hashes, zero automatic service restarts, and IRC
+WHOIS presence in #ai and #mateu-test passed after deployment. The first probe
+raced broker socket startup; the subsequent probe passed.
+
+An unassisted model replay still misdiagnosed the generated code and stopped
+correctly at its execution budget. Do NOT describe that as a successful repair.
+Independent negative/positive controls isolated two real project defects:
+Encode's canonical `utf-8-strict` name missed the client regex, and a single-quoted
+Latin-1 fixture contained literal Perl-style escapes instead of actual bytes.
+With those operator findings supplied, the production model repaired the original
+bundle in one run: job `d29bdf29225f4ffd8964978c2aaa1eda`, complete original suite
+`/usr/bin/perl -Ilib t/dictionary.t`, exit zero, 17 files retained, 15 byte-for-byte
+unchanged, all expected assertions retained. This is **guided model acceptance**,
+not proof of reliable autonomous diagnosis or a live IRC coding request.
+
+No dictionary code was published. Evidence and the exact passed bundle/result
+are at clawd:`~/.local/share/burt-recovery/20261027-verified-repair/` (private),
+including a consistent copy of the separate acceptance journal. Original live
+failed jobs are untouched. The temporary acceptance broker has been stopped.
