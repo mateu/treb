@@ -22,7 +22,7 @@ is($scope,Bot::Runtime::Workbench::request_scope($bot,1),'run and publish bind t
 like($scope,qr/^[a-f0-9]{64}$/,'scope is bounded digest');
 my $tool=bless {},'WorkbenchTool';
 my %defs=map {$_->{name}=>$_} @{Bot::Runtime::Workbench::tool_specs($bot)};
-is(scalar keys %defs,5,'five narrow tools');
+is(scalar keys %defs,8,'eight narrow tools');
 like($defs{publish_gist}{code}->($tool,{id=>'x',channel=>'#ai'}),qr/Invalid tool fields/,'model cannot choose scope/channel');
 for my $case (
   ['private channel',sub {$_[0]{pending}{channel}='mateu'}],
@@ -79,6 +79,18 @@ unlike($bot->{sent}[-1],qr/INJECTED/,'generated output not reflected into channe
 Bot::Runtime::Workbench::report_result($bot,'repo_publish',JSON::PP::encode_json({
  id=>'a'x32,state=>'published',url=>'https://github.com/burt-agent/workspace/commit/'.('b'x40)}));
 like($bot->{sent}[-1],qr{https://github.com/burt-agent/workspace/commit/},'actual broker commit URL reported');
+Bot::Runtime::Workbench::report_result($bot,'repo_repair',JSON::PP::encode_json({
+ id=>'c'x32,state=>'failed',attempts_remaining=>0,result=>{exit_code=>1}}));
+like($bot->{sent}[-1],qr/0 sandbox attempts left/,'shared budget is visible');
+is($bot->{pending}{coding_last_repo_job},'c'x32,'repair job survives model context compaction');
+like($bot->{pending}{coding_stop_reason},qr/attempt budget exhausted/,'failed final attempt requests terminal stop');
+my $project_failure=$bot->{pending}{coding_last_result};
+Bot::Runtime::Workbench::report_result($bot,'repo_diagnose',JSON::PP::encode_json({
+ id=>'d'x32,state=>'passed',attempts_remaining=>0,result=>{exit_code=>0}}));
+is($bot->{pending}{coding_last_repo_job},'c'x32,'diagnostic does not replace project job');
+is($bot->{pending}{coding_last_result},$project_failure,'passing diagnostic does not replace project failure');
+like($defs{run_code}{code}->($tool,{files=>{'x.pl'=>'1;'},argv=>['/usr/bin/perl','x.pl'],title=>'probe'}),
+ qr/Repository diagnostics must use diagnose_repo_job/,'repository diagnostics reuse the immutable bundle');
 $bot->{pending}{expires_at}=time-1;
 eval {Bot::Runtime::Workbench::request_scope($bot,0)};
 ok($@,'extended deadline still expires');

@@ -143,3 +143,79 @@ class RepositoryBrokerTests(unittest.TestCase):
         self.b.execute=lambda job:{'reason':'output_limit','exit_code':0}
         failed=self.b.handle(self.repo_req|{'title':'truncated'})
         with self.assertRaises(ValueError): self.repo_publish(failed)
+
+    def repair(self, job, **changes):
+        return self.b.handle({k:self.req[k] for k in ('scope','channel','network')}
+                             | dict(action='repo_repair',id=job['id'],changes={'lib/main.py':'print(43)'},
+                                    delete=[],argv=self.repo_req['argv'],title='repair') | changes)
+
+    def test_repair_preserves_bundle_and_publishes_only_retested_inputs(self):
+        self.b.execute=lambda job: {'reason':'exited','exit_code':1,'output':'broken'}
+        original=self.b.handle(self.repo_req)
+        self.b.execute=lambda job: self.runs.append(job) or {'reason':'exited','exit_code':0,'output':'ok'}
+        fixed=self.repair(original)
+        self.assertNotEqual(original['id'],fixed['id'])
+        expected=self.repo_req['files'] | {'lib/main.py':'print(43)'}
+        self.assertEqual(self.runs[-1]['files'],expected)
+        self.assertEqual(self.b.db.execute('SELECT files FROM jobs WHERE id=?',(original['id'],)).fetchone()[0],json.dumps(self.repo_req['files']))
+        self.assertEqual(self.repair(original)['id'],fixed['id'])
+        self.assertEqual(len(self.runs),1)
+        with self.assertRaises(ValueError): self.repo_publish(original)
+        self.repo_publish(fixed)
+        tree=next(p['tree'] for _,p,_ in self.repo.calls if p is not None and 'tree' in p)
+        self.assertEqual({x['path'].removeprefix('projects/dictionary/'):x['content'] for x in tree},expected)
+
+    def test_inspect_and_repair_scope_and_stale_base(self):
+        job=self.b.handle(self.repo_req)
+        req={k:self.req[k] for k in ('scope','channel','network')} | dict(action='repo_inspect',id=job['id'])
+        inspected=self.b.handle(req)
+        self.assertEqual(inspected['files'],self.repo_req['files'])
+        self.assertEqual(inspected['attempts_remaining'],4)
+        with self.assertRaises(ValueError): self.b.handle(req | {'scope':'b'*64})
+        self.req['scope']='b'*64
+        with self.assertRaises(ValueError): self.repair(job)
+        self.req['scope']='a'*64
+        self.repo.head=B
+        with self.assertRaisesRegex(ValueError,'branch changed'): self.repair(job)
+        self.assertEqual(len(self.runs),1)
+
+    def test_repair_rejects_bad_paths_deletion_and_overflow(self):
+        job=self.b.handle(self.repo_req)
+        for change in ({'changes':{'../escape':'x'}}, {'changes':{'bad':'x'*65537}},
+                       {'delete':['missing']}, {'delete':['lib/main.py']},
+                       {'changes':{},'delete':['t/test.py','t/test.py']},
+                       {'changes':{'bad':'\x00'}}, {'argv':['/usr/bin/curl']}):
+            with self.assertRaises(ValueError): self.repair(job,**change)
+        fixed=self.repair(job,changes={},delete=['lib/main.py'])
+        self.assertEqual(self.runs[-1]['files'],{'t/test.py':'assert 42==42'})
+        self.assertEqual(fixed['state'],'passed')
+
+    def test_repair_shares_five_attempt_quota_with_diagnostics(self):
+        job=self.b.handle(self.repo_req)
+        for i in range(3): self.b.handle(self.req | {'title':str(i)})
+        fixed=self.repair(job)
+        self.assertEqual(fixed['attempts_remaining'],0)
+        # Idempotence still works at quota; new jobs cannot bypass it.
+        self.assertEqual(self.repair(job)['id'],fixed['id'])
+        with self.assertRaisesRegex(ValueError,'5 sandbox attempts'): self.repair(job,title='sixth')
+        self.repo_publish(fixed)
+        with self.assertRaises(ValueError): self.repair(fixed,title='after publication')
+
+    def test_diagnostics_keep_exact_source_and_can_never_publish(self):
+        self.b.execute=lambda job: {'reason':'exited','exit_code':1,'output':'failure'}
+        original=self.b.handle(self.repo_req)
+        self.b.execute=lambda job: self.runs.append(job) or {'reason':'exited','exit_code':0,'output':'diagnostic'}
+        request={k:self.req[k] for k in ('scope','channel','network')} | dict(
+            action='repo_diagnose',id=original['id'],argv=['/usr/bin/perl','-e','print 42'],title='diagnostic')
+        diagnostic=self.b.handle(request)
+        self.assertEqual(self.runs[-1]['files'],self.repo_req['files'])
+        self.assertEqual(diagnostic['attempts_remaining'],3)
+        self.assertEqual(diagnostic['state'],'passed')
+        with self.assertRaisesRegex(ValueError,'diagnostic jobs cannot be published'): self.repo_publish(diagnostic)
+        with self.assertRaisesRegex(ValueError,'original repository test job'): self.repair(diagnostic)
+        from broker import Broker
+        second=Broker(self.tmp.name,self.token);self.addCleanup(second.db.close)
+        with self.assertRaisesRegex(ValueError,'diagnostic jobs cannot be published'):
+            second.handle({k:self.req[k] for k in ('scope','channel','network')} | dict(action='repo_publish',id=diagnostic['id']))
+        with self.assertRaises(ValueError): self.b.handle(request | {'scope':'b'*64})
+        self.assertFalse(any(p is not None for _,p,_ in self.repo.calls))

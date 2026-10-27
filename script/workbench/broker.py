@@ -18,6 +18,7 @@ from repository import Repository, validate_destination, validate_files
 BASE = Path.home() / '.local/share/burt-workbench'
 TOKEN = Path.home() / '.config/burt-publisher/gist.token'
 MAX_REQUEST = 300000
+MAX_ATTEMPTS = 5
 
 
 class Broker:
@@ -34,7 +35,7 @@ class Broker:
         self.db.commit()
         self.repository = Repository()
 
-    def handle(self, req):
+    def handle(self, req, _diagnostic=False):
         if not isinstance(req, dict):
             raise ValueError('object required')
         action = req.get('action')
@@ -42,7 +43,9 @@ class Broker:
         fields = {'run': {'files','argv','title'}, 'publish': {'id'},
                   'repo_read': {'branch','project'},
                   'repo_run': {'files','argv','title','branch','project','base_sha'},
-                  'repo_publish': {'id'}}
+                  'repo_publish': {'id'}, 'repo_inspect': {'id'},
+                  'repo_repair': {'id','changes','delete','argv','title'},
+                  'repo_diagnose': {'id','argv','title'}}
         allowed |= fields.get(action, set())
         if set(req) != allowed or action not in fields:
             raise ValueError('invalid action or fields')
@@ -51,6 +54,44 @@ class Broker:
         scope = req['scope']
         if not isinstance(scope, str) or not re.fullmatch(r'[a-f0-9]{64}', scope):
             raise ValueError('invalid turn scope')
+        if action in ('repo_inspect', 'repo_repair', 'repo_diagnose'):
+            job_id = req['id']
+            if not isinstance(job_id, str) or not re.fullmatch(r'[a-f0-9]{32}', job_id):
+                raise ValueError('invalid job id')
+            job = self.db.execute('SELECT * FROM jobs WHERE id=? AND scope=?', (job_id, scope)).fetchone()
+            dest = self.db.execute('SELECT destination FROM repo_jobs WHERE id=?', (job_id,)).fetchone()
+            if not job or not dest:
+                raise ValueError('repository job not found in this request')
+            destination = json.loads(dest['destination'])
+            if action == 'repo_inspect':
+                return self.result(job) | {'files': json.loads(job['files']), 'destination': destination}
+            if job['state'] not in ('passed', 'failed'):
+                raise ValueError('only an unsubmitted completed job can be repaired')
+            if destination.get('diagnostic_only'):
+                raise ValueError('use the original repository test job, not a diagnostic')
+            if action == 'repo_diagnose':
+                # Same exact source, different diagnostic argv. This job can NEVER
+                # publish, even if its command exits zero.
+                return Broker.handle(self, {k: req[k] for k in ('scope','channel','network','argv','title')}
+                                     | {'action':'repo_run', 'files':json.loads(job['files']),
+                                        **{k: destination[k] for k in ('branch','project','base_sha')}},
+                                     _diagnostic=True)
+            changes, deleted = req['changes'], req['delete']
+            if (not isinstance(changes, dict) or not isinstance(deleted, list)
+                    or any(not isinstance(n, str) for n in deleted)
+                    or len(deleted) != len(set(deleted))):
+                raise ValueError('repair requires file replacements and an explicit deletion list')
+            files = json.loads(job['files'])
+            if any(n not in files or n in changes for n in deleted):
+                raise ValueError('delete only existing files, without also replacing them')
+            files.update(changes)
+            for name in deleted:
+                del files[name]
+            # Re-enter the ordinary run path: same destination/base, full validation,
+            # quota, fresh base check and new immutable job. No publication here.
+            return self.handle({k: req[k] for k in ('scope','channel','network','argv','title')}
+                               | {'action': 'repo_run', 'files': files,
+                                  **{k: destination[k] for k in ('branch','project','base_sha')}})
         destination = None
         if action == 'repo_read':
             validate_destination(req['branch'], req['project'])
@@ -61,6 +102,8 @@ class Broker:
             if snapshot['base_sha'] != req['base_sha']:
                 raise ValueError('branch changed; read project and retest against the new base')
             destination = {k: snapshot[k] for k in ('branch','project','base_sha','exists')}
+            if _diagnostic:
+                destination['diagnostic_only'] = True
         if action in ('run', 'repo_run'):
             files, argv = validate({'files': req['files'], 'argv': req['argv']})
             # Gists use flat filenames. No extraction, generated paths, symlinks,
@@ -83,7 +126,7 @@ class Broker:
             count = self.db.execute('SELECT COUNT(*) FROM jobs WHERE created>?', (now - 3600,)).fetchone()[0]
             if count >= 30:
                 raise ValueError('global limit: 30 sandbox runs per hour')
-            if self.db.execute('SELECT COUNT(*) FROM jobs WHERE scope=?', (scope,)).fetchone()[0] >= 5:
+            if self.db.execute('SELECT COUNT(*) FROM jobs WHERE scope=?', (scope,)).fetchone()[0] >= MAX_ATTEMPTS:
                 raise ValueError('limit: 5 sandbox attempts per IRC request')
             job_id = uuid.uuid4().hex
             self.db.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?)',
@@ -96,9 +139,12 @@ class Broker:
                 result = self.execute({'files': files, 'argv': argv})
             except Exception:
                 result = {'reason': 'runner_error', 'exit_code': None, 'output': ''}
+            result['argv'] = argv
             state = 'passed' if result.get('reason') == 'exited' and result.get('exit_code') == 0 else 'failed'
             # Logs are data, not publisher instructions. Never publish logs implicitly.
-            result['output'] = result.get('output', '')[:8192]
+            output = result.get('output', '')
+            result['output_truncated'] = len(output) > 8192
+            result['output'] = output if len(output) <= 8192 else output[:4096] + '\n[output excerpted]\n' + output[-4096:]
             self.db.execute('UPDATE jobs SET result=?,state=? WHERE id=?', (json.dumps(result), state, job_id))
             self.db.commit()
             return self.result(self.db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())
@@ -116,7 +162,10 @@ class Broker:
         if job['state'] != 'passed' or job['created'] < time.time() - 900:
             raise ValueError('only a successful, recent, unsubmitted job can be published')
         if repo_job:
-            return self.publish_repository(job, json.loads(repo_job['destination']))
+            destination = json.loads(repo_job['destination'])
+            if destination.get('diagnostic_only'):
+                raise ValueError('diagnostic jobs cannot be published; rerun the complete project suite')
+            return self.publish_repository(job, destination)
         if not self.token.is_file():
             raise ValueError('Burt gist credential is not installed; ask the operator')
         if self.token.stat().st_mode & 0o077:
@@ -183,10 +232,11 @@ class Broker:
             raise ValueError('unexpected gist owner or URL')
         return url
 
-    @staticmethod
-    def result(job):
+    def result(self, job):
         return {'id': job['id'], 'state': job['state'], 'result': json.loads(job['result']),
-                'url': job['url'], 'files': list(json.loads(job['files']))}
+                'url': job['url'], 'files': list(json.loads(job['files'])),
+                'attempts_remaining': max(0, MAX_ATTEMPTS - self.db.execute(
+                    'SELECT COUNT(*) FROM jobs WHERE scope=?', (job['scope'],)).fetchone()[0])}
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):

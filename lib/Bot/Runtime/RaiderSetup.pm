@@ -62,7 +62,8 @@ sub setup_raider {
 
   my $raider_class = 'Langertha::Raider';
   use_module($raider_class);
-  my @plugins = ('+Bot::Runtime::RaiderPlugin::TerminalSilence');
+  my @plugins = ('+Bot::Runtime::RaiderPlugin::TerminalSilence',
+    '+Bot::Runtime::RaiderPlugin::CodingTask', { pending => sub { $self->_pending_raid } });
   if ($ENV{RAIDER_TOOL_TRACE}) {
     push @plugins, '+Bot::Runtime::RaiderPlugin::ToolTrace', {
       logger => sub { $self->info($_[0]) },
