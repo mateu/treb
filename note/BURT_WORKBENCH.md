@@ -264,3 +264,22 @@ No dictionary code was published. Evidence and the exact passed bundle/result
 are at clawd:`~/.local/share/burt-recovery/20261027-verified-repair/` (private),
 including a consistent copy of the separate acceptance journal. Original live
 failed jobs are untouched. The temporary acceptance broker has been stopped.
+
+### Isolated channel retry (2026-10-27)
+
+Coding and explicit publication requests are now accepted in exactly `#ai` and
+`#mateu-test` on irc.perl.org. The bot forwards the actual current request channel
+to the broker; channel remains part of the request scope. Fresh directly addressed
+human envelopes, publication wording, deadlines, attempt limits, offline execution
+and fixed publication destinations are unchanged. This authorizes any human in
+either channel under the existing nick classification, not authenticated ownership.
+
+Deploy this commit as a new pinned release, update the existing `80-workbench.conf`
+source paths, and replace only host broker.py from the same commit. Stop Burt and
+the broker before SQLite backup. Back up the drop-in, broker.py and deployment.json
+in `~/.local/share/burt-irc/backup-mateu-test-<UTC>/`, together with consistent backups
+of bot and broker databases. Rollback: stop both units, restore broker.py and the
+saved drop-in, daemon-reload, start broker then Burt. Leave current databases in
+place (no schema change); older backups are recovery points, not automatic rollback.
+The runtime source remains authoritative via systemctl ExecStart/WorkingDirectory;
+record exact release and backup in deployment.json under `mateu_test_authorization`.

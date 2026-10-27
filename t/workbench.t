@@ -67,6 +67,27 @@ like($defs{publish_repo}{code}->($tool,{id=>'x',branch=>'main'}),qr/Invalid tool
   eval {Bot::Runtime::Workbench::request_scope($bot,0)};
   like($@,qr/network/,'network cannot be overridden');
 }
+# Test-channel admission uses the same fresh human/publication gates.
+{
+  my $saved=JSON::PP::decode_json(JSON::PP::encode_json($bot->{pending}));
+  my $ai_scope=Bot::Runtime::Workbench::request_scope($bot,'repo');
+  $bot->{pending}{channel}='#mateu-test';
+  my $test_scope=Bot::Runtime::Workbench::request_scope($bot,'repo');
+  ok($test_scope,'test channel accepts explicit current human publication request');
+  isnt($test_scope,$ai_scope,'request scope remains channel-bound');
+  my $forwarded;
+  no warnings 'redefine';
+  local *Bot::Runtime::Workbench::broker_call=sub {$forwarded=$_[0]; return '{}'};
+  $defs{read_repo_project}{code}->($tool,{branch=>'burt/dictionary',project=>'dictionary'});
+  is($forwarded->{channel},'#mateu-test','broker receives actual runtime channel, not hardcoded #ai');
+  $bot->{pending}{messages}[0]{msg}='burt_bot: write a script';
+  eval {Bot::Runtime::Workbench::request_scope($bot,'repo')};
+  like($@,qr/explicitly asking to publish/,'test channel still requires explicit publication');
+  $bot->{pending}{messages}[0]{source_kind}='reminder';
+  eval {Bot::Runtime::Workbench::request_scope($bot,0)};
+  ok($@,'test channel reminder cannot authorize coding');
+  $bot->{pending}=$saved;
+}
 # Coding admission uses the same envelope gate; fixes a five-minute chat TTL
 # without renewing job scope when the model repairs/retries.
 $bot->{pending}{expires_at}=time+100;
