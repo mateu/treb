@@ -283,3 +283,45 @@ saved drop-in, daemon-reload, start broker then Burt. Leave current databases in
 place (no schema change); older backups are recovery points, not automatic rollback.
 The runtime source remains authoritative via systemctl ExecStart/WorkingDirectory;
 record exact release and backup in deployment.json under `mateu_test_authorization`.
+
+## Rejected calls and terminal task status
+
+The broker journal now adds two operator-only tables (additive schema; older code
+can still use the same jobs database):
+
+- `rejections`: timestamp, validated runtime scope/channel/network/action,
+  canonical request SHA-256, fixed validation reason and error category. Invalid
+  envelopes have NULL metadata. Malformed/oversized wire requests are hashed only
+  over the bounded bytes actually read, without inventing a scope. Known dynamic
+  validation reasons omit path suffixes. Unknown exception messages are discarded
+  as `unclassified broker error`, not persisted verbatim. Extend `SAFE_REASONS`
+  when adding new fixed validation messages.
+- `task_status`: admitted scope/channel, creation/update times, and fixed lifecycle
+  phase/reason. `reported` means a final model report, **not** verified completion.
+  Join the scope to `jobs` and `rejections` to reconcile the actual outcome. A
+  process crash can leave `started`; it does not imply continued background work.
+
+Each audit table retains at most 512 records and seven days, pruned on startup
+and audit writes. These are logical row/retention bounds; they do not shrink the
+shared SQLite file or change job retention. The database is mode 0600, outside
+the bot namespace. No source, arbitrary exception text, credentials, titles or
+stdout are added to audit records. Neither table has a model-readable tool.
+Rejected calls create no executable job ID and consume no execution/publication
+quota. Existing immutable failed-run bundles and results are unchanged.
+
+Internal runtime lifecycle IPC uses the scope frozen at trusted admission, so
+expiry and pending cleanup cannot change the lookup. Terminal notices query
+actual job IDs/states from the broker: zero jobs means `No project bundle was
+saved`; saved jobs list only real IDs/states. If IPC fails, status is unavailable,
+not zero. Rejection causes stay operator-only and are never echoed into IRC.
+This does not recover lost model context or renew any tool/publication authority.
+
+Deploy runtime and broker.py from the same pinned commit. Stop canonical
+`burt-sandbox.service` then `burt-workbench.service`, privately save existing
+source drop-in, broker code and deployment ledger, and make consistent SQLite
+backups before installing. Keep other bots/configuration/policy unchanged. Start
+broker then Burt and verify source hashes, database quick checks, namespace/IPC
+and IRC registration. For rollback restore saved code/drop-in/ledger and restart
+in that order; **keep live databases**, including the new audit evidence.
+Authoritative source remains the canonical service ExecStart/WorkingDirectory,
+not a development checkout. Record exact release and rollback in deployment.json.

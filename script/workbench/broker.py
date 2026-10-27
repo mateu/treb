@@ -22,6 +22,84 @@ TOKEN = Path.home() / '.config/burt-publisher/gist.token'
 MAX_REQUEST = 300000
 MAX_ATTEMPTS = 5
 
+# Operator-only audit: fixed strings, never arbitrary exception/source text.
+AUDIT_LIMIT = 512
+AUDIT_TTL = 7 * 86400
+ACTIONS = frozenset(('run', 'publish', 'repo_read', 'repo_run', 'repo_publish',
+                     'repo_inspect', 'repo_repair', 'repo_diagnose', 'reference', 'task_status'))
+SAFE_REASONS = frozenset({
+    'Burt gist credential is not installed; ask the operator',
+    'branch changed; read project and retest against the new base',
+    'branch changed; read project and retest before publishing',
+    'delete only existing files, without also replacing them',
+    'diagnostic jobs cannot be published; rerun the complete project suite',
+    'encoded project response exceeds transport bound',
+    'expected public writable burt-agent/workspace',
+    'file/directory collision',
+    'files must contain 1..32 text files',
+    'gist credential is not owned by burt-agent',
+    'gist credential must have mode 600',
+    'gist submission failed or response was lost; operator reconciliation required; do not retry',
+    'global limit: 10 gist submissions per day',
+    'global limit: 10 submissions per day',
+    'global limit: 30 sandbox runs per hour',
+    'input files exceed 64 KiB',
+    'invalid action or fields',
+    'invalid base commit',
+    'invalid branch head',
+    'invalid command; use absolute python3, perl, or sh',
+    'invalid commit tree',
+    'invalid created commit',
+    'invalid created tree',
+    'invalid job id',
+    'invalid project slug',
+    'invalid task status',
+    'invalid text file',
+    'invalid title',
+    'invalid turn scope',
+    'invalid verification policy',
+    'job JSON exceeds 256 KiB',
+    'job not found in this request',
+    'job publication destination does not match tool',
+    'job requires exactly files and argv',
+    'last execution reserved for trusted project verification',
+    'limit: 5 sandbox attempts per IRC request',
+    'limit: one gist submission per IRC request',
+    'limit: one submission per IRC request',
+    'object required',
+    'only a successful, recent, unsubmitted job can be published',
+    'only an unsubmitted completed job can be repaired',
+    'operator verification policy required for this project',
+    'oversized or unterminated request',
+    'project contains unsupported or oversized files',
+    'project directory is not a tree',
+    'project exceeds 64 KiB',
+    'project requires 1..32 text files',
+    'reference URL changed',
+    'reference deadline exceeded',
+    'repair requires file replacements and an explicit deletion list',
+    'repository credential must belong to burt-agent',
+    'repository credential requires private directory and mode 600',
+    'repository job not found in this request',
+    'repository operation deadline exceeded',
+    'repository response exceeds bound',
+    'repository submission failed or response lost; operator reconciliation required; do not retry',
+    'repository tree exceeds bound',
+    'task channel mismatch',
+    'trusted verification receipt missing or stale; retest',
+    'unexpected gist owner or URL',
+    'unexpected updated ref',
+    'unsupported blob encoding',
+    'use a burt/<lowercase-slug> branch; main is never writable',
+    'use flat ASCII filenames and text without NUL',
+    'use safe relative text paths; no hidden files, traversal or NUL',
+    'use the original repository test job, not a diagnostic',
+    'verification baseline changed; operator review required',
+    'verification policy must not be symlink/group/world writable',
+    'verification runtime changed; restart/review required',
+    'workbench is restricted to irc.perl.org #ai or #mateu-test',
+})
+
 
 class Broker:
     def __init__(self, base=BASE, token=TOKEN, execute=run, verification=None, verify_execute=None):
@@ -34,13 +112,65 @@ class Broker:
              files TEXT, title TEXT, result TEXT, state TEXT, url TEXT,
              UNIQUE(scope,digest))''')
         self.db.execute('CREATE TABLE IF NOT EXISTS repo_jobs (id TEXT PRIMARY KEY, destination TEXT NOT NULL)')
+        self.db.execute('''CREATE TABLE IF NOT EXISTS rejections
+            (seq INTEGER PRIMARY KEY, created REAL, scope TEXT, channel TEXT,
+             network TEXT, action TEXT, request_sha256 TEXT, reason TEXT, error_kind TEXT)''')
+        self.db.execute('''CREATE TABLE IF NOT EXISTS task_status
+            (scope TEXT PRIMARY KEY, channel TEXT, network TEXT, created REAL,
+             updated REAL, phase TEXT, reason TEXT)''')
+        (self.base / 'jobs.sqlite').chmod(0o600)
+        self.prune_audit()
         self.db.commit()
         self.repository = Repository()
         self.verification = verification
         self.verify_execute = verify_execute or (lambda job, checks: run(job, checks=checks))
         self.references = References()
 
+    def prune_audit(self):
+        now = time.time()
+        self.db.execute('DELETE FROM rejections WHERE created<?', (now - AUDIT_TTL,))
+        self.db.execute('DELETE FROM rejections WHERE seq NOT IN '
+                        '(SELECT seq FROM rejections ORDER BY seq DESC LIMIT ?)', (AUDIT_LIMIT,))
+        self.db.execute('DELETE FROM task_status WHERE updated<?', (now - AUDIT_TTL,))
+        self.db.execute('DELETE FROM task_status WHERE scope NOT IN '
+                        '(SELECT scope FROM task_status ORDER BY updated DESC LIMIT ?)', (AUDIT_LIMIT,))
+
+    def record_rejection(self, req, exc, raw=None):
+        # Scope/channel/action come only from the trusted runtime IPC envelope.
+        # Invalid/malformed envelopes have NULL metadata, not attacker text.
+        original = req
+        req = req if isinstance(req, dict) else {}
+        scope = req.get('scope')
+        scope = scope if isinstance(scope, str) and re.fullmatch('[a-f0-9]{64}', scope) else None
+        channel = req.get('channel') if req.get('channel') in ('#ai', '#mateu-test') else None
+        network = 'irc.perl.org' if req.get('network') == 'irc.perl.org' else None
+        action = req.get('action')
+        action = action if isinstance(action, str) and action in ACTIONS else None
+        digest = hashlib.sha256(raw if raw is not None else
+            json.dumps(original, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
+        message = str(exc)
+        reason = message if message in SAFE_REASONS else 'unclassified broker error'
+        for prefix in ('baseline files cannot be deleted: ', 'protected baseline file changed: ',
+                       'new files restricted to approved regression directories: ', 'unknown reference; available: '):
+            if message.startswith(prefix):
+                reason = prefix.rstrip(': ')
+        kind = ('validation' if isinstance(exc, ValueError) else
+                'type' if isinstance(exc, TypeError) else
+                'missing_field' if isinstance(exc, KeyError) else
+                'transport' if isinstance(exc, (TimeoutError, OSError)) else 'internal')
+        self.db.execute('INSERT INTO rejections VALUES (NULL,?,?,?,?,?,?,?,?)',
+                        (time.time(), scope, channel, network, action, digest, reason, kind))
+        self.prune_audit()
+        self.db.commit()
+
     def handle(self, req, _diagnostic=False):
+        try:
+            return self._handle(req, _diagnostic=_diagnostic)
+        except Exception as exc:
+            self.record_rejection(req, exc)
+            raise
+
+    def _handle(self, req, _diagnostic=False):
         if not isinstance(req, dict):
             raise ValueError('object required')
         action = req.get('action')
@@ -52,6 +182,7 @@ class Broker:
                   'repo_repair': {'id','changes','delete','argv','title'},
                   'repo_diagnose': {'id','argv','title'}}
         fields['reference'] = {'key'}
+        fields['task_status'] = {'phase', 'reason'}
         allowed |= fields.get(action, set())
         if set(req) != allowed or action not in fields:
             raise ValueError('invalid action or fields')
@@ -60,6 +191,24 @@ class Broker:
         scope = req['scope']
         if not isinstance(scope, str) or not re.fullmatch(r'[a-f0-9]{64}', scope):
             raise ValueError('invalid turn scope')
+        if action == 'task_status':
+            if (req['phase'] not in ('started', 'stopped', 'reported') or req['reason'] not in
+                    ('admitted', 'deadline', 'iteration_limit', 'runtime_error', 'no_report',
+                     'final_report', 'execution_limit')):
+                raise ValueError('invalid task status')
+            old = self.db.execute('SELECT channel FROM task_status WHERE scope=?', (scope,)).fetchone()
+            if old and old['channel'] != req['channel']:
+                raise ValueError('task channel mismatch')
+            now = time.time()
+            self.db.execute('INSERT INTO task_status VALUES (?,?,?,?,?,?,?) '
+                            'ON CONFLICT(scope) DO UPDATE SET updated=excluded.updated, '
+                            'phase=excluded.phase,reason=excluded.reason',
+                            (scope, req['channel'], req['network'], now, now, req['phase'], req['reason']))
+            self.prune_audit()
+            self.db.commit()
+            # No audit/read tool is exposed to the model. Return only actual job metadata.
+            return {'jobs': [dict(row) for row in self.db.execute(
+                'SELECT id,state FROM jobs WHERE scope=? ORDER BY created,id', (scope,))]}
         if action == 'reference':
             return self.references.read(req['key'])
         if action in ('repo_inspect', 'repo_repair', 'repo_diagnose'):
@@ -80,7 +229,7 @@ class Broker:
             if action == 'repo_diagnose':
                 # Same exact source, different diagnostic argv. This job can NEVER
                 # publish, even if its command exits zero.
-                return Broker.handle(self, {k: req[k] for k in ('scope','channel','network','argv','title')}
+                return Broker._handle(self, {k: req[k] for k in ('scope','channel','network','argv','title')}
                                      | {'action':'repo_run', 'files':json.loads(job['files']),
                                         **{k: destination[k] for k in ('branch','project','base_sha')}},
                                      _diagnostic=True)
@@ -97,7 +246,7 @@ class Broker:
                 del files[name]
             # Re-enter the ordinary run path: same destination/base, full validation,
             # quota, fresh base check and new immutable job. No publication here.
-            return self.handle({k: req[k] for k in ('scope','channel','network','argv','title')}
+            return self._handle({k: req[k] for k in ('scope','channel','network','argv','title')}
                                | {'action': 'repo_run', 'files': files,
                                   **{k: destination[k] for k in ('branch','project','base_sha')}})
         destination = None
@@ -281,14 +430,21 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 class Handler(socketserver.StreamRequestHandler):
     def handle(self):
         self.request.settimeout(5)
+        raw, req, dispatched = b'', None, False
         try:
             raw = self.rfile.readline(MAX_REQUEST + 1)
             if len(raw) > MAX_REQUEST or not raw.endswith(b'\n'):
                 raise ValueError('oversized or unterminated request')
-            result = self.server.broker.handle(json.loads(raw))
+            req = json.loads(raw)
+            dispatched = True
+            result = self.server.broker.handle(req)
         except (ValueError, TypeError, KeyError) as exc:
+            if not dispatched:
+                self.server.broker.record_rejection(req, exc, raw=raw)
             result = {'error': str(exc)[:300]}
-        except Exception:
+        except Exception as exc:
+            if not dispatched:
+                self.server.broker.record_rejection(req, exc, raw=raw)
             result = {'error': 'broker unavailable; operator inspection required'}
         try:
             self.wfile.write(json.dumps(result).encode() + b'\n')

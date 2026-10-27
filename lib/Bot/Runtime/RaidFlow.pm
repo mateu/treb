@@ -54,7 +54,7 @@ sub _expire_raid {
   $pending //= $self->_pending_raid;
   Bot::Runtime::Workbench::task_notice($self,$pending,
     'Coding task stopped: ' . $reason . '. ' . ($pending->{coding_last_result}//'No test result recorded.') .
-    ' Saved bundles/results remain in the workbench journal; this task is not continuing.');
+    ' ' . Bot::Runtime::Workbench::finish_task($self,$pending,'deadline'));
   POE::Kernel->delay('_retry_raid'); # cancel the old retry before admitting new work
   $self->_pending_raid(undef);
   $self->_rate_limit_wait(0);
@@ -108,6 +108,8 @@ sub do_raid {
 
   unless ($raider) {
     $self->error('Raider unavailable: no active raider instance');
+    Bot::Runtime::Workbench::task_notice($self,$pending,'Coding task stopped: runtime unavailable. ' .
+      Bot::Runtime::Workbench::finish_task($self,$pending,'runtime_error'));
     $self->_send_to_channel(
       $channel || $self->_default_channel,
       'My brain is still booting. Try again in a moment.',
@@ -133,6 +135,8 @@ sub do_raid {
   # Nested raid (e.g. a tool calling raid again) deadlocks POE/IO::Async.
   if ($self->can('_raid_in_progress') && $self->_raid_in_progress) {
     $self->error('Refusing nested raid; tool path attempted re-entrant raider call');
+    Bot::Runtime::Workbench::task_notice($self,$pending,'Coding task stopped: nested runtime call. ' .
+      Bot::Runtime::Workbench::finish_task($self,$pending,'runtime_error'));
     $self->_send_to_channel(
       $channel || $self->_default_channel,
       'My brain hiccuped on a nested thought. Try that again.',
@@ -195,7 +199,8 @@ sub do_raid {
     $self->error("Raider error: $err");
 
     my $fallback = $pending->{coding_task}
-      ? 'Coding task stopped: ' . ($pending->{coding_stop_reason}//($err =~ /tool loop exceeded/i ? 'tool iteration budget exhausted' : 'runtime error')) . '. ' . ($pending->{coding_last_result}//'No test result recorded.') . ' Saved bundles/results remain in the workbench journal; this task is not continuing.'
+      ? 'Coding task stopped: ' . ($pending->{coding_stop_reason}//($err =~ /tool loop exceeded/i ? 'tool iteration budget exhausted' : 'runtime error')) . '. ' . ($pending->{coding_last_result}//'No test result recorded.') . ' ' . Bot::Runtime::Workbench::finish_task($self,$pending,
+          $pending->{coding_stop_reason} ? 'execution_limit' : $err =~ /tool loop exceeded/i ? 'iteration_limit' : 'runtime_error')
       : $err =~ /tool loop exceeded/i
       ? 'I hit the tool-call limit before I could finish that request. Please try again with a narrower question.'
       : 'My brain is fried. Someone forgot to feed the gerbils that power my CPU.';
@@ -220,7 +225,7 @@ sub do_raid {
   };
 
   if ($answer =~ /__SILENT__/) {
-    Bot::Runtime::Workbench::task_notice($self,$pending,'Coding task ended without a final report. Saved bundles/results remain in the workbench journal.');
+    Bot::Runtime::Workbench::task_notice($self,$pending,'Coding task ended without a final report. ' . Bot::Runtime::Workbench::finish_task($self,$pending,'no_report'));
     $self->info("${silent_name} chose to stay silent");
     $self->_processing(0);
     $self->_schedule_pending_buffers;
@@ -249,7 +254,7 @@ sub do_raid {
 
   if ($answer !~ /\S/) {
     $self->_log_cleanup_empty($raw_answer, $answer);
-    Bot::Runtime::Workbench::task_notice($self,$pending,'Coding task ended without a final report. Saved bundles/results remain in the workbench journal.');
+    Bot::Runtime::Workbench::task_notice($self,$pending,'Coding task ended without a final report. ' . Bot::Runtime::Workbench::finish_task($self,$pending,'no_report'));
     $self->info('Answer empty after cleanup; staying silent');
     $self->_processing(0);
     $self->_schedule_pending_buffers;
@@ -257,6 +262,8 @@ sub do_raid {
   }
 
   if ($post_cleanup_guard && $post_cleanup_guard->($self, $channel, $answer)) {
+    Bot::Runtime::Workbench::task_notice($self,$pending,'Coding task report suppressed. ' .
+      Bot::Runtime::Workbench::finish_task($self,$pending,'no_report'));
     $self->_processing(0);
     return;
   }
@@ -287,7 +294,7 @@ sub do_raid {
     } elsif ($non_substantive_allow_pct > 0 && int(rand(100)) < $non_substantive_allow_pct) {
       $self->info("Allowing non-substantive output due to non_substantive_allow_pct=$non_substantive_allow_pct");
     } else {
-      Bot::Runtime::Workbench::task_notice($self,$pending,'Coding task ended without a usable final report. Saved bundles/results remain in the workbench journal.');
+      Bot::Runtime::Workbench::task_notice($self,$pending,'Coding task ended without a usable final report. ' . Bot::Runtime::Workbench::finish_task($self,$pending,'no_report'));
       $self->info('Suppressing non-substantive output');
       $self->_processing(0);
       $self->_schedule_pending_buffers;
@@ -329,6 +336,7 @@ sub do_raid {
     );
   }
 
+  Bot::Runtime::Workbench::finish_task($self,$pending,'final_report');
   $self->_send_to_channel($channel, $answer);
 
   if ($has_bert_conversation && $on_bert_reply_consumed) {
