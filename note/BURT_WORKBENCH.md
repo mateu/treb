@@ -167,3 +167,44 @@ restarts and the namespace isolation probe passed.
 
 These are synthetic model/tool acceptance checks, not a completed dictionary
 project or evidence of a real channel user's task succeeding.
+
+## Coding task visibility and lifetime
+
+Fresh admitted human coding envelopes get `BOT_CODING_TASK_TTL_SECONDS`
+(default 1800 seconds, hard configuration ceiling 3600) when processing starts,
+not the five-minute conversational output TTL. Admission uses the existing
+Workbench gate; stale queued messages, ambient chat, other bots/channels and
+reminder wakes gain no authority. This fixed deadline is never extended by a
+tool or retry, so the job scope is stable. Existing five-attempt broker quota,
+13 model-iteration limit, job freshness and publishing gates remain unchanged.
+This is an admission/tool/output deadline, not cancellation of an in-flight
+model HTTP request. Rate-limit retry budgets still apply.
+
+The runtime reports coding start, each execution/publication start and result
+(job ID, state, exit code, canonical publication URL), and an explicit stopped
+notice on expiry/error/silent or empty output. Source, generated stdout and
+model titles are never copied into progress notices. Broker errors do not
+establish publication failure: uncertain writes still require reconciliation.
+IRC delivery remains best effort. Active model turns are volatile across
+restart; immutable bundles and results survive in the broker journal. No
+background continuation or automatic re-publication is implied.
+
+Dictionary recovery on Forge: all three original failed 17-file bundles and
+results were exported read-only from the clawd journal into
+`~/.local/share/burt-recovery/`, keyed by original job ID. They are untrusted
+source snapshots, not a passing or published project. Do not execute them on
+the operator host; repair/test through the isolated runner.
+
+### Coding-status rollout (2026-10-26)
+
+Active Burt source is now `~/.local/share/burt-irc/releases/9d98315` on clawd.
+The broker has not changed. Backup/rollback instructions and SQLite backups:
+`~/.local/share/burt-irc/backup-coding-status-20261026T231449Z/`.
+Restore only its saved `80-workbench.conf`, daemon-reload and restart Burt to
+revert this change; keep the live databases and broker journal in place.
+
+Verification: 52 Perl test files / 1,036 assertions; 17 Python broker tests;
+namespace probe; both database quick_checks; read-only WHOIS confirms `#ai`
+and `#mateu-test`; zero service restarts. No live coding task or IRC progress
+message delivery was exercised during rollout. Dictionary recovery archive on
+Forge: `~/.local/share/burt-recovery/dictionary-recovery.tar.gz`.

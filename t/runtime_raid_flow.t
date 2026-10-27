@@ -597,4 +597,51 @@ use Bot::Runtime::RaidFlow qw(do_raid);
   is($bot->_processing, 0, 'expired repair releases processing lock');
 }
 
+{
+  my $pending={channel=>'#ai',expires_at=>time-1,coding_task=>1,
+    coding_last_result=>'repo_run: failed (job saved); exit 1',messages=>[]};
+  my $bot=Local::RaidFlowBot->new(pending=>$pending,replies=>[]);
+  do_raid(self=>$bot);
+  like($bot->{sent}[0]{msg},qr/Coding task stopped:.*failed.*not continuing/,
+    'expired coding task reports failure and explicitly stops');
+  ok(!$bot->_pending_raid,'expired coding task released');
+}
+
+{
+  no warnings qw(redefine once);
+  local *Local::RaidFlowBot::_bot_name_slug=sub {'burt'};
+  local *Local::RaidFlowBot::get_nickname=sub {'burt_bot'};
+  local *Local::RaidFlowBot::_is_human_nick=sub {1};
+  local $ENV{BURT_WORKBENCH_SOCKET}='/test/socket';
+  local $ENV{IRC_SERVER}='irc.perl.org';
+  my $clock=time;
+  local *Bot::Runtime::RaidFlow::now=sub {$clock};
+  my $pending={channel=>'#ai',expires_at=>$clock+100,input=>'coding task',messages=>[
+    {nick=>'mateu',msg=>'burt_bot: write code and publish a gist',source_kind=>'conversation',channel=>'#ai'}]};
+  my $bot=Local::RaidFlowBot->new(pending=>$pending,replies=>[sub {$clock+=400;return 'Tests passed; here is the result.'}]);
+  do_raid(self=>$bot);
+  like($bot->{sent}[0]{msg},qr/Started coding task/,'start reported before generation');
+  like($bot->{sent}[-1]{msg},qr/Tests passed/,'coding answer after normal chat TTL delivered');
+  ok(!$bot->_processing,'coding lane released after final answer');
+}
+
+# Publication uncertainty must reach IRC even when the model cannot report it.
+for my $ending ('error','silent') {
+  my $pending={channel=>'#ai',expires_at=>time+100,coding_task=>1,
+    input=>'publish tested bundle',messages=>[]};
+  my $bot;
+  $bot=Local::RaidFlowBot->new(pending=>$pending,replies=>[sub {
+    Bot::Runtime::Workbench::report_result($bot,'repo_publish',
+      '{"error":"repository submission failed or response lost; operator reconciliation required; do not retry"}');
+    die "model failed after publication\n" if $ending eq 'error';
+    return '__SILENT__';
+  }]);
+  do_raid(self=>$bot);
+  like($bot->{sent}[0]{msg},qr/public write may already have succeeded.*operator reconciliation.*do not retry/,
+    "publication warning delivered independently before model $ending");
+  ok(!$bot->_pending_raid,"publication task released after model $ending");
+  like($bot->{sent}[-1]{msg},qr/operator reconciliation.*do not retry/,
+    'model failure fallback preserves publication uncertainty') if $ending eq 'error';
+}
+
 done_testing;

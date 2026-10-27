@@ -5,6 +5,7 @@ use warnings;
 
 use Exporter 'import';
 use POE::Kernel ();
+use Bot::Runtime::Workbench ();
 use Bot::Runtime::Limits qw(runtime_limit now);
 use Bot::Runtime::OutputPipeline 'clean_ai_output';
 
@@ -48,8 +49,12 @@ sub _raid_with_fallback {
 }
 
 sub _expire_raid {
-  my ($self, $reason) = @_;
+  my ($self, $reason, $pending) = @_;
   $self->info("Abandoning pending raid: $reason");
+  $pending //= $self->_pending_raid;
+  Bot::Runtime::Workbench::task_notice($self,$pending,
+    'Coding task stopped: ' . $reason . '. ' . ($pending->{coding_last_result}//'No test result recorded.') .
+    ' Saved bundles/results remain in the workbench journal; this task is not continuing.');
   POE::Kernel->delay('_retry_raid'); # cancel the old retry before admitting new work
   $self->_pending_raid(undef);
   $self->_rate_limit_wait(0);
@@ -78,6 +83,8 @@ sub do_raid {
     _expire_raid($self, 'reply/retry deadline reached');
     return;
   }
+
+  Bot::Runtime::Workbench::admit_task($self);
 
   my $input    = $pending->{input};
   my $channel  = $pending->{channel};
@@ -187,7 +194,9 @@ sub do_raid {
     $err =~ s/\s+$//;
     $self->error("Raider error: $err");
 
-    my $fallback = $err =~ /tool loop exceeded/i
+    my $fallback = $pending->{coding_task}
+      ? 'Coding task stopped before completion. ' . ($pending->{coding_last_result}//'No test result recorded.') . ' Saved bundles/results remain in the workbench journal; this task is not continuing.'
+      : $err =~ /tool loop exceeded/i
       ? 'I hit the tool-call limit before I could finish that request. Please try again with a narrower question.'
       : 'My brain is fried. Someone forgot to feed the gerbils that power my CPU.';
     $self->_send_to_channel(
@@ -211,6 +220,7 @@ sub do_raid {
   };
 
   if ($answer =~ /__SILENT__/) {
+    Bot::Runtime::Workbench::task_notice($self,$pending,'Coding task ended without a final report. Saved bundles/results remain in the workbench journal.');
     $self->info("${silent_name} chose to stay silent");
     $self->_processing(0);
     $self->_schedule_pending_buffers;
@@ -239,6 +249,7 @@ sub do_raid {
 
   if ($answer !~ /\S/) {
     $self->_log_cleanup_empty($raw_answer, $answer);
+    Bot::Runtime::Workbench::task_notice($self,$pending,'Coding task ended without a final report. Saved bundles/results remain in the workbench journal.');
     $self->info('Answer empty after cleanup; staying silent');
     $self->_processing(0);
     $self->_schedule_pending_buffers;
@@ -276,6 +287,7 @@ sub do_raid {
     } elsif ($non_substantive_allow_pct > 0 && int(rand(100)) < $non_substantive_allow_pct) {
       $self->info("Allowing non-substantive output due to non_substantive_allow_pct=$non_substantive_allow_pct");
     } else {
+      Bot::Runtime::Workbench::task_notice($self,$pending,'Coding task ended without a usable final report. Saved bundles/results remain in the workbench journal.');
       $self->info('Suppressing non-substantive output');
       $self->_processing(0);
       $self->_schedule_pending_buffers;
@@ -288,7 +300,7 @@ sub do_raid {
   # response with an internal state summary, which would then be sent to IRC.
 
   if (now() >= $pending->{expires_at}) {
-    _expire_raid($self, 'reply expired during output cleanup/retry');
+    _expire_raid($self, 'reply expired during output cleanup/retry', $pending);
     return;
   }
 
