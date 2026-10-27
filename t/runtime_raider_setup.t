@@ -100,6 +100,7 @@ use Bot::Runtime::RaiderSetup (qw(setup_raider));
 
     sub _build_mcp_server { return $_[0]->{mcp_server} }
     sub get_nickname { return $_[0]->{nickname} }
+    sub _bot_name_slug { return $_[0]->{bot_slug} // 'bert' }
     sub get_channels { return @{ $_[0]->{channels} } }
 
     sub _mcp {
@@ -202,6 +203,34 @@ subtest 'setup_raider respects Ollama-specific args and custom context' => sub {
     my $mission = $raider->{mission}{mission_args};
     is($mission->{mission_extra}, 'be concise', 'system prompt appended to mission');
     is($mission->{provider}, 'Ollama', 'provider derived from Ollama engine class');
+};
+
+subtest 'operator Burt budget is opt-in and does not affect other profiles' => sub {
+    local %ENV = %ENV;
+    delete $ENV{FALLBACK_MODELS};
+    no warnings 'redefine';
+    local *Bot::Runtime::RaiderSetup::use_module = sub { return 1 };
+    my $bot = TestRuntimeSetupBot->new;
+    my %args = (self => $bot, owner => 'mateu', max_line => 320,
+                script_file => '/tmp/burt.pl');
+    $bot->{bot_slug} = 'burt';
+    delete $ENV{BURT_CONTEXT_TOKENS};
+    is(setup_raider(%args)->{max_context_tokens}, 8192, 'unset leaves Burt unchanged');
+    $ENV{BURT_CONTEXT_TOKENS} = '32768';
+    my $raider = setup_raider(%args);
+    is($raider->{max_context_tokens}, 32768, 'Burt receives configured compactor budget');
+    is($raider->{max_iterations}, 13, 'iteration limit remains unchanged');
+    like($bot->{infos}[-1], qr/32768 tokens; max iterations: 13/, 'effective budget is observable');
+    is(setup_raider(%args, max_context_tokens => 4096)->{max_context_tokens}, 4096,
+       'explicit caller budget takes precedence');
+    $bot->{bot_slug} = 'bert';
+    is(setup_raider(%args)->{max_context_tokens}, 8192, 'other bots ignore Burt setting');
+    $bot->{bot_slug} = 'burt';
+    for my $invalid ('', '0', '32768x', '32768.5', '65537', '-1') {
+        $ENV{BURT_CONTEXT_TOKENS} = $invalid;
+        eval { setup_raider(%args) };
+        like($@, qr/BURT_CONTEXT_TOKENS must be/, 'invalid budget rejected before model setup');
+    }
 };
 
 done_testing;

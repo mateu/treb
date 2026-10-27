@@ -16,6 +16,15 @@ sub setup_raider {
   die 'setup_raider requires max_line' unless defined $max_line;
   my $script_file = $args{script_file} or die 'setup_raider requires script_file';
   my $max_context_tokens = defined $args{max_context_tokens} ? $args{max_context_tokens} : 8192;
+  # Operator opt-in for the Burt rollout. Other bots and explicit caller budgets
+  # retain their existing settings. This is a compactor budget, not an API cap.
+  if (!defined $args{max_context_tokens} && $self->can('_bot_name_slug')
+      && $self->_bot_name_slug eq 'burt' && exists $ENV{BURT_CONTEXT_TOKENS}) {
+    my $budget = $ENV{BURT_CONTEXT_TOKENS};
+    die 'BURT_CONTEXT_TOKENS must be an integer from 8192 to 65536'
+      unless $budget =~ /\A[0-9]+\z/ && $budget >= 8192 && $budget <= 65536;
+    $max_context_tokens = 0 + $budget;
+  }
 
   my $mcp_server = $self->_build_mcp_server;
   my $loop_class = 'IO::Async::Loop::POE';
@@ -87,6 +96,7 @@ sub setup_raider {
 
   $self->_raider($raider);
   $self->info("Raider ready: $engine_class / " . ($engine->model));
+  $self->info("Raider compactor budget: $max_context_tokens tokens; max iterations: 13");
   return $raider;
 }
 
