@@ -35,8 +35,10 @@ def validate(job):
     return files, argv
 
 
-def run(job, seconds=20):
+def run(job, seconds=20, checks=None):
     files, argv = validate(job)
+    if checks is not None:
+        validate({'files': checks, 'argv': argv})
     unit = 'burt-workbench-' + uuid.uuid4().hex
     # Do not forward the operator environment (including tokens or tracing flags).
     env = {'PATH': '/usr/bin:/bin', 'HOME': str(Path.home()),
@@ -48,6 +50,15 @@ def run(job, seconds=20):
             target = root / name
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content)
+        # Verification inputs are supplied ONLY by the operator-side broker.
+        # Both source and tests stay read-only throughout trusted verification.
+        checks_dir = root / '.operator-checks'
+        if checks is not None:
+            checks_dir.mkdir()
+            for name, content in checks.items():
+                target = checks_dir / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content)
         cmd = ['/usr/bin/systemd-run', '--user', '--quiet', '--wait', '--pipe', '--collect',
                '--unit=' + unit, '-p', 'RuntimeMaxSec=' + str(seconds),
                '-p', 'TimeoutStopSec=2', '-p', 'KillMode=control-group',
@@ -62,6 +73,19 @@ def run(job, seconds=20):
                '--chdir', '/work', '--clearenv', '--setenv', 'PATH', '/usr/bin:/bin',
                '--setenv', 'HOME', '/tmp', '/bin/sh', '-c',
                'cp -R /input/. /work/ && exec "$@"', 'burt-job', *argv]
+        if checks is not None:
+            # Do not nest the private checks under /input or expose host paths.
+            source_dir = root / '.operator-source'
+            source_dir.mkdir()
+            for name, content in files.items():
+                target = source_dir / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content)
+            start = cmd.index('--ro-bind', cmd.index('--tmpfs') + 2)
+            cmd[start:] = ['--ro-bind', str(source_dir), '/work',
+                          '--ro-bind', str(checks_dir), '/checks', '--chdir', '/work',
+                          '--clearenv', '--setenv', 'PATH', '/usr/bin:/bin',
+                          '--setenv', 'HOME', '/tmp', '--setenv', 'PYTHONDONTWRITEBYTECODE', '1', *argv]
         output = bytearray()
         reason = 'exited'
         started = time.monotonic()

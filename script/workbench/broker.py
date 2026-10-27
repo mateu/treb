@@ -14,6 +14,8 @@ import uuid
 
 from runner import run, validate
 from repository import Repository, validate_destination, validate_files
+from verification import Verification
+from references import References
 
 BASE = Path.home() / '.local/share/burt-workbench'
 TOKEN = Path.home() / '.config/burt-publisher/gist.token'
@@ -22,7 +24,7 @@ MAX_ATTEMPTS = 5
 
 
 class Broker:
-    def __init__(self, base=BASE, token=TOKEN, execute=run):
+    def __init__(self, base=BASE, token=TOKEN, execute=run, verification=None, verify_execute=None):
         self.base, self.token, self.execute = Path(base), Path(token), execute
         self.base.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.db = sqlite3.connect(self.base / 'jobs.sqlite')
@@ -34,6 +36,9 @@ class Broker:
         self.db.execute('CREATE TABLE IF NOT EXISTS repo_jobs (id TEXT PRIMARY KEY, destination TEXT NOT NULL)')
         self.db.commit()
         self.repository = Repository()
+        self.verification = verification
+        self.verify_execute = verify_execute or (lambda job, checks: run(job, checks=checks))
+        self.references = References()
 
     def handle(self, req, _diagnostic=False):
         if not isinstance(req, dict):
@@ -46,6 +51,7 @@ class Broker:
                   'repo_publish': {'id'}, 'repo_inspect': {'id'},
                   'repo_repair': {'id','changes','delete','argv','title'},
                   'repo_diagnose': {'id','argv','title'}}
+        fields['reference'] = {'key'}
         allowed |= fields.get(action, set())
         if set(req) != allowed or action not in fields:
             raise ValueError('invalid action or fields')
@@ -54,6 +60,8 @@ class Broker:
         scope = req['scope']
         if not isinstance(scope, str) or not re.fullmatch(r'[a-f0-9]{64}', scope):
             raise ValueError('invalid turn scope')
+        if action == 'reference':
+            return self.references.read(req['key'])
         if action in ('repo_inspect', 'repo_repair', 'repo_diagnose'):
             job_id = req['id']
             if not isinstance(job_id, str) or not re.fullmatch(r'[a-f0-9]{32}', job_id):
@@ -93,6 +101,7 @@ class Broker:
                                | {'action': 'repo_run', 'files': files,
                                   **{k: destination[k] for k in ('branch','project','base_sha')}})
         destination = None
+        policy = None
         if action == 'repo_read':
             validate_destination(req['branch'], req['project'])
             return self.repository.snapshot(req['branch'], req['project'])
@@ -102,6 +111,9 @@ class Broker:
             if snapshot['base_sha'] != req['base_sha']:
                 raise ValueError('branch changed; read project and retest against the new base')
             destination = {k: snapshot[k] for k in ('branch','project','base_sha','exists')}
+            if self.verification is not None:
+                policy = self.verification.policy(snapshot)
+                destination['verification_policy'] = self.verification.identity(policy)
             if _diagnostic:
                 destination['diagnostic_only'] = True
         if action in ('run', 'repo_run'):
@@ -110,6 +122,8 @@ class Broker:
             # stdout-as-files, or host file reads are part of publishing.
             if action == 'repo_run':
                 validate_files(files)
+                if policy is not None and not _diagnostic:
+                    self.verification.prepare(snapshot, files)
             elif any(not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}', n)
                    or '\x00' in v for n, v in files.items()):
                 raise ValueError('use flat ASCII filenames and text without NUL')
@@ -120,6 +134,9 @@ class Broker:
             old = self.db.execute('SELECT * FROM jobs WHERE scope=? AND digest=?', (scope, digest)).fetchone()
             if old:
                 return self.result(old)
+            if (_diagnostic and self.verification is not None and self.db.execute(
+                    'SELECT COUNT(*) FROM jobs WHERE scope=?', (scope,)).fetchone()[0] >= MAX_ATTEMPTS - 1):
+                raise ValueError('last execution reserved for trusted project verification')
             now = time.time()
             # Retain a bounded journal; ambiguous submissions remain for manual reconciliation.
             self.db.execute("DELETE FROM jobs WHERE created<? AND state NOT IN ('publishing','uncertain')", (now - 7*86400,))
@@ -136,11 +153,21 @@ class Broker:
             self.db.execute('DELETE FROM repo_jobs WHERE id NOT IN (SELECT id FROM jobs)')
             self.db.commit()
             try:
-                result = self.execute({'files': files, 'argv': argv})
+                if policy is not None and not _diagnostic:
+                    result = self.verify_execute({'files': files, 'argv': policy['argv']}, policy['checks'])
+                    result['requested_argv'] = argv
+                    result['verification'] = {'policy_sha256': self.verification.identity(policy),
+                                              'argv': policy['argv'], 'kind': 'trusted_checks'}
+                else:
+                    result = self.execute({'files': files, 'argv': argv})
             except Exception:
                 result = {'reason': 'runner_error', 'exit_code': None, 'output': ''}
-            result['argv'] = argv
+            result['argv'] = policy['argv'] if policy is not None and not _diagnostic else argv
+            if action == 'repo_run' and policy is None:
+                result['verification'] = {'kind': 'command_only_unverified'}
             state = 'passed' if result.get('reason') == 'exited' and result.get('exit_code') == 0 else 'failed'
+            if _diagnostic:
+                result['verification'] = {'kind': 'diagnostic_only'}
             # Logs are data, not publisher instructions. Never publish logs implicitly.
             output = result.get('output', '')
             result['output_truncated'] = len(output) > 8192
@@ -194,6 +221,13 @@ class Broker:
     def publish_repository(self, job, destination):
         # Read/preflight before marking submitted; no writes on stale bases.
         snapshot = self.repository.snapshot(destination['branch'], destination['project'])
+        if self.verification is not None:
+            policy = self.verification.prepare(snapshot, json.loads(job['files']))
+            receipt = json.loads(job['result']).get('verification', {})
+            if (destination.get('verification_policy') != self.verification.identity(policy)
+                    or receipt.get('policy_sha256') != self.verification.identity(policy)
+                    or receipt.get('kind') != 'trusted_checks'):
+                raise ValueError('trusted verification receipt missing or stale; retest')
         if any(snapshot[k] != destination[k] for k in ('base_sha','exists')):
             raise ValueError('branch changed; read project and retest before publishing')
         n = self.db.execute("SELECT COUNT(*) FROM jobs WHERE created>? AND state IN ('published','publishing','uncertain')", (time.time()-86400,)).fetchone()[0]
@@ -272,7 +306,8 @@ def main():
         path.unlink()
     # Serialized, bounded jobs: at most one execution or publication at a time.
     with socketserver.UnixStreamServer(str(path), Handler) as server:
-        server.broker = Broker()
+        policy_path = os.environ.get('BURT_VERIFICATION_POLICY')
+        server.broker = Broker(verification=Verification.load(policy_path) if policy_path else None)
         os.chmod(path, 0o600)
         server.serve_forever()
 
