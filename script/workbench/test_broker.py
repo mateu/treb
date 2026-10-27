@@ -61,6 +61,15 @@ class BrokerTests(unittest.TestCase):
             req = self.req | {key:value}
             with self.assertRaises(ValueError): self.b.handle(req)
 
+    def test_test_channel_allowed_without_widening_boundary(self):
+        r = self.b.handle(self.req | {'channel':'#mateu-test'})
+        self.assertEqual(r['state'], 'passed')
+        for channel in ('#mateu-test-other', '#AI', 'mateu', '#other'):
+            with self.assertRaises(ValueError):
+                self.b.handle(self.req | {'channel':channel})
+        with self.assertRaises(ValueError):
+            self.b.handle(self.req | {'channel':'#mateu-test', 'network':'irc.other'})
+
     def test_no_host_paths_or_binary(self):
         for name, content in [('../secret','x'), ('/etc/passwd','x'), ('dir/name','x'),
                               ('ok.py','\x00'), ('-n','x')]:

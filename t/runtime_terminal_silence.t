@@ -83,6 +83,7 @@ like(join("\n", @pre_fix_trace), qr/event=model_tool_call name=stay_silent args=
 like(join("\n", @pre_fix_trace), qr/event=tool_result name=stay_silent status=succeeded result_chars=10/, 'trace captures the text-only silent result that failed to terminate the loop');
 
 my @trace;
+my $calls_before_fixed = $calls;
 my $engine = TerminalSilence::Engine->new(loop => $loop, mcp_servers => [$mcp]);
 my $raider = Langertha::Raider->new(
   engine => $engine,
@@ -96,7 +97,9 @@ my $raider = Langertha::Raider->new(
 
 my $result = $raider->raid('<system> a bot joined the channel');
 ok($result->is_cancelled, 'stay_silent ends the active Raider raid via supported cancellation');
-is($calls, 3, 'the fixed real MCP stay_silent tool runs once');
+# Raider 0.504 cancels before starting the MCP call; 0.503 can complete it.
+# Neither may repeat the tool or start a second model turn.
+cmp_ok($calls - $calls_before_fixed, '<=', 1, 'terminal cancellation never repeats the real MCP tool');
 is($engine->{requests}, 1, 'no second model turn can begin after terminal silence');
 like(join("\n", @trace), qr/event=model_tool_call name=stay_silent args=\{reason:scalar\}/, 'trace records model tool call with only argument metadata');
 like(join("\n", @trace), qr/event=tool_result name=stay_silent status=(?:succeeded|cancelled)/, 'trace records terminal tool result without content');
