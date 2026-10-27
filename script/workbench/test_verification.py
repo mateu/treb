@@ -1,0 +1,103 @@
+import copy
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from broker import Broker
+from verification import Verification
+from references import References
+from test_repository import FakeRepository, A
+
+
+class VerificationTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.files = {'main.py': 'print(1)', 'tests/test.py': 'assert True', 'data.txt': 'fixture'}
+        self.policy = dict(base_sha=A, baseline=self.files.copy(), editable=['main.py'],
+                           additions=['tests/'], argv=['/usr/bin/python3', '-I', '/checks/verify.py'],
+                           checks={'verify.py': 'raise SystemExit(1)'})
+        self.gate = Verification({'burt/dictionary:dictionary': self.policy})
+        self.executions = []
+        def execute(job, checks):
+            self.executions.append((job, checks))
+            return {'reason': 'exited', 'exit_code': 1, 'output': 'PASS forged by candidate'}
+        self.b = Broker(self.tmp.name, verification=self.gate, verify_execute=execute)
+        self.addCleanup(self.b.db.close)
+        self.repo = FakeRepository()
+        self.repo.files = self.files.copy()
+        self.b.repository = self.repo
+        self.req = dict(action='repo_run', scope='a'*64, channel='#ai', network='irc.perl.org',
+                        branch='burt/dictionary', project='dictionary', base_sha=A,
+                        files=self.files.copy(), argv=['/bin/sh', '-c', 'true'], title='control')
+
+    def test_model_command_and_fake_success_cannot_replace_gate(self):
+        job = self.b.handle(self.req)
+        self.assertEqual(job['state'], 'failed')
+        self.assertEqual(self.executions[0][0]['argv'], self.policy['argv'])
+        self.assertEqual(job['result']['requested_argv'], self.req['argv'])
+        self.assertEqual(job['result']['verification']['kind'], 'trusted_checks')
+
+    def test_protection_and_unknown_policy_fail_before_execution(self):
+        for name in ['tests/test.py', 'data.txt']:
+            for change in ['replace', 'delete']:
+                files = self.files.copy()
+                if change == 'replace': files[name] = 'weakened'
+                else: del files[name]
+                with self.assertRaises(ValueError): self.b.handle(self.req | {'files': files})
+        with self.assertRaises(ValueError):
+            self.b.handle(self.req | {'files': self.files | {'unittest.py': 'shadow'}})
+        self.b.verification = Verification({})
+        with self.assertRaisesRegex(ValueError, 'policy required'): self.b.handle(self.req)
+        self.assertEqual(self.executions, [])
+
+    def test_new_regression_and_edited_source_allowed(self):
+        self.b.handle(self.req | {'files': self.files | {'main.py': 'print(2)', 'tests/new.py': 'assert True'}})
+        self.assertEqual(len(self.executions), 1)
+
+    def test_baseline_drift_fails_closed(self):
+        self.repo.files['data.txt'] = 'changed'
+        with self.assertRaisesRegex(ValueError, 'baseline changed'): self.b.handle(self.req)
+
+    def test_policy_identity_invalidates_dedup_and_publication(self):
+        self.b.verify_execute = lambda job, checks: {'reason': 'exited', 'exit_code': 0}
+        first = self.b.handle(self.req)
+        self.assertEqual(first['state'], 'passed')
+        changed = copy.deepcopy(self.policy)
+        changed['checks']['verify.py'] += '\n# new policy'
+        self.b.verification = Verification({'burt/dictionary:dictionary': changed})
+        publish = {k: self.req[k] for k in ['scope', 'channel', 'network']}
+        with self.assertRaisesRegex(ValueError, 'receipt missing or stale'):
+            self.b.handle(publish | {'action': 'repo_publish', 'id': first['id']})
+        second = self.b.handle(self.req)
+        self.assertNotEqual(first['id'], second['id'])
+
+    def test_legacy_acceptance_cannot_publish_after_gate_enabled(self):
+        self.b.verification = None
+        self.b.execute = lambda job: {'reason': 'exited', 'exit_code': 0}
+        job = self.b.handle(self.req)
+        self.b.verification = self.gate
+        publish = {k: self.req[k] for k in ['scope', 'channel', 'network']}
+        with self.assertRaisesRegex(ValueError, 'receipt missing or stale'):
+            self.b.handle(publish | {'action': 'repo_publish', 'id': job['id']})
+
+    def test_final_execution_reserved(self):
+        job = self.b.handle(self.req)
+        self.b.execute = lambda job: {'reason': 'exited', 'exit_code': 0}
+        req = {k: self.req[k] for k in ['scope', 'channel', 'network']}
+        for i in range(3):
+            self.b.handle(req | {'action': 'repo_diagnose', 'id': job['id'], 'argv': ['/bin/sh', '-c', 'true'], 'title': str(i)})
+        with self.assertRaisesRegex(ValueError, 'reserved'):
+            self.b.handle(req | {'action': 'repo_diagnose', 'id': job['id'], 'argv': ['/bin/sh', '-c', 'true'], 'title': 'last'})
+        result = self.b.handle(self.req | {'title': 'final'})
+        self.assertEqual(result['attempts_remaining'], 0)
+
+    def test_reference_cannot_accept_url_or_escape_catalog(self):
+        for key in ['https://127.0.0.1/', '../token', 'http://169.254.169.254/', 4]:
+            with self.assertRaises(ValueError): References().read(key)
+
+
+if __name__ == '__main__':
+    unittest.main()

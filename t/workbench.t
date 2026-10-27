@@ -22,7 +22,14 @@ is($scope,Bot::Runtime::Workbench::request_scope($bot,1),'run and publish bind t
 like($scope,qr/^[a-f0-9]{64}$/,'scope is bounded digest');
 my $tool=bless {},'WorkbenchTool';
 my %defs=map {$_->{name}=>$_} @{Bot::Runtime::Workbench::tool_specs($bot)};
-is(scalar keys %defs,8,'eight narrow tools');
+is(scalar keys %defs,9,'nine narrow tools including brokered documentation');
+{
+  no warnings 'redefine';
+  local *Bot::Runtime::Workbench::broker_call=sub { '{"reference":"python-csv","text":"documentation","untrusted":true}' };
+  my $before=scalar @{$bot->{sent}||[]};
+  like($defs{read_coding_reference}{code}->($tool,{key=>'python-csv'}),qr/documentation/,'reference reaches broker under current request scope');
+  is(scalar @{$bot->{sent}||[]},$before,'successful read is not reported as failed execution');
+}
 like($defs{publish_gist}{code}->($tool,{id=>'x',channel=>'#ai'}),qr/Invalid tool fields/,'model cannot choose scope/channel');
 for my $case (
   ['private channel',sub {$_[0]{pending}{channel}='mateu'}],
