@@ -138,6 +138,7 @@ class Broker:
     def record_rejection(self, req, exc, raw=None):
         # Scope/channel/action come only from the trusted runtime IPC envelope.
         # Invalid/malformed envelopes have NULL metadata, not attacker text.
+        original = req
         req = req if isinstance(req, dict) else {}
         scope = req.get('scope')
         scope = scope if isinstance(scope, str) and re.fullmatch('[a-f0-9]{64}', scope) else None
@@ -146,7 +147,7 @@ class Broker:
         action = req.get('action')
         action = action if isinstance(action, str) and action in ACTIONS else None
         digest = hashlib.sha256(raw if raw is not None else
-            json.dumps(req, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
+            json.dumps(original, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
         message = str(exc)
         reason = message if message in SAFE_REASONS else 'unclassified broker error'
         for prefix in ('baseline files cannot be deleted: ', 'protected baseline file changed: ',

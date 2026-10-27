@@ -91,6 +91,15 @@ class RejectionAuditTests(unittest.TestCase):
         self.assertIsNone(self.records()[0]['scope'])
         self.assertNotIn('SECRET', json.dumps(self.records()))
 
+    def test_nonobject_requests_keep_original_digest(self):
+        for req in [None, ['SECRET_SOURCE'], 7]:
+            with self.assertRaisesRegex(ValueError, 'object required'): self.b.handle(req)
+            record = self.records()[-1]
+            self.assertEqual(record['request_sha256'], hashlib.sha256(
+                json.dumps(req, sort_keys=True, ensure_ascii=True).encode()).hexdigest())
+            self.assertIsNone(record['scope'])
+        self.assertNotIn('SECRET_SOURCE', json.dumps(self.records()))
+
     def test_status_scope_binding_and_no_audit_read_api(self):
         self.status(phase='started', reason='admitted')
         job = self.b.handle(self.req)
