@@ -7,6 +7,8 @@ import time
 import urllib.error
 import urllib.request
 
+from runner import MAX_INPUT_BYTES, MAX_JSON_BYTES, InputSizeError
+
 REPO = 'burt-agent/workspace'
 TOKEN = Path.home() / '.config/burt-publisher/github.token'
 SHA = r'[a-f0-9]{40}'
@@ -33,8 +35,8 @@ def validate_files(files):
         if any(other.startswith(name + '/') for other in files):
             raise ValueError('file/directory collision')
         total += len(content.encode('utf-8'))
-    if total > 65536:
-        raise ValueError('project exceeds 64 KiB')
+    if total > MAX_INPUT_BYTES:
+        raise InputSizeError(total, 'project')
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -107,9 +109,11 @@ class Repository:
                 continue
             if (entry.get('mode') != '100644' or entry.get('type') != 'blob'
                     or not re.fullmatch(SHA, entry.get('sha', ''))
-                    or not isinstance(entry.get('size'), int) or entry['size'] > 65536
+                    or not isinstance(entry.get('size'), int)
                     or len(files) >= 32):
                 raise ValueError('project contains unsupported or oversized files')
+            if entry['size'] > MAX_INPUT_BYTES:
+                raise InputSizeError(sum(len(v.encode('utf-8')) for v in files.values()) + entry['size'], 'project')
             relative = name[len(root)+1:]
             validate_files({relative: ''})
             blob = self.api(prefix + '/git/blobs/' + entry['sha'])
@@ -120,7 +124,7 @@ class Repository:
             validate_files(files)
         result = dict(repository=REPO, branch=branch, project=project, base_sha=sha,
                       exists=exists, tree_sha=tree_sha, files=files)
-        if len(json.dumps(result).encode()) > 90000:
+        if len(json.dumps(result).encode()) > MAX_JSON_BYTES:
             raise ValueError('encoded project response exceeds transport bound')
         return result
 

@@ -62,7 +62,7 @@ checkout, and refuses redirects/proxies.
   project text bundle, relative to `projects/<project>/`.
 * `run_repo_project(branch, project, base_sha, files, argv, title)`: test the
   **complete desired project**, including unchanged source/tests/docs. Safe
-  nested paths are supported. 32 files/64 KiB; no hidden files, symlinks,
+  nested paths are supported. 32 files/128 KiB aggregate UTF-8 source; no hidden files, symlinks,
   submodules or binary files. Omitted existing project files are deleted upon
   publication; everything outside the selected project is preserved.
 * `publish_repo(id)`: publishes only that stored successful bundle. Requires a
@@ -325,3 +325,25 @@ and IRC registration. For rollback restore saved code/drop-in/ledger and restart
 in that order; **keep live databases**, including the new audit evidence.
 Authoritative source remains the canonical service ExecStart/WorkingDirectory,
 not a development checkout. Record exact release and rollback in deployment.json.
+
+## Project headroom (128 KiB)
+
+Repository source bundles (including unchanged tests/docs) now allow exactly 131,072 UTF-8
+content bytes across at most 32 files. Runner, repository read, repair and
+publication use the same bound. Captured stdout/stderr remains 65,536 bytes; standalone run_code/gist admission also
+remains 65,536 input bytes;
+output overflow still fails the job. Transport/standalone JSON envelopes allow
+2 MiB to accommodate worst-case JSON escaping and the separately bounded argv;
+this does not increase source, output, execution, model or publication quotas.
+Oversize errors and private rejection records report submitted_bytes,
+allowed_bytes and excess_bytes, never source text. Existing audit retention is
+unchanged. The repository API response bound stays 1,500,000 bytes.
+
+Deployment: export the reviewed/CI-green commit to
+`~/.local/share/burt-irc/releases/<sha12>`, use the existing reversible pinned
+service rollout, and copy all six broker modules from that same release. Preserve
+live SQLite state and policy bytes; verify source/module hashes, offline runner,
+namespace/IPC, databases, service restart counters and IRC rejoin. The dictionary
+baseline-review hold is independent of this limit change and must not be silently
+renewed. An operator-only replay can use the frozen baseline and a separate
+journal without publishing or changing the live policy.

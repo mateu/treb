@@ -51,7 +51,7 @@ class RepositoryTests(unittest.TestCase):
         for b,p in [('main','dictionary'),('burt/../main','x'),('burt/x','../x'),('burt/x','')]:
             with self.assertRaises(ValueError): validate_destination(b,p)
         for files in ({'../x':'x'},{'.github/x':'x'},{'a//b':'x'},{'a':'x','a/b':'y'},
-                      {'a':'\x00'},{'a':'x'*65537},{'a':1}):
+                      {'a':'\x00'},{'a':'x'*131073},{'a':1}):
             with self.assertRaises(ValueError): validate_files(files)
         validate_files({'lib/Dictionary.pm':'1;', 't/client.t':'ok 1'})
 
@@ -181,7 +181,7 @@ class RepositoryBrokerTests(unittest.TestCase):
 
     def test_repair_rejects_bad_paths_deletion_and_overflow(self):
         job=self.b.handle(self.repo_req)
-        for change in ({'changes':{'../escape':'x'}}, {'changes':{'bad':'x'*65537}},
+        for change in ({'changes':{'../escape':'x'}}, {'changes':{'bad':'x'*131073}},
                        {'delete':['missing']}, {'delete':['lib/main.py']},
                        {'changes':{},'delete':['t/test.py','t/test.py']},
                        {'changes':{'bad':'\x00'}}, {'argv':['/usr/bin/curl']}):
