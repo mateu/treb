@@ -7,6 +7,7 @@ from pathlib import Path
 import random
 import subprocess
 import time
+import uuid
 
 import trial_support as r
 from experiment_tasks import tasks, solutions
@@ -45,11 +46,28 @@ def assess(task_dir, bundle_path, output_dir, **kwargs):
     bundle = json.loads(bundle_path.read_text())
     files = bundle['files']
     preserve = all(files.get(n) == c for n, c in spec['task']['files'].items() if n not in spec['editable'])
-    checks = spec['semantic']
+    nonce = uuid.uuid4().hex
+    started, finished = 'evaluator-started-' + nonce, 'evaluator-finished-' + nonce
+    checks = {'verify.py': ('print(' + repr(started) + ', flush=True)\n'
+                           + spec['semantic']['verify.py']
+                           + '\nprint(' + repr(finished) + ', flush=True)\n')}
     result = run({'files':files, 'argv':['/usr/bin/python3', '-I', '/checks/verify.py']}, checks=checks)
     r.write_json(output_dir/'independent-result.json', result)
-    return dict(status='scored', semantic_passed=result['reason']=='exited' and result['exit_code']==0,
-                preservation_passed=preserve, evaluator_sha256=r.digest(checks))
+    verdict = evaluator_verdict(result, started, finished)
+    return dict(verdict, preservation_passed=preserve if verdict['status']=='scored' else None,
+                evaluator_sha256=r.digest(checks))
+
+
+def evaluator_verdict(result, started, finished):
+    # Start/completion markers classify evaluator infrastructure, never replace
+    # the exit/reason checks used for correctness. A failed launcher runs no code
+    # and cannot produce this invocation's fresh marker.
+    lines = result.get('output', '').splitlines()
+    success = result.get('reason') == 'exited' and result.get('exit_code') == 0
+    if started not in lines or (success and finished not in lines):
+        return dict(status='evaluator_error', semantic_passed=None,
+                    reason='trusted evaluator did not start or finish normally')
+    return dict(status='scored', semantic_passed=success)
 
 
 def score(task, bundle, acceptance):
