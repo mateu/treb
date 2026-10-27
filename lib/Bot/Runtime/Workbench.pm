@@ -58,14 +58,19 @@ sub report_result {
   my ($self,$action,$raw)=@_;
   my $pending=$self->_pending_raid;
   return unless $pending && $pending->{coding_task};
+  my $publication=$action eq 'publish' || $action eq 'repo_publish';
   my $r=eval { JSON::PP::decode_json($raw) };
+  $r={} if $publication && ref($r) ne 'HASH';
   return unless ref($r) eq 'HASH';
   # Only broker-controlled metadata, never generated stdout/source/title.
   my $id=$r->{id}//'';
   $id='' unless $id =~ /\A[a-f0-9]{32}\z/;
-  my $state=$r->{state}//'';
+  my $state=exists($r->{error}) ? 'error' : ($r->{state}//'');
   $state='error' unless $state =~ /\A(?:passed|failed|published|publishing|uncertain)\z/;
   my $notice="$action: $state" . ($id ? " (job $id)" : '');
+  if ($publication && $state ne 'published') {
+    $notice.='; success unconfirmed; the public write may already have succeeded; operator reconciliation required before retrying; do not retry';
+  }
   my $url=$r->{url}//'';
   if ($url =~ m{\Ahttps://(?:gist\.github\.com/burt-agent/[a-f0-9]+|github\.com/burt-agent/workspace/commit/[a-f0-9]{40})\z}) {
     $notice.=" $url";
@@ -75,6 +80,7 @@ sub report_result {
     $notice.="; exit $exit" if defined($exit) && "$exit" =~ /\A-?\d{1,3}\z/;
     $pending->{coding_last_result}=$notice;
   }
+  $pending->{coding_last_result}=$notice if $publication;
   task_notice($self,$pending,$notice);
 }
 
@@ -128,18 +134,25 @@ sub tool_specs {
     +{name=>$name,description=>$desc,input_schema=>{type=>'object',additionalProperties=>JSON::PP::false,
       required=>$required,properties=>$props},code=>sub {
         my ($tool,$args)=@_;
+        my $publication_attempted=0;
         my $result=eval {
           die "Invalid tool fields\n" unless ref($args) eq 'HASH' && keys(%$args)==@$required
             && !grep {!exists $props->{$_}} keys %$args;
           my $scope=request_scope($self,$action eq 'repo_publish' ? 'repo' : $action eq 'publish');
           task_notice($self,$self->_pending_raid,"$action started.") unless $action eq 'repo_read';
+          $publication_attempted=1 if $action eq 'publish' || $action eq 'repo_publish';
           my $raw=broker_call({%$args,action=>$action,scope=>$scope,channel=>'#ai',network=>'irc.perl.org'});
           report_result($self,$action,$raw) unless $action eq 'repo_read';
           $raw;
         };
         if ($@) {
-          task_notice($self,$self->_pending_raid,"$action stopped: tool request failed; no successful outcome confirmed.");
-          (my $err=$@)=~s/\s+at \S+ line \d+.*//s; return $tool->text_result('Error: '.substr($err,0,300)); }
+          my $err=$@;
+          if ($publication_attempted) {
+            report_result($self,$action,'{"error":"publication outcome unconfirmed"}');
+          } else {
+            task_notice($self,$self->_pending_raid,"$action stopped: tool request failed; no successful outcome confirmed.");
+          }
+          $err=~s/\s+at \S+ line \d+.*//s; return $tool->text_result('Error: '.substr($err,0,300)); }
         return $tool->text_result($result);
       }};
   } @defs];
