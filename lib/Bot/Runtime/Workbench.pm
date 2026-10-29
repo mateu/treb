@@ -85,6 +85,8 @@ sub confirmation_envelope {
       && ($_->{msg}//'') =~ /\A\s*$nick\s*[:,]?\s*(?:yes|read\s+it)(?:\s*[,;:]?\s*(?:publish|post|push|commit)\b.*)?[.!]?\s*\z/i
   } @{$pending->{messages}||[]};
   die "Need one fresh explicit confirmation from the trusted requester\n" unless @messages==1;
+  die "Need one fresh explicit confirmation from the trusted requester\n"
+    unless defined($messages[0]{queued_at}) && $messages[0]{queued_at}=~ /\A\d+(?:\.\d+)?\z/;
   my $requester=irc_fold($messages[0]{nick});
   my $scope=sha256_hex(JSON::PP->new->canonical->utf8->encode([
     $pending->{channel},$pending->{expires_at},$pending->{messages}]));
@@ -92,7 +94,7 @@ sub confirmation_envelope {
   my $grant=sha256_hex(JSON::PP->new->canonical->utf8->encode(
     [$scope,$channel,'irc.perl.org','read_status']));
   my %envelope=(action=>'proposal_confirm',scope=>$scope,capability=>'read_status',grant=>$grant,
-    channel=>$channel,network=>'irc.perl.org',requester=>$requester);
+    channel=>$channel,network=>'irc.perl.org',requester=>$requester,confirmed_at=>0+$messages[0]{queued_at});
   my $confirmed_capability=capability_set_from_messages($self,\@messages);
   for my $publication (qw(publish repo_publish)) {
     my $capability=$ACTION_CAPABILITY{$publication};

@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -220,10 +221,10 @@ class Broker:
         fields['reference'] = {'key'}
         fields['task_status'] = {'phase', 'reason'}
         fields['proposal_create'] = {'proposal_action', 'params', 'requester'}
-        fields['proposal_confirm'] = {'requester', 'publish_capability', 'publish_grant'}
+        fields['proposal_confirm'] = {'requester', 'confirmed_at', 'publish_capability', 'publish_grant'}
         allowed |= fields.get(action, set())
         if action == 'proposal_confirm':
-            required = {'action', 'scope', 'capability', 'grant', 'channel', 'network', 'requester'}
+            required = {'action', 'scope', 'capability', 'grant', 'channel', 'network', 'requester', 'confirmed_at'}
             if not required <= set(req) or set(req) - allowed:
                 raise ValueError('invalid action or fields')
         elif set(req) != allowed or action not in fields:
@@ -514,11 +515,15 @@ class Broker:
         requester = req['requester']
         if not isinstance(requester, str) or not REQUESTER_IDENTITY.fullmatch(requester):
             raise ValueError('invalid requester identity')
+        confirmed_at = req['confirmed_at']
+        if (isinstance(confirmed_at, bool) or not isinstance(confirmed_at, (int, float))
+                or not math.isfinite(confirmed_at)):
+            raise ValueError('invalid confirmation timestamp')
         self.prune_audit()
         now = time.time()
         rows = self.db.execute('SELECT * FROM proposals WHERE requester=? AND channel=? AND network=? '
-                               'AND state="proposed" AND expires>? ORDER BY created,id',
-                               (requester, req['channel'], req['network'], now)).fetchall()
+                               'AND state="proposed" AND expires>? AND created<? ORDER BY created,id',
+                               (requester, req['channel'], req['network'], now, confirmed_at)).fetchall()
         if len(rows) != 1:
             self.db.commit()
             raise ValueError('proposal confirmation is missing or ambiguous')

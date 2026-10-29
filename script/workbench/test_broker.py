@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from broker import Broker
 
@@ -148,7 +149,7 @@ class BrokerTests(unittest.TestCase):
     def confirm(self, requester='mateu', scope='b'*64, **changes):
         return self.b.handle(self.b.capability_envelope('proposal_confirm', scope,
                              self.req['channel'], self.req['network'])
-                             | dict(action='proposal_confirm', requester=requester) | changes)
+                             | dict(action='proposal_confirm', requester=requester, confirmed_at=time.time()) | changes)
 
     def test_durable_proposal_requires_unique_same_scope_confirmation(self):
         self.b.references.read = lambda key: {'reference':key, 'untrusted':True}
@@ -158,6 +159,10 @@ class BrokerTests(unittest.TestCase):
             self.confirm(requester='other')
         with self.assertRaisesRegex(ValueError, 'later fresh'):
             self.confirm(scope=self.req['scope'])
+        created = self.b.db.execute('SELECT created FROM proposals WHERE id=?',
+                                    (proposal['proposal_id'],)).fetchone()[0]
+        with self.assertRaisesRegex(ValueError, 'missing or ambiguous'):
+            self.confirm(confirmed_at=created)
         result = self.confirm()
         self.assertEqual((result['confirmed_action'], result['reference']), ('reference', 'python-json'))
         self.assertEqual(self.b.db.execute('SELECT state FROM proposals WHERE id=?',
@@ -195,11 +200,11 @@ class BrokerTests(unittest.TestCase):
         envelope = second.capability_envelope('proposal_confirm', confirmation_scope, '#ai', 'irc.perl.org')
         publish = second.capability_envelope('publish', confirmation_scope, '#ai', 'irc.perl.org')
         result = second.handle(envelope | dict(action='proposal_confirm', requester='mateu',
-                               publish_capability=publish['capability'], publish_grant=publish['grant']))
+                               confirmed_at=time.time(), publish_capability=publish['capability'], publish_grant=publish['grant']))
         self.assertEqual((result['confirmed_action'], result['state']), ('publish', 'published'))
         with self.assertRaisesRegex(ValueError, 'missing or ambiguous'):
             second.handle(envelope | dict(action='proposal_confirm', requester='mateu',
-                          publish_capability=publish['capability'], publish_grant=publish['grant']))
+                          confirmed_at=time.time(), publish_capability=publish['capability'], publish_grant=publish['grant']))
 
     def test_verbose_failure_keeps_error_head_and_suite_summary_tail(self):
         self.b.execute=lambda job: {'reason':'exited','exit_code':1,

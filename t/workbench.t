@@ -162,11 +162,12 @@ for my $kind ('reminder','activity_followup','conversation') {
 }
 # Proposal confirmations are a fresh trusted runtime envelope, not model/retrieval text.
 $bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
-  {nick=>'MaTeu[]',source_kind=>'conversation',msg=>'burt_bot: yes'}]};
+  {nick=>'MaTeu[]',source_kind=>'conversation',queued_at=>time,msg=>'burt_bot: yes'}]};
 my $confirmation=Bot::Runtime::Workbench::confirmation_envelope($bot);
 is($confirmation->{action},'proposal_confirm','confirmation uses its narrow broker action');
 is($confirmation->{requester},'mateu{}','confirmation requester uses IRC casemapping');
 is($confirmation->{capability},'read_status','confirmation is scoped to a fresh bounded envelope');
+ok($confirmation->{confirmed_at},'confirmation timestamp comes from the runtime message');
 push @{$bot->{pending}{messages}},{nick=>'other',source_kind=>'conversation',msg=>'burt_bot: publish this gist'};
 $confirmation=Bot::Runtime::Workbench::confirmation_envelope($bot);
 ok(!exists($confirmation->{publish_grant}),'another requester cannot supply publication authority');
@@ -203,7 +204,7 @@ my $forwarded;
 is($forwarded->{requester},'mateu','proposal requester is runtime-derived');
 ok(!exists($forwarded->{params}{requester}),'model parameters cannot set requester identity');
 $bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
-  {nick=>'mateu',source_kind=>'conversation',msg=>'burt_bot: yes'}]};
+  {nick=>'mateu',source_kind=>'conversation',queued_at=>time,msg=>'burt_bot: yes'}]};
 {
   no warnings 'redefine';
   local *Bot::Runtime::Workbench::broker_call=sub {$forwarded=$_[0]; return '{"confirmed_action":"reference","reference":"python-json"}'};
@@ -211,7 +212,7 @@ $bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
     'confirmation tool forwards only the fresh runtime envelope');
 }
 is($forwarded->{requester},'mateu','confirmation requester is runtime-derived');
-is_deeply([sort keys %$forwarded],[sort qw(action capability channel grant network requester scope)],
+is_deeply([sort keys %$forwarded],[sort qw(action capability channel confirmed_at grant network requester scope)],
   'confirmation tool accepts no model-selected action or parameters');
 $bot->{bot}='astrid';
 is_deeply(Bot::Runtime::Workbench::tool_specs($bot),[],'other bots unchanged');
