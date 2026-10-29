@@ -39,7 +39,7 @@ sub capability_set_from_messages {
     # A bounded read must name one of the fixed public resources. Generic
     # discussion of coding is intentionally not an authority signal.
     $capability{read_status}=1 if $text =~ /\b(?:read|inspect|status)\b/i
-      && $text =~ /\b(?:reference|documentation|python-(?:json|unittest|csv)|perl-(?:json-pp|test-more)|repo(?:sitory)?|project|job|session)\b/i;
+      && $text =~ /\b(?:(?:reference|documentation|python-(?:json|unittest|csv)|perl-(?:json-pp|test-more)|repo(?:sitory)?|project|job|session|checkpoint))\b/i;
     $capability{edit_test}=1 if $text =~ /\b(?:write|implement|build|update|edit|fix|test|run)\b/i
       && $text =~ /\b(?:code|coding|script|program|project|repo(?:sitory)?|tests?)\b/i;
     $capability{publish_gist}=1 if $text =~ /\bgist\b/i && $text =~ /\b(?:publish|post|push|commit)\b/i;

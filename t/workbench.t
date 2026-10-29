@@ -263,7 +263,7 @@ is_deeply([sort keys %$forwarded],[sort qw(action capability channel confirmed_a
 # Recovery tools derive requester and fresh authorization from the current
 # envelope; a checkpoint id is the only model-supplied selector.
 $bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
-  {nick=>'mateu',source_kind=>'conversation',msg=>'burt_bot: status this coding session'}]};
+  {nick=>'mateu',source_kind=>'conversation',msg=>'burt_bot: inspect checkpoint '.('a'x32)}]};
 {
   no warnings 'redefine';
   local *Bot::Runtime::Workbench::broker_call=sub {$forwarded=$_[0]; return '{"checkpoint_id":"'.('a'x32).'","jobs":[],"attempts_remaining":4}'};
