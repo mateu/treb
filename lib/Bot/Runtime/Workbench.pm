@@ -167,8 +167,28 @@ sub require_admitted_task {
 }
 
 sub task_notice {
-  my ($self,$pending,$text)=@_;
+  my ($self,$pending,$text,$terminal)=@_;
   return unless $pending && $pending->{coding_task};
+  # Progress notices are a durable broker budget, never an implicit model
+  # counter.  Suppress excess notices while preserving the final direct report.
+  my $allowed=1;
+  if (!$terminal && ($pending->{coding_scope}//'') =~ /\A[a-f0-9]{64}\z/) {
+    my $ok=eval {
+      my $channel=lc($pending->{channel});
+      my $grant=sha256_hex(JSON::PP->new->canonical->utf8->encode(
+        [$pending->{coding_scope},$channel,'irc.perl.org','edit_test']));
+      my $r=JSON::PP::decode_json(broker_call({action=>'task_progress',scope=>$pending->{coding_scope},
+        capability=>'edit_test',grant=>$grant,channel=>$channel,network=>'irc.perl.org'}));
+      # Older brokers/mocks have no budget field. An explicit bounded broker
+      # rejection suppresses only progress, never the terminal direct report.
+      $allowed=0 if ref($r) eq 'HASH' && ($r->{code}//'') eq 'budget_exhausted';
+      1;
+    };
+    # Loss of the optional progress accounting path must not hide a truthful
+    # task notice; the final report/cleanup remains independently reserved.
+    $allowed=1 unless $ok;
+  }
+  return unless $allowed;
   $self->info("Coding task: $text") if $self->can('info');
   $self->_send_to_channel($pending->{channel},$text);
 }
@@ -185,7 +205,8 @@ sub task_status {
       [$pending->{coding_scope},$channel,'irc.perl.org','edit_test']));
     my $r=JSON::PP::decode_json(broker_call({action=>'task_status',
       scope=>$pending->{coding_scope},capability=>'edit_test',grant=>$grant,channel=>$channel,network=>'irc.perl.org',
-      phase=>$phase,reason=>$reason}));
+      phase=>$phase,reason=>$reason,deadline=>0+$pending->{expires_at},
+      model_iterations=>0+($pending->{coding_model_iterations}//0)}));
     die "Invalid task status" unless ref($r) eq 'HASH' && !exists($r->{error}) && ref($r->{jobs}) eq 'ARRAY'
       && @{$r->{jobs}}<=5;
     for my $job (@{$r->{jobs}}) {
@@ -208,7 +229,8 @@ sub task_checkpoint {
       [$pending->{coding_scope},$channel,'irc.perl.org','edit_test']));
     my $r=JSON::PP::decode_json(broker_call({action=>'task_checkpoint',
       scope=>$pending->{coding_scope},capability=>'edit_test',grant=>$grant,channel=>$channel,network=>'irc.perl.org',
-      requester=>$pending->{coding_requester},phase=>$phase,reason=>$reason}));
+      requester=>$pending->{coding_requester},phase=>$phase,reason=>$reason,
+      deadline=>0+$pending->{expires_at}}));
     die "Invalid task checkpoint" unless ref($r) eq 'HASH' && ($r->{checkpoint_id}//'') =~ /\A[a-f0-9]{32}\z/
       && ref($r->{jobs}) eq 'ARRAY' && @{$r->{jobs}}<=5;
     $pending->{coding_checkpoint_id}=$r->{checkpoint_id};
@@ -389,7 +411,8 @@ sub tool_specs {
               ($scope,$issued_capability,$grant)=capability_grant($self,$action);
               $requester=trusted_requester($self);
               $raw=broker_call({%$args,action=>$action,requester=>$requester,scope=>$scope,
-                capability=>$issued_capability,grant=>$grant,channel=>lc($pending->{channel}),network=>'irc.perl.org'});
+                capability=>$issued_capability,grant=>$grant,channel=>lc($pending->{channel}),network=>'irc.perl.org',
+                deadline=>0+$pending->{expires_at}});
               $r=JSON::PP::decode_json($raw);
               die "Invalid task resume" unless ref($r) eq 'HASH' && ($r->{resumed_scope}//'') eq $scope
                 && ref($r->{jobs}) eq 'ARRAY' && @{$r->{jobs}}<=5

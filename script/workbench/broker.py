@@ -23,6 +23,10 @@ BASE = Path.home() / '.local/share/burt-workbench'
 TOKEN = Path.home() / '.config/burt-publisher/gist.token'
 MAX_REQUEST = MAX_JSON_BYTES
 MAX_ATTEMPTS = 5
+MAX_MODEL_ITERATIONS = 13
+MAX_PROGRESS_NOTICES = 8
+MAX_PUBLIC_WRITES = 1
+TERMINAL_REPORT_RESERVE = 1
 
 # Operator-only audit: fixed strings, never arbitrary exception/source text.
 AUDIT_LIMIT = 512
@@ -33,12 +37,12 @@ REJECTION_SCHEMA_VERSION = 1
 REPEAT_REJECTION_LIMIT = 3
 ACTIONS = frozenset(('run', 'publish', 'repo_read', 'repo_run', 'repo_publish',
                      'repo_inspect', 'job_inspect', 'repo_repair', 'repo_diagnose', 'reference', 'task_status',
-                     'task_checkpoint', 'checkpoint_status', 'task_resume',
+                     'task_progress', 'task_checkpoint', 'checkpoint_status', 'task_resume',
                      'proposal_create', 'proposal_confirm'))
 ACTION_CAPABILITY = {
     'reference': 'read_status', 'repo_read': 'read_status', 'repo_inspect': 'read_status', 'job_inspect': 'read_status',
     'run': 'edit_test', 'repo_run': 'edit_test', 'repo_repair': 'edit_test',
-    'repo_diagnose': 'edit_test', 'task_status': 'edit_test',
+    'repo_diagnose': 'edit_test', 'task_status': 'edit_test', 'task_progress': 'edit_test',
     'task_checkpoint': 'edit_test', 'checkpoint_status': 'read_status', 'task_resume': 'edit_test',
     'publish': 'publish_gist', 'repo_publish': 'publish_repo',
     'proposal_confirm': 'read_status',
@@ -166,6 +170,13 @@ class Broker:
             (task_id TEXT PRIMARY KEY, attempts INTEGER NOT NULL, updated REAL NOT NULL)''')
         self.db.execute('''CREATE TABLE IF NOT EXISTS task_publications
             (task_id TEXT PRIMARY KEY, consumed INTEGER NOT NULL, updated REAL NOT NULL)''')
+        # Authoritative lifecycle state. Legacy attempt/publication tables stay
+        # migration-safe indexes, but new transitions are admitted here first.
+        self.db.execute('''CREATE TABLE IF NOT EXISTS task_phase_budgets
+            (task_id TEXT PRIMARY KEY, deadline REAL NOT NULL, phase TEXT NOT NULL,
+             model_iterations INTEGER NOT NULL, sandbox_attempts INTEGER NOT NULL, public_writes INTEGER NOT NULL,
+             progress_notices INTEGER NOT NULL, terminal_reports INTEGER NOT NULL,
+             terminal_reason TEXT, updated REAL NOT NULL)''')
         self.db.execute('''CREATE TABLE IF NOT EXISTS proposals
             (id TEXT PRIMARY KEY, scope TEXT NOT NULL, requester TEXT NOT NULL,
              channel TEXT NOT NULL, network TEXT NOT NULL, action TEXT NOT NULL,
@@ -206,6 +217,8 @@ class Broker:
         self.db.execute('DELETE FROM task_budgets WHERE task_id NOT IN (SELECT DISTINCT task_id FROM task_checkpoints) '
                         'AND updated<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM task_publications WHERE task_id NOT IN (SELECT DISTINCT task_id FROM task_checkpoints) '
+                        'AND updated<?', (now - AUDIT_TTL,))
+        self.db.execute('DELETE FROM task_phase_budgets WHERE task_id NOT IN (SELECT DISTINCT task_id FROM task_checkpoints) '
                         'AND updated<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM resource_checkpoints WHERE created<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM resource_checkpoints WHERE id NOT IN '
@@ -419,6 +432,78 @@ class Broker:
                         'ON CONFLICT(task_id) DO UPDATE SET consumed=1,updated=excluded.updated',
                         (task_id, 1, now))
 
+    def ensure_task_phase_budget(self, task_id, now, deadline=None):
+        row = self.db.execute('SELECT * FROM task_phase_budgets WHERE task_id=?', (task_id,)).fetchone()
+        if row:
+            return row
+        deadline = deadline if isinstance(deadline, (int, float)) and deadline > now else now + 1800
+        self.db.execute('INSERT INTO task_phase_budgets VALUES (?,?,?,?,?,?,?,?,?,?)',
+                        (task_id, deadline, 'started', 0, self.task_attempt_count(task_id),
+                         self.task_publication_count(task_id), 0, 0, None, now))
+        return self.db.execute('SELECT * FROM task_phase_budgets WHERE task_id=?', (task_id,)).fetchone()
+
+    def task_budget_status(self, task_id, now=None):
+        now = time.time() if now is None else now
+        row = self.ensure_task_phase_budget(task_id, now)
+        return {'phase': row['phase'], 'terminal_reason': row['terminal_reason'],
+                'deadline_remaining_seconds': max(0, int(row['deadline'] - now)),
+                'remaining_budget': {
+                    'model_iterations': max(0, MAX_MODEL_ITERATIONS - row['model_iterations']),
+                    'sandbox_executions': max(0, MAX_ATTEMPTS - row['sandbox_attempts']),
+                    'public_writes': max(0, MAX_PUBLIC_WRITES - row['public_writes']),
+                    'progress_notices': max(0, MAX_PROGRESS_NOTICES - row['progress_notices']),
+                    'terminal_reports': max(0, TERMINAL_REPORT_RESERVE - row['terminal_reports'])}}
+
+    def admit_transition(self, task_id, operation, now=None, deadline=None, terminal_reason=None, model_iterations=None,
+                         limit_message=None, allow_after_final_report=False):
+        """Atomically admit one durable task operation before its side effect."""
+        now = time.time() if now is None else now
+        row = self.ensure_task_phase_budget(task_id, now, deadline)
+        recording_publication_uncertainty = (operation == 'terminal' and terminal_reason == 'publication_uncertain')
+        if (operation not in ('status', 'checkpoint', 'terminal_report') and row['terminal_reason']
+                and not (recording_publication_uncertainty
+                         or (allow_after_final_report and operation == 'public_write'
+                             and row['terminal_reason'] == 'final_report'))):
+            raise ValueError('task is terminal; operator inspection required')
+        if operation not in ('status', 'checkpoint', 'terminal_report', 'terminal') and now >= row['deadline']:
+            self.db.execute('UPDATE task_phase_budgets SET phase=?,terminal_reason=?,updated=? WHERE task_id=?',
+                            ('stopped', 'deadline', now, task_id))
+            raise ValueError('task deadline reached; terminal report reserved')
+        updates = {'phase': row['phase'], 'terminal_reason': row['terminal_reason']}
+        if model_iterations is not None:
+            if not isinstance(model_iterations, int) or not 0 <= model_iterations <= MAX_MODEL_ITERATIONS:
+                raise ValueError('invalid model iteration count')
+            updates['model_iterations'] = max(row['model_iterations'], model_iterations)
+        if operation == 'sandbox':
+            if row['sandbox_attempts'] >= MAX_ATTEMPTS:
+                raise ValueError('limit: 5 sandbox attempts per IRC request')
+            updates['sandbox_attempts'] = row['sandbox_attempts'] + 1
+        elif operation == 'public_write':
+            if row['public_writes'] >= MAX_PUBLIC_WRITES:
+                raise ValueError(limit_message or 'limit: one submission per IRC request')
+            updates['public_writes'] = row['public_writes'] + 1
+        elif operation == 'progress':
+            if row['progress_notices'] >= MAX_PROGRESS_NOTICES:
+                raise ValueError('limit: progress notice budget exhausted')
+            updates['progress_notices'] = row['progress_notices'] + 1
+        elif operation == 'terminal':
+            updates['phase'] = 'stopped'
+            # An attempted public write may become unknowable only after it has
+            # crossed the irreversible boundary. Preserve that reconciliation
+            # requirement even if final reporting or the deadline came first.
+            updates['terminal_reason'] = (terminal_reason if recording_publication_uncertainty
+                                          else terminal_reason or row['terminal_reason'] or 'terminal')
+        elif operation == 'terminal_report':
+            if row['terminal_reports'] == 0:
+                updates['terminal_reports'] = 1
+            updates['phase'] = 'reported'
+            updates['terminal_reason'] = row['terminal_reason'] or terminal_reason or 'final_report'
+        if updates != {'phase': row['phase'], 'terminal_reason': row['terminal_reason']}:
+            columns = ','.join(f'{key}=?' for key in updates)
+            self.db.execute(f'UPDATE task_phase_budgets SET {columns},updated=? WHERE task_id=?',
+                            (*updates.values(), now, task_id))
+        return self.task_budget_status(task_id, now)
+
     def checkpoint_summary(self, row):
         jobs = self.task_job_rows(row['task_id'])
         latest_repository_job = None
@@ -428,11 +513,12 @@ class Broker:
                 if not destination.get('diagnostic_only'):
                     latest_repository_job = {'id': job['id'], 'state': job['state']}
                     break
+        budget = self.task_budget_status(row['task_id'])
         return {'checkpoint_id': row['id'], 'task_id': row['task_id'], 'parent_checkpoint_id': row['parent'],
                 'phase': row['phase'], 'reason': row['reason'],
                 'jobs': [{'id': j['id'], 'state': j['state']} for j in jobs],
                 'latest_repository_job': latest_repository_job,
-                'attempts_remaining': max(0, MAX_ATTEMPTS - self.task_attempt_count(row['task_id']))}
+                'attempts_remaining': budget['remaining_budget']['sandbox_executions'], 'budget': budget}
 
     def handle(self, req, _diagnostic=False):
         try:
@@ -441,7 +527,7 @@ class Broker:
             exc.rejection = self.record_rejection(req, exc)
             raise
 
-    def _handle(self, req, _diagnostic=False, _saved_snapshot=False):
+    def _handle(self, req, _diagnostic=False, _saved_snapshot=False, _confirmed_publication=False):
         if not isinstance(req, dict):
             raise ValueError('object required')
         action = req.get('action')
@@ -454,17 +540,21 @@ class Broker:
                   'repo_diagnose': {'id','argv','title'}}
         fields['reference'] = {'key'}
         fields['task_status'] = {'phase', 'reason'}
+        fields['task_progress'] = set()
         fields['task_checkpoint'] = {'requester', 'phase', 'reason'}
+        optional_fields = {'task_status': {'deadline', 'model_iterations'}, 'task_checkpoint': {'deadline'}}
         fields['checkpoint_status'] = {'checkpoint_id', 'requester'}
         fields['task_resume'] = {'checkpoint_id', 'requester'}
+        optional_fields['task_resume'] = {'deadline'}
         fields['proposal_create'] = {'proposal_action', 'params', 'requester'}
         fields['proposal_confirm'] = {'requester', 'confirmed_at', 'publish_capability', 'publish_grant'}
-        allowed |= fields.get(action, set())
+        allowed |= fields.get(action, set()) | optional_fields.get(action, set())
         if action == 'proposal_confirm':
             required = {'action', 'scope', 'capability', 'grant', 'channel', 'network', 'requester', 'confirmed_at'}
             if not required <= set(req) or set(req) - allowed:
                 raise ValueError('invalid action or fields')
-        elif set(req) != allowed or action not in fields:
+        elif (action not in fields or not {'action', 'scope', 'capability', 'grant', 'channel', 'network'} <= set(req)
+              or not fields[action] <= set(req) or set(req) - allowed):
             raise ValueError('invalid action or fields')
         if req['channel'] not in ('#ai', '#mateu-test') or req['network'] != 'irc.perl.org':
             raise ValueError('workbench is restricted to irc.perl.org #ai or #mateu-test')
@@ -486,6 +576,12 @@ class Broker:
         if (capability != expected_capability or not isinstance(req['grant'], str)
                 or not hmac.compare_digest(req['grant'], expected_grant)):
             raise ValueError('invalid capability grant')
+        # Every operation in an admitted task observes the same durable
+        # deadline/terminal state before dispatch. Read/status-like operations
+        # spend nothing and remain available for truthful recovery inspection.
+        binding = self.task_binding(scope)
+        if self.db.execute('SELECT 1 FROM task_phase_budgets WHERE task_id=?', (binding['task_id'],)).fetchone():
+            self.admit_transition(binding['task_id'], 'status')
         if action == 'proposal_create':
             return self.create_proposal(req)
         if action == 'proposal_confirm':
@@ -515,6 +611,14 @@ class Broker:
                 if existing:
                     raise ValueError('fresh task scope is already bound')
                 now = time.time()
+                deadline = req.get('deadline')
+                if deadline is not None and (not isinstance(deadline, (int, float)) or not now < deadline <= now + 3600):
+                    raise ValueError('invalid resume deadline')
+                if deadline is not None:
+                    # A resume has fresh human authority and a new bounded
+                    # runtime lifetime, but preserves task-wide spend counters.
+                    self.db.execute('UPDATE task_phase_budgets SET deadline=?,phase=?,terminal_reason=NULL,updated=? WHERE task_id=?',
+                                    (deadline, 'started', now, checkpoint['task_id']))
                 self.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
                                 (req['scope'], checkpoint['task_id'], requester, req['channel'], req['network'], now))
                 self.db.commit()
@@ -528,6 +632,12 @@ class Broker:
                                                    or binding['network'] != req['network']):
                 raise ValueError('task identity mismatch')
             now = time.time()
+            deadline = req.get('deadline')
+            if deadline is not None and (not isinstance(deadline, (int, float)) or deadline > now + 3600):
+                raise ValueError('invalid task deadline')
+            terminal = req['phase'] == 'reported' and req['reason'] == 'final_report'
+            self.admit_transition(binding['task_id'], 'terminal_report' if terminal else 'checkpoint', now,
+                                  deadline=deadline, terminal_reason=req['reason'] if terminal else None)
             self.db.execute('INSERT OR IGNORE INTO task_scopes VALUES (?,?,?,?,?,?)',
                             (scope, binding['task_id'], requester, req['channel'], req['network'], now))
             parent = self.db.execute('SELECT id FROM task_checkpoints WHERE task_id=? ORDER BY created DESC,id DESC LIMIT 1',
@@ -540,6 +650,10 @@ class Broker:
             self.db.commit()
             row = self.db.execute('SELECT * FROM task_checkpoints WHERE id=?', (checkpoint,)).fetchone()
             return self.checkpoint_summary(row)
+        if action == 'task_progress':
+            budget = self.admit_transition(self.task_binding(scope)['task_id'], 'progress')
+            self.db.commit()
+            return {'budget': budget}
         if action == 'task_status':
             if (req['phase'] not in ('started', 'stopped', 'reported') or req['reason'] not in
                     ('admitted', 'deadline', 'iteration_limit', 'runtime_error', 'no_report',
@@ -549,15 +663,28 @@ class Broker:
             if old and old['channel'] != req['channel']:
                 raise ValueError('task channel mismatch')
             now = time.time()
+            deadline = req.get('deadline')
+            if deadline is not None and (not isinstance(deadline, (int, float)) or deadline > now + 3600):
+                raise ValueError('invalid task deadline')
+            # A final answer or no-report fallback spends the independent
+            # terminal direct-report reservation; status-only stop markers
+            # remain recoverable and do not poison a later admitted execution.
+            terminal = (req['phase'] == 'reported' and req['reason'] == 'final_report') or req['reason'] == 'no_report'
+            model_iterations = req.get('model_iterations')
+            budget = self.admit_transition(self.task_binding(scope)['task_id'],
+                                           'terminal_report' if terminal else 'status', now,
+                                           deadline=deadline, terminal_reason=req['reason'] if terminal else None,
+                                           model_iterations=model_iterations)
             self.db.execute('INSERT INTO task_status VALUES (?,?,?,?,?,?,?) '
                             'ON CONFLICT(scope) DO UPDATE SET updated=excluded.updated, '
                             'phase=excluded.phase,reason=excluded.reason',
                             (scope, req['channel'], req['network'], now, now, req['phase'], req['reason']))
             self.prune_audit()
             self.db.commit()
-            # No audit/read tool is exposed to the model. Return only actual job metadata.
+            # No audit/read tool is exposed to the model. Return only broker-owned
+            # task facts and actual job metadata.
             return {'jobs': [{'id': row['id'], 'state': row['state']} for row in
-                             self.task_job_rows(self.task_binding(scope)['task_id'])]}
+                             self.task_job_rows(self.task_binding(scope)['task_id'])], 'budget': budget}
         if action == 'reference':
             return self.references.read(req['key'])
         if action == 'job_inspect':
@@ -645,8 +772,7 @@ class Broker:
             count = self.db.execute('SELECT COUNT(*) FROM jobs WHERE created>?', (now - 3600,)).fetchone()[0]
             if count >= 30:
                 raise ValueError('global limit: 30 sandbox runs per hour')
-            if self.task_attempt_count(task_id) >= MAX_ATTEMPTS:
-                raise ValueError('limit: 5 sandbox attempts per IRC request')
+            self.admit_transition(task_id, 'sandbox', now)
             job_id = uuid.uuid4().hex
             self.db.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?)',
                             (job_id, scope, digest, now, json.dumps(files), title, '{}', 'running', None))
@@ -698,7 +824,7 @@ class Broker:
             destination = json.loads(repo_job['destination'])
             if destination.get('diagnostic_only'):
                 raise ValueError('diagnostic jobs cannot be published; rerun the complete project suite')
-            return self.publish_repository(req, job, destination)
+            return self.publish_repository(req, job, destination, allow_after_final_report=_confirmed_publication)
         if not self.token.is_file():
             raise ValueError('Burt gist credential is not installed; ask the operator')
         if self.token.stat().st_mode & 0o077:
@@ -707,9 +833,10 @@ class Broker:
         n = self.db.execute("SELECT COUNT(*) FROM jobs WHERE created>? AND state IN ('published','publishing','uncertain')", (time.time()-86400,)).fetchone()[0]
         if n >= 10:
             raise ValueError('global limit: 10 gist submissions per day')
-        if self.task_publication_count(self.task_binding(scope)['task_id']):
-            raise ValueError('limit: one gist submission per IRC request')
-        self.consume_task_publication(self.task_binding(scope)['task_id'], time.time())
+        task_id = self.task_binding(scope)['task_id']
+        self.admit_transition(task_id, 'public_write', limit_message='limit: one gist submission per IRC request',
+                              allow_after_final_report=_confirmed_publication)
+        self.consume_task_publication(task_id, time.time())
         self.db.execute("UPDATE jobs SET state='publishing' WHERE id=?", (job_id,))
         self.resource_checkpoint('publication', job_id, req, 'publishing')
         self.db.commit()
@@ -720,6 +847,7 @@ class Broker:
         except Exception:
             # A lost response may mean GitHub created the gist. Never blindly retry.
             self.db.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (job_id,))
+            self.admit_transition(self.task_binding(scope)['task_id'], 'terminal', terminal_reason='publication_uncertain')
             self.resource_checkpoint('publication', job_id, req, 'uncertain')
             self.db.commit()
             raise ValueError('gist submission failed or response was lost; operator reconciliation required; do not retry') from None
@@ -728,7 +856,7 @@ class Broker:
         self.db.commit()
         return self.result(self.db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())
 
-    def publish_repository(self, req, job, destination):
+    def publish_repository(self, req, job, destination, allow_after_final_report=False):
         # Read/preflight before marking submitted; no writes on stale bases.
         snapshot = self.repository.snapshot(destination['branch'], destination['project'])
         if self.verification is not None:
@@ -743,9 +871,9 @@ class Broker:
         n = self.db.execute("SELECT COUNT(*) FROM jobs WHERE created>? AND state IN ('published','publishing','uncertain')", (time.time()-86400,)).fetchone()[0]
         if n >= 10:
             raise ValueError('global limit: 10 submissions per day')
-        if self.task_publication_count(self.task_binding(job['scope'])['task_id']):
-            raise ValueError('limit: one submission per IRC request')
-        self.consume_task_publication(self.task_binding(job['scope'])['task_id'], time.time())
+        task_id = self.task_binding(job['scope'])['task_id']
+        self.admit_transition(task_id, 'public_write', allow_after_final_report=allow_after_final_report)
+        self.consume_task_publication(task_id, time.time())
         self.db.execute("UPDATE jobs SET state='publishing' WHERE id=?", (job['id'],))
         self.resource_checkpoint('publication', job['id'], req, 'publishing')
         self.db.commit()
@@ -753,6 +881,7 @@ class Broker:
             url = self.repository.publish(snapshot, json.loads(job['files']), job['title'])
         except Exception:
             self.db.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (job['id'],))
+            self.admit_transition(self.task_binding(job['scope'])['task_id'], 'terminal', terminal_reason='publication_uncertain')
             self.resource_checkpoint('publication', job['id'], req, 'uncertain')
             self.db.commit()
             raise ValueError('repository submission failed or response lost; operator reconciliation required; do not retry') from None
@@ -865,7 +994,7 @@ class Broker:
         params = json.loads(proposal['params'])
         internal = (self.capability_envelope(action, proposal['scope'], proposal['channel'], proposal['network'])
                     | params | {'action': action})
-        result = self._handle(internal)
+        result = self._handle(internal, _confirmed_publication=action in ('publish', 'repo_publish'))
         result['proposal_id'] = proposal['id']
         result['confirmed_action'] = action
         return result

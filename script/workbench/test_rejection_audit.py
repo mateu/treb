@@ -34,7 +34,7 @@ class RejectionAuditTests(unittest.TestCase):
             self.assertIn(reason, self.records()[-1]['reason'])
             self.assertEqual(self.records()[-1]['request_sha256'], hashlib.sha256(
                 json.dumps(req, sort_keys=True, ensure_ascii=True).encode()).hexdigest())
-        self.assertEqual(self.status(), {'jobs': []})
+        self.assertEqual(self.status()['jobs'], [])
         self.assertEqual(self.b.db.execute('SELECT COUNT(*) FROM jobs').fetchone()[0], 0)
         other = Broker(self.tmp.name)
         try:
@@ -130,7 +130,7 @@ class RejectionAuditTests(unittest.TestCase):
     def test_status_scope_binding_and_no_audit_read_api(self):
         self.status(phase='started', reason='admitted')
         job = self.b.handle(self.req)
-        self.assertEqual(self.status(scope='b'*64), {'jobs': []})
+        self.assertEqual(self.status(scope='b'*64)['jobs'], [])
         with self.assertRaisesRegex(ValueError, 'channel mismatch'):
             self.status(channel='#mateu-test')
         with self.assertRaisesRegex(ValueError, 'invalid task status'):

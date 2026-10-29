@@ -73,6 +73,21 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(next_checkpoint['parent_checkpoint_id'], checkpoint['checkpoint_id'])
         self.assertEqual([job['id'] for job in next_checkpoint['jobs']], [first['id'], second['id']])
 
+    def test_resume_refreshes_deadline_without_resetting_task_spend(self):
+        self.b.handle(self.req)
+        checkpoint = self.checkpoint()
+        self.b.db.execute('UPDATE task_phase_budgets SET deadline=0,terminal_reason="deadline"')
+        self.b.db.commit()
+        fresh_scope = 'b' * 64
+        resume = self.b.capability_envelope('task_resume', fresh_scope, '#ai', 'irc.perl.org')
+        resumed = self.b.handle(resume | {'action': 'task_resume', 'checkpoint_id': checkpoint['checkpoint_id'],
+                                          'requester': 'mateu', 'deadline': time.time() + 60})
+        self.assertEqual(resumed['attempts_remaining'], 4)
+        self.assertGreater(resumed['budget']['deadline_remaining_seconds'], 0)
+        fresh = self.req | {'scope': fresh_scope,
+            'grant': self.b.capability_envelope('run', fresh_scope, '#ai', 'irc.perl.org')['grant'], 'title': 'resumed'}
+        self.assertEqual(self.b.handle(fresh)['attempts_remaining'], 3)
+
     def test_checkpointed_task_budget_survives_pruned_job_journal(self):
         for attempt in range(5):
             self.b.handle(self.req | {'title': f'attempt-{attempt}'})
@@ -120,6 +135,10 @@ class BrokerTests(unittest.TestCase):
             self.publish(job)
         checkpoint = self.checkpoint()
         self.assertEqual(checkpoint['jobs'][0]['state'], 'uncertain')
+        self.assertEqual(checkpoint['budget']['terminal_reason'], 'publication_uncertain')
+        terminal = self.b.capability_envelope('task_status', self.req['scope'], '#ai', 'irc.perl.org') | {
+            'action': 'task_status', 'phase': 'reported', 'reason': 'final_report'}
+        self.assertEqual(self.b.handle(terminal)['budget']['terminal_reason'], 'publication_uncertain')
         status = self.b.capability_envelope('checkpoint_status', 'b' * 64, '#ai', 'irc.perl.org')
         visible = self.b.handle(status | {'action': 'checkpoint_status', 'checkpoint_id': checkpoint['checkpoint_id'],
                                           'requester': 'mateu'})
@@ -130,6 +149,48 @@ class BrokerTests(unittest.TestCase):
                                     'requester': 'mateu'})
         with self.assertRaisesRegex(ValueError, 'operator reconciliation'):
             self.publish(job)
+
+    def test_phase_budget_is_durable_and_reserves_one_terminal_report(self):
+        deadline = time.time() + 120
+        status = self.b.capability_envelope('task_status', self.req['scope'], '#ai', 'irc.perl.org') | {
+            'action': 'task_status', 'phase': 'started', 'reason': 'admitted', 'deadline': deadline,
+            'model_iterations': 3}
+        admitted = self.b.handle(status)
+        self.assertEqual(admitted['budget']['remaining_budget']['model_iterations'], 10)
+        self.assertEqual(admitted['budget']['remaining_budget']['terminal_reports'], 1)
+        progress = self.b.capability_envelope('task_progress', self.req['scope'], '#ai', 'irc.perl.org') | {'action': 'task_progress'}
+        for _ in range(8):
+            self.b.handle(progress)
+        with self.assertRaisesRegex(ValueError, 'progress notice budget'):
+            self.b.handle(progress)
+        job = self.b.handle(self.req)
+        checkpoint = self.checkpoint()
+        self.assertEqual(checkpoint['budget']['remaining_budget']['sandbox_executions'], 4)
+        terminal = status | {'phase': 'reported', 'reason': 'final_report'}
+        finished = self.b.handle(terminal)
+        self.assertEqual(finished['budget']['remaining_budget']['terminal_reports'], 0)
+        # A late duplicate terminal callback remains idempotent rather than
+        # spending a second report reservation.
+        self.assertEqual(self.b.handle(terminal)['budget']['remaining_budget']['terminal_reports'], 0)
+        with self.assertRaisesRegex(ValueError, 'task is terminal'):
+            self.b.handle(self.req | {'title': 'late-callback'})
+        restarted = Broker(self.tmp.name, self.token)
+        self.addCleanup(restarted.db.close)
+        row = restarted.db.execute('SELECT model_iterations,terminal_reports,terminal_reason FROM task_phase_budgets').fetchone()
+        self.assertEqual(tuple(row), (3, 1, 'final_report'))
+        self.assertEqual(job['state'], 'passed')
+
+    def test_phase_budget_deadline_blocks_execution_but_not_terminal_receipt(self):
+        status = self.b.capability_envelope('task_status', self.req['scope'], '#ai', 'irc.perl.org') | {
+            'action': 'task_status', 'phase': 'started', 'reason': 'admitted', 'deadline': time.time() + 60}
+        self.b.handle(status)
+        self.b.db.execute('UPDATE task_phase_budgets SET deadline=0')
+        self.b.db.commit()
+        with self.assertRaisesRegex(ValueError, 'task deadline reached'):
+            self.b.handle(self.req)
+        final = self.b.handle(status | {'phase': 'reported', 'reason': 'final_report'})
+        self.assertEqual(final['budget']['terminal_reason'], 'deadline')
+        self.assertEqual(final['budget']['remaining_budget']['terminal_reports'], 0)
 
     def test_capability_grant_is_required_and_action_bound(self):
         for request in (
@@ -316,12 +377,32 @@ class BrokerTests(unittest.TestCase):
         confirmation_scope = 'b'*64
         envelope = second.capability_envelope('proposal_confirm', confirmation_scope, '#ai', 'irc.perl.org')
         publish = second.capability_envelope('publish', confirmation_scope, '#ai', 'irc.perl.org')
+        final = second.capability_envelope('task_status', self.req['scope'], '#ai', 'irc.perl.org') | {
+            'action': 'task_status', 'phase': 'reported', 'reason': 'final_report'}
+        second.handle(final)
         result = second.handle(envelope | dict(action='proposal_confirm', requester='mateu',
                                confirmed_at=time.time(), publish_capability=publish['capability'], publish_grant=publish['grant']))
         self.assertEqual((result['confirmed_action'], result['state']), ('publish', 'published'))
         with self.assertRaisesRegex(ValueError, 'missing or ambiguous'):
             second.handle(envelope | dict(action='proposal_confirm', requester='mateu',
                           confirmed_at=time.time(), publish_capability=publish['capability'], publish_grant=publish['grant']))
+
+    def test_confirmed_publication_records_uncertainty_after_final_report(self):
+        job = self.b.handle(self.req)
+        self.proposal('publish', {'id': job['id']})
+        final = self.b.capability_envelope('task_status', self.req['scope'], '#ai', 'irc.perl.org') | {
+            'action': 'task_status', 'phase': 'reported', 'reason': 'final_report'}
+        self.b.handle(final)
+        self.b.post_gist = lambda payload: (_ for _ in ()).throw(TimeoutError('lost response'))
+        confirmation_scope = 'b' * 64
+        envelope = self.b.capability_envelope('proposal_confirm', confirmation_scope, '#ai', 'irc.perl.org')
+        publish = self.b.capability_envelope('publish', confirmation_scope, '#ai', 'irc.perl.org')
+        with self.assertRaisesRegex(ValueError, 'operator reconciliation required'):
+            self.b.handle(envelope | dict(action='proposal_confirm', requester='mateu',
+                          confirmed_at=time.time(), publish_capability=publish['capability'], publish_grant=publish['grant']))
+        self.assertEqual(self.b.db.execute('SELECT state FROM jobs WHERE id=?', (job['id'],)).fetchone()[0], 'uncertain')
+        self.assertEqual(self.b.db.execute('SELECT terminal_reason FROM task_phase_budgets').fetchone()[0],
+                         'publication_uncertain')
 
     def test_verbose_failure_keeps_error_head_and_suite_summary_tail(self):
         self.b.execute=lambda job: {'reason':'exited','exit_code':1,

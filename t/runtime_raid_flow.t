@@ -658,9 +658,10 @@ for my $ending (qw(error silent empty deadline report)) {
     : $ending eq 'silent' ? '__SILENT__' : $ending eq 'empty' ? '' : 'Completed report.';
   my $bot=Local::RaidFlowBot->new(pending=>$pending,replies=>[$reply]);
   do_raid(self=>$bot);
-  is($status[-1]{scope},'e'x64,"$ending retains admitted scope after cleanup");
-  is($status[-1]{phase},$ending eq 'report' ? 'reported' : 'stopped',"$ending persists lifecycle");
-  is($status[-1]{reason},$ending eq 'report' ? 'final_report' : $ending eq 'error' ? 'iteration_limit'
+  my ($lifecycle)=grep { $_->{action} eq 'task_status' } reverse @status;
+  is($lifecycle->{scope},'e'x64,"$ending retains admitted scope after cleanup");
+  is($lifecycle->{phase},$ending eq 'report' ? 'reported' : 'stopped',"$ending persists lifecycle");
+  is($lifecycle->{reason},$ending eq 'report' ? 'final_report' : $ending eq 'error' ? 'iteration_limit'
     : $ending eq 'deadline' ? 'deadline' : 'no_report',"$ending persists safe reason");
   like($bot->{sent}[-1]{msg},qr/No project bundle was saved/,
     "$ending zero-job notice is truthful") unless $ending eq 'report';
