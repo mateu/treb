@@ -19,6 +19,9 @@ async sub plugin_before_llm_call {
     $self->reminder(undef);
     return \@messages;
   }
+  # The Raider enforces this same fixed cap; persist the observed iteration so
+  # terminal/checkpoint status reports a broker-owned remaining budget.
+  $p->{coding_model_iterations}=$iteration if defined($iteration) && $iteration =~ /\A\d+\z/ && $iteration <= 13;
   $p->{coding_stop_reason}='coding deadline reached' if now() >= $p->{expires_at};
   $p->{coding_stop_reason}='sandbox attempt budget exhausted before a complete project passed'
     if defined($p->{coding_attempts_remaining}) && $p->{coding_attempts_remaining} == 0

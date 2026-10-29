@@ -276,23 +276,25 @@ is_deeply([sort keys %$forwarded],[sort qw(action capability channel checkpoint_
   'status cannot supply channel, requester, scope, or grants');
 $bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
   {nick=>'mateu',source_kind=>'conversation',msg=>'burt_bot: resume and test this coding project'}]};
+my @resume_requests;
 {
-  my $calls=0;
   my $resume_scope='';
   no warnings 'redefine';
   # The fresh runtime scope is opaque, so echo it from the request in the mock.
   local *Bot::Runtime::Workbench::broker_call=sub {
-    $forwarded=$_[0];
-    $resume_scope=$forwarded->{scope} if ++$calls==1;
-    return $calls==1 ? JSON::PP::encode_json({resumed_scope=>$resume_scope,jobs=>[],
+    $forwarded=$_[0]; push @resume_requests,$forwarded;
+    $resume_scope=$forwarded->{scope} if $forwarded->{action} eq 'task_resume';
+    return $forwarded->{action} eq 'task_resume' ? JSON::PP::encode_json({resumed_scope=>$resume_scope,jobs=>[],
       latest_repository_job=>{id=>'d'x32,state=>'running'},attempts_remaining=>4})
-      : JSON::PP::encode_json({checkpoint_id=>'c'x32,jobs=>[],attempts_remaining=>4});
+      : $forwarded->{action} eq 'task_checkpoint' ? JSON::PP::encode_json({checkpoint_id=>'c'x32,jobs=>[],attempts_remaining=>4})
+      : JSON::PP::encode_json({budget=>{}});
   };
   like($defs{resume_coding_task}{code}->($tool,{checkpoint_id=>'a'x32}),qr/resumed_scope/,
     'resume accepts one exact checkpoint id');
 }
-is($forwarded->{action},'task_checkpoint','resume creates a new immutable lineage receipt');
-is($forwarded->{scope},$bot->{pending}{coding_scope},'post-resume checkpoint retains the broker-bound scope');
+my ($resume_checkpoint)=grep { $_->{action} eq 'task_checkpoint' } reverse @resume_requests;
+is($resume_checkpoint->{scope},$bot->{pending}{coding_scope},'post-resume checkpoint retains the broker-bound scope');
+is($resume_requests[-1]{action},'task_progress','resume also records the bounded progress notice');
 is($bot->{pending}{coding_requester},'mateu','resume preserves broker-bound requester identity');
 is($bot->{pending}{coding_last_repo_job},'d'x32,'resume restores the latest complete repository job');
 is($bot->{pending}{coding_last_repo_state},'running','resume accepts a broker-interrupted repository job');
