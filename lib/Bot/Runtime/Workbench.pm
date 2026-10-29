@@ -411,7 +411,8 @@ sub tool_specs {
               ($scope,$issued_capability,$grant)=capability_grant($self,$action);
               $requester=trusted_requester($self);
               $raw=broker_call({%$args,action=>$action,requester=>$requester,scope=>$scope,
-                capability=>$issued_capability,grant=>$grant,channel=>lc($pending->{channel}),network=>'irc.perl.org'});
+                capability=>$issued_capability,grant=>$grant,channel=>lc($pending->{channel}),network=>'irc.perl.org',
+                deadline=>0+$pending->{expires_at}});
               $r=JSON::PP::decode_json($raw);
               die "Invalid task resume" unless ref($r) eq 'HASH' && ($r->{resumed_scope}//'') eq $scope
                 && ref($r->{jobs}) eq 'ARRAY' && @{$r->{jobs}}<=5

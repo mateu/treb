@@ -73,6 +73,21 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(next_checkpoint['parent_checkpoint_id'], checkpoint['checkpoint_id'])
         self.assertEqual([job['id'] for job in next_checkpoint['jobs']], [first['id'], second['id']])
 
+    def test_resume_refreshes_deadline_without_resetting_task_spend(self):
+        self.b.handle(self.req)
+        checkpoint = self.checkpoint()
+        self.b.db.execute('UPDATE task_phase_budgets SET deadline=0,terminal_reason="deadline"')
+        self.b.db.commit()
+        fresh_scope = 'b' * 64
+        resume = self.b.capability_envelope('task_resume', fresh_scope, '#ai', 'irc.perl.org')
+        resumed = self.b.handle(resume | {'action': 'task_resume', 'checkpoint_id': checkpoint['checkpoint_id'],
+                                          'requester': 'mateu', 'deadline': time.time() + 60})
+        self.assertEqual(resumed['attempts_remaining'], 4)
+        self.assertGreater(resumed['budget']['deadline_remaining_seconds'], 0)
+        fresh = self.req | {'scope': fresh_scope,
+            'grant': self.b.capability_envelope('run', fresh_scope, '#ai', 'irc.perl.org')['grant'], 'title': 'resumed'}
+        self.assertEqual(self.b.handle(fresh)['attempts_remaining'], 3)
+
     def test_checkpointed_task_budget_survives_pruned_job_journal(self):
         for attempt in range(5):
             self.b.handle(self.req | {'title': f'attempt-{attempt}'})
@@ -362,6 +377,9 @@ class BrokerTests(unittest.TestCase):
         confirmation_scope = 'b'*64
         envelope = second.capability_envelope('proposal_confirm', confirmation_scope, '#ai', 'irc.perl.org')
         publish = second.capability_envelope('publish', confirmation_scope, '#ai', 'irc.perl.org')
+        final = second.capability_envelope('task_status', self.req['scope'], '#ai', 'irc.perl.org') | {
+            'action': 'task_status', 'phase': 'reported', 'reason': 'final_report'}
+        second.handle(final)
         result = second.handle(envelope | dict(action='proposal_confirm', requester='mateu',
                                confirmed_at=time.time(), publish_capability=publish['capability'], publish_grant=publish['grant']))
         self.assertEqual((result['confirmed_action'], result['state']), ('publish', 'published'))

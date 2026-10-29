@@ -455,11 +455,12 @@ class Broker:
                     'terminal_reports': max(0, TERMINAL_REPORT_RESERVE - row['terminal_reports'])}}
 
     def admit_transition(self, task_id, operation, now=None, deadline=None, terminal_reason=None, model_iterations=None,
-                         limit_message=None):
+                         limit_message=None, allow_after_final_report=False):
         """Atomically admit one durable task operation before its side effect."""
         now = time.time() if now is None else now
         row = self.ensure_task_phase_budget(task_id, now, deadline)
-        if operation not in ('status', 'checkpoint', 'terminal_report') and row['terminal_reason']:
+        if (operation not in ('status', 'checkpoint', 'terminal_report') and row['terminal_reason']
+                and not (allow_after_final_report and operation == 'public_write' and row['terminal_reason'] == 'final_report')):
             raise ValueError('task is terminal; operator inspection required')
         if operation not in ('status', 'checkpoint', 'terminal_report') and now >= row['deadline']:
             self.db.execute('UPDATE task_phase_budgets SET phase=?,terminal_reason=?,updated=? WHERE task_id=?',
@@ -480,7 +481,7 @@ class Broker:
             updates['public_writes'] = row['public_writes'] + 1
         elif operation == 'progress':
             if row['progress_notices'] >= MAX_PROGRESS_NOTICES:
-                raise ValueError('progress notice budget exhausted')
+                raise ValueError('limit: progress notice budget exhausted')
             updates['progress_notices'] = row['progress_notices'] + 1
         elif operation == 'terminal':
             updates['phase'] = 'stopped'
@@ -519,7 +520,7 @@ class Broker:
             exc.rejection = self.record_rejection(req, exc)
             raise
 
-    def _handle(self, req, _diagnostic=False, _saved_snapshot=False):
+    def _handle(self, req, _diagnostic=False, _saved_snapshot=False, _confirmed_publication=False):
         if not isinstance(req, dict):
             raise ValueError('object required')
         action = req.get('action')
@@ -537,6 +538,7 @@ class Broker:
         optional_fields = {'task_status': {'deadline', 'model_iterations'}, 'task_checkpoint': {'deadline'}}
         fields['checkpoint_status'] = {'checkpoint_id', 'requester'}
         fields['task_resume'] = {'checkpoint_id', 'requester'}
+        optional_fields['task_resume'] = {'deadline'}
         fields['proposal_create'] = {'proposal_action', 'params', 'requester'}
         fields['proposal_confirm'] = {'requester', 'confirmed_at', 'publish_capability', 'publish_grant'}
         allowed |= fields.get(action, set()) | optional_fields.get(action, set())
@@ -602,6 +604,14 @@ class Broker:
                 if existing:
                     raise ValueError('fresh task scope is already bound')
                 now = time.time()
+                deadline = req.get('deadline')
+                if deadline is not None and (not isinstance(deadline, (int, float)) or not now < deadline <= now + 3600):
+                    raise ValueError('invalid resume deadline')
+                if deadline is not None:
+                    # A resume has fresh human authority and a new bounded
+                    # runtime lifetime, but preserves task-wide spend counters.
+                    self.db.execute('UPDATE task_phase_budgets SET deadline=?,phase=?,terminal_reason=NULL,updated=? WHERE task_id=?',
+                                    (deadline, 'started', now, checkpoint['task_id']))
                 self.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
                                 (req['scope'], checkpoint['task_id'], requester, req['channel'], req['network'], now))
                 self.db.commit()
@@ -804,7 +814,7 @@ class Broker:
             destination = json.loads(repo_job['destination'])
             if destination.get('diagnostic_only'):
                 raise ValueError('diagnostic jobs cannot be published; rerun the complete project suite')
-            return self.publish_repository(req, job, destination)
+            return self.publish_repository(req, job, destination, allow_after_final_report=_confirmed_publication)
         if not self.token.is_file():
             raise ValueError('Burt gist credential is not installed; ask the operator')
         if self.token.stat().st_mode & 0o077:
@@ -814,7 +824,8 @@ class Broker:
         if n >= 10:
             raise ValueError('global limit: 10 gist submissions per day')
         task_id = self.task_binding(scope)['task_id']
-        self.admit_transition(task_id, 'public_write', limit_message='limit: one gist submission per IRC request')
+        self.admit_transition(task_id, 'public_write', limit_message='limit: one gist submission per IRC request',
+                              allow_after_final_report=_confirmed_publication)
         self.consume_task_publication(task_id, time.time())
         self.db.execute("UPDATE jobs SET state='publishing' WHERE id=?", (job_id,))
         self.resource_checkpoint('publication', job_id, req, 'publishing')
@@ -835,7 +846,7 @@ class Broker:
         self.db.commit()
         return self.result(self.db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())
 
-    def publish_repository(self, req, job, destination):
+    def publish_repository(self, req, job, destination, allow_after_final_report=False):
         # Read/preflight before marking submitted; no writes on stale bases.
         snapshot = self.repository.snapshot(destination['branch'], destination['project'])
         if self.verification is not None:
@@ -851,7 +862,7 @@ class Broker:
         if n >= 10:
             raise ValueError('global limit: 10 submissions per day')
         task_id = self.task_binding(job['scope'])['task_id']
-        self.admit_transition(task_id, 'public_write')
+        self.admit_transition(task_id, 'public_write', allow_after_final_report=allow_after_final_report)
         self.consume_task_publication(task_id, time.time())
         self.db.execute("UPDATE jobs SET state='publishing' WHERE id=?", (job['id'],))
         self.resource_checkpoint('publication', job['id'], req, 'publishing')
@@ -973,7 +984,7 @@ class Broker:
         params = json.loads(proposal['params'])
         internal = (self.capability_envelope(action, proposal['scope'], proposal['channel'], proposal['network'])
                     | params | {'action': action})
-        result = self._handle(internal)
+        result = self._handle(internal, _confirmed_publication=action in ('publish', 'repo_publish'))
         result['proposal_id'] = proposal['id']
         result['confirmed_action'] = action
         return result
