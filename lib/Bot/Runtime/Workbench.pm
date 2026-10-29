@@ -167,12 +167,12 @@ sub require_admitted_task {
 }
 
 sub task_notice {
-  my ($self,$pending,$text)=@_;
+  my ($self,$pending,$text,$terminal)=@_;
   return unless $pending && $pending->{coding_task};
   # Progress notices are a durable broker budget, never an implicit model
   # counter.  Suppress excess notices while preserving the final direct report.
   my $allowed=1;
-  if (($pending->{coding_scope}//'') =~ /\A[a-f0-9]{64}\z/) {
+  if (!$terminal && ($pending->{coding_scope}//'') =~ /\A[a-f0-9]{64}\z/) {
     my $ok=eval {
       my $channel=lc($pending->{channel});
       my $grant=sha256_hex(JSON::PP->new->canonical->utf8->encode(

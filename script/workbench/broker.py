@@ -459,10 +459,13 @@ class Broker:
         """Atomically admit one durable task operation before its side effect."""
         now = time.time() if now is None else now
         row = self.ensure_task_phase_budget(task_id, now, deadline)
+        recording_publication_uncertainty = (operation == 'terminal' and terminal_reason == 'publication_uncertain')
         if (operation not in ('status', 'checkpoint', 'terminal_report') and row['terminal_reason']
-                and not (allow_after_final_report and operation == 'public_write' and row['terminal_reason'] == 'final_report')):
+                and not (recording_publication_uncertainty
+                         or (allow_after_final_report and operation == 'public_write'
+                             and row['terminal_reason'] == 'final_report'))):
             raise ValueError('task is terminal; operator inspection required')
-        if operation not in ('status', 'checkpoint', 'terminal_report') and now >= row['deadline']:
+        if operation not in ('status', 'checkpoint', 'terminal_report', 'terminal') and now >= row['deadline']:
             self.db.execute('UPDATE task_phase_budgets SET phase=?,terminal_reason=?,updated=? WHERE task_id=?',
                             ('stopped', 'deadline', now, task_id))
             raise ValueError('task deadline reached; terminal report reserved')
@@ -485,7 +488,11 @@ class Broker:
             updates['progress_notices'] = row['progress_notices'] + 1
         elif operation == 'terminal':
             updates['phase'] = 'stopped'
-            updates['terminal_reason'] = terminal_reason or row['terminal_reason'] or 'terminal'
+            # An attempted public write may become unknowable only after it has
+            # crossed the irreversible boundary. Preserve that reconciliation
+            # requirement even if final reporting or the deadline came first.
+            updates['terminal_reason'] = (terminal_reason if recording_publication_uncertainty
+                                          else terminal_reason or row['terminal_reason'] or 'terminal')
         elif operation == 'terminal_report':
             if row['terminal_reports'] == 0:
                 updates['terminal_reports'] = 1
@@ -659,7 +666,10 @@ class Broker:
             deadline = req.get('deadline')
             if deadline is not None and (not isinstance(deadline, (int, float)) or deadline > now + 3600):
                 raise ValueError('invalid task deadline')
-            terminal = req['phase'] == 'reported' and req['reason'] == 'final_report'
+            # A final answer or no-report fallback spends the independent
+            # terminal direct-report reservation; status-only stop markers
+            # remain recoverable and do not poison a later admitted execution.
+            terminal = (req['phase'] == 'reported' and req['reason'] == 'final_report') or req['reason'] == 'no_report'
             model_iterations = req.get('model_iterations')
             budget = self.admit_transition(self.task_binding(scope)['task_id'],
                                            'terminal_report' if terminal else 'status', now,

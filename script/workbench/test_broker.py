@@ -387,6 +387,23 @@ class BrokerTests(unittest.TestCase):
             second.handle(envelope | dict(action='proposal_confirm', requester='mateu',
                           confirmed_at=time.time(), publish_capability=publish['capability'], publish_grant=publish['grant']))
 
+    def test_confirmed_publication_records_uncertainty_after_final_report(self):
+        job = self.b.handle(self.req)
+        self.proposal('publish', {'id': job['id']})
+        final = self.b.capability_envelope('task_status', self.req['scope'], '#ai', 'irc.perl.org') | {
+            'action': 'task_status', 'phase': 'reported', 'reason': 'final_report'}
+        self.b.handle(final)
+        self.b.post_gist = lambda payload: (_ for _ in ()).throw(TimeoutError('lost response'))
+        confirmation_scope = 'b' * 64
+        envelope = self.b.capability_envelope('proposal_confirm', confirmation_scope, '#ai', 'irc.perl.org')
+        publish = self.b.capability_envelope('publish', confirmation_scope, '#ai', 'irc.perl.org')
+        with self.assertRaisesRegex(ValueError, 'operator reconciliation required'):
+            self.b.handle(envelope | dict(action='proposal_confirm', requester='mateu',
+                          confirmed_at=time.time(), publish_capability=publish['capability'], publish_grant=publish['grant']))
+        self.assertEqual(self.b.db.execute('SELECT state FROM jobs WHERE id=?', (job['id'],)).fetchone()[0], 'uncertain')
+        self.assertEqual(self.b.db.execute('SELECT terminal_reason FROM task_phase_budgets').fetchone()[0],
+                         'publication_uncertain')
+
     def test_verbose_failure_keeps_error_head_and_suite_summary_tail(self):
         self.b.execute=lambda job: {'reason':'exited','exit_code':1,
                                    'output':'FAILURE DETAIL\n'+'x'*12000+'\nResult: FAIL'}

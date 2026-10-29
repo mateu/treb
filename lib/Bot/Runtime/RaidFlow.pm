@@ -54,7 +54,7 @@ sub _expire_raid {
   $pending //= $self->_pending_raid;
   Bot::Runtime::Workbench::task_notice($self,$pending,
     'Coding task stopped: ' . $reason . '. ' . ($pending->{coding_last_result}//'No test result recorded.') .
-    ' ' . Bot::Runtime::Workbench::finish_task($self,$pending,'deadline'));
+    ' ' . Bot::Runtime::Workbench::finish_task($self,$pending,'deadline'), 1);
   POE::Kernel->delay('_retry_raid'); # cancel the old retry before admitting new work
   $self->_pending_raid(undef);
   $self->_rate_limit_wait(0);
@@ -109,7 +109,7 @@ sub do_raid {
   unless ($raider) {
     $self->error('Raider unavailable: no active raider instance');
     Bot::Runtime::Workbench::task_notice($self,$pending,'Coding task stopped: runtime unavailable. ' .
-      Bot::Runtime::Workbench::finish_task($self,$pending,'runtime_error'));
+      Bot::Runtime::Workbench::finish_task($self,$pending,'runtime_error'), 1);
     $self->_send_to_channel(
       $channel || $self->_default_channel,
       'My brain is still booting. Try again in a moment.',
@@ -136,7 +136,7 @@ sub do_raid {
   if ($self->can('_raid_in_progress') && $self->_raid_in_progress) {
     $self->error('Refusing nested raid; tool path attempted re-entrant raider call');
     Bot::Runtime::Workbench::task_notice($self,$pending,'Coding task stopped: nested runtime call. ' .
-      Bot::Runtime::Workbench::finish_task($self,$pending,'runtime_error'));
+      Bot::Runtime::Workbench::finish_task($self,$pending,'runtime_error'), 1);
     $self->_send_to_channel(
       $channel || $self->_default_channel,
       'My brain hiccuped on a nested thought. Try that again.',
@@ -225,7 +225,7 @@ sub do_raid {
   };
 
   if ($answer =~ /__SILENT__/) {
-    Bot::Runtime::Workbench::task_notice($self,$pending,'Coding task ended without a final report. ' . Bot::Runtime::Workbench::finish_task($self,$pending,'no_report'));
+    Bot::Runtime::Workbench::task_notice($self,$pending,'Coding task ended without a final report. ' . Bot::Runtime::Workbench::finish_task($self,$pending,'no_report'), 1);
     $self->info("${silent_name} chose to stay silent");
     $self->_processing(0);
     $self->_schedule_pending_buffers;
@@ -254,7 +254,7 @@ sub do_raid {
 
   if ($answer !~ /\S/) {
     $self->_log_cleanup_empty($raw_answer, $answer);
-    Bot::Runtime::Workbench::task_notice($self,$pending,'Coding task ended without a final report. ' . Bot::Runtime::Workbench::finish_task($self,$pending,'no_report'));
+    Bot::Runtime::Workbench::task_notice($self,$pending,'Coding task ended without a final report. ' . Bot::Runtime::Workbench::finish_task($self,$pending,'no_report'), 1);
     $self->info('Answer empty after cleanup; staying silent');
     $self->_processing(0);
     $self->_schedule_pending_buffers;
@@ -263,7 +263,7 @@ sub do_raid {
 
   if ($post_cleanup_guard && $post_cleanup_guard->($self, $channel, $answer)) {
     Bot::Runtime::Workbench::task_notice($self,$pending,'Coding task report suppressed. ' .
-      Bot::Runtime::Workbench::finish_task($self,$pending,'no_report'));
+      Bot::Runtime::Workbench::finish_task($self,$pending,'no_report'), 1);
     $self->_processing(0);
     return;
   }
@@ -294,7 +294,7 @@ sub do_raid {
     } elsif ($non_substantive_allow_pct > 0 && int(rand(100)) < $non_substantive_allow_pct) {
       $self->info("Allowing non-substantive output due to non_substantive_allow_pct=$non_substantive_allow_pct");
     } else {
-      Bot::Runtime::Workbench::task_notice($self,$pending,'Coding task ended without a usable final report. ' . Bot::Runtime::Workbench::finish_task($self,$pending,'no_report'));
+      Bot::Runtime::Workbench::task_notice($self,$pending,'Coding task ended without a usable final report. ' . Bot::Runtime::Workbench::finish_task($self,$pending,'no_report'), 1);
       $self->info('Suppressing non-substantive output');
       $self->_processing(0);
       $self->_schedule_pending_buffers;
