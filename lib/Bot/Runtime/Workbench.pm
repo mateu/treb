@@ -159,6 +159,13 @@ sub admit_task {
   task_notice($self,$pending,"Started coding task (up to ${ttl}s; bounded test/tool attempts). I will report test results and publication status.");
 }
 
+sub require_admitted_task {
+  my ($self,$action)=@_;
+  my $pending=$self->_pending_raid;
+  die "No admitted coding task for $action\n" unless $pending && $pending->{coding_task};
+  return $pending;
+}
+
 sub task_notice {
   my ($self,$pending,$text)=@_;
   return unless $pending && $pending->{coding_task};
@@ -427,6 +434,9 @@ sub tool_specs {
             return $tool->text_result($raw);
           }
           my ($scope,$issued_capability,$grant)=capability_grant($self,$action);
+          # Execution must remain inside the lifecycle that froze the trusted
+          # requester, scope, deadline, checkpoint, and terminal reporting.
+          require_admitted_task($self,$action) if $action =~ /\A(?:run|repo_(?:run|repair|diagnose))\z/;
           task_notice($self,$self->_pending_raid,"$action started.") unless $action =~ /\A(?:repo_(?:read|inspect)|reference)\z/;
           $publication_attempted=1 if $action eq 'publish' || $action eq 'repo_publish';
           my $raw=broker_call({%$args,action=>$action,scope=>$scope,capability=>$issued_capability,grant=>$grant,channel=>lc($self->_pending_raid->{channel}),network=>'irc.perl.org'});

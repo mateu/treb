@@ -236,6 +236,20 @@ my $forwarded;
 is($forwarded->{requester},'mateu','proposal requester is runtime-derived');
 ok(!exists($forwarded->{params}{requester}),'model parameters cannot set requester identity');
 $bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
+  {nick=>'alice',source_kind=>'conversation',msg=>'burt_bot: write and test a Perl script'},
+  {nick=>'bob',source_kind=>'conversation',msg=>'burt_bot: hello'}]};
+Bot::Runtime::Workbench::admit_task($bot);
+ok(!$bot->{pending}{coding_task},'ambiguous requesters do not admit a coding task');
+{
+  no warnings 'redefine';
+  my $called=0;
+  local *Bot::Runtime::Workbench::broker_call=sub {$called++; return '{}'};
+  like($defs{run_code}{code}->($tool,{files=>{'main.pl'=>'print 1'},argv=>['/usr/bin/perl','/work/main.pl'],title=>'test'}),
+    qr/Error: No admitted coding task for run/,'execution rejects an ambiguous unadmitted request');
+  is($called,0,'unadmitted execution never reaches the broker');
+}
+
+$bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
   {nick=>'mateu',source_kind=>'conversation',queued_at=>time,msg=>'burt_bot: yes'}]};
 {
   no warnings 'redefine';
