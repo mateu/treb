@@ -24,9 +24,14 @@ sub capability_set {
   my $pending=$self->_pending_raid;
   die "No active #ai or #mateu-test request\n" unless $pending && lc($pending->{channel}//'') =~ /\A(?:#ai|#mateu-test)\z/
     && ($pending->{expires_at}//0)>time;
+  return capability_set_from_messages($self,$pending->{messages});
+}
+
+sub capability_set_from_messages {
+  my ($self,$messages)=@_;
   my %capability;
   my $nick=quotemeta($self->get_nickname);
-  for my $m (@{$pending->{messages}||[]}) {
+  for my $m (@{$messages||[]}) {
     next unless ($m->{source_kind}//'') eq 'conversation' && $self->_is_human_nick($m->{nick}//'');
     my $text=$m->{msg}//'';
     next unless $text =~ /(?:^|\W)$nick(?:\W|$)/i;
@@ -70,6 +75,10 @@ sub trusted_requester {
 sub confirmation_envelope {
   my ($self)=@_;
   my $pending=$self->_pending_raid or die "No active confirmation\n";
+  die "Workbench is disabled\n" unless ($ENV{BURT_WORKBENCH_SOCKET}//'') ne '' && $self->_bot_name_slug eq 'burt';
+  die "Workbench network is not permitted\n" unless lc($ENV{IRC_SERVER}//'irc.perl.org') eq 'irc.perl.org';
+  die "No active #ai or #mateu-test request\n" unless lc($pending->{channel}//'') =~ /\A(?:#ai|#mateu-test)\z/
+    && ($pending->{expires_at}//0)>time;
   my $nick=quotemeta($self->get_nickname);
   my @messages=grep {
     ($_->{source_kind}//'') eq 'conversation' && $self->_is_human_nick($_->{nick}//'')
@@ -84,10 +93,12 @@ sub confirmation_envelope {
     [$scope,$channel,'irc.perl.org','read_status']));
   my %envelope=(action=>'proposal_confirm',scope=>$scope,capability=>'read_status',grant=>$grant,
     channel=>$channel,network=>'irc.perl.org',requester=>$requester);
+  my $confirmed_capability=capability_set_from_messages($self,\@messages);
   for my $publication (qw(publish repo_publish)) {
-    my ($publish_scope,$capability,$publish_grant);
-    next unless eval { ($publish_scope,$capability,$publish_grant)=capability_grant($self,$publication); 1 };
-    die "Confirmation scope changed\n" unless $publish_scope eq $scope;
+    my $capability=$ACTION_CAPABILITY{$publication};
+    next unless $confirmed_capability->{$capability};
+    my $publish_grant=sha256_hex(JSON::PP->new->canonical->utf8->encode(
+      [$scope,$channel,'irc.perl.org',$capability]));
     $envelope{publish_capability}=$capability;
     $envelope{publish_grant}=$publish_grant;
   }
