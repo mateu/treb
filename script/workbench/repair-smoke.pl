@@ -44,8 +44,8 @@ my $snapshot=decode_json(Bot::Runtime::Workbench::broker_call({%read_envelope,ac
   branch=>'burt/dictionary',project=>'dictionary'}));
 die encode_json($snapshot) unless $snapshot->{base_sha};
 my $seed=Bot::Runtime::Workbench::broker_call({%test_envelope,action=>'repo_run',
-  branch=>'burt/dictionary',project=>'dictionary',base_sha=>$snapshot->{base_sha},
-  files=>$fixture->{files},argv=>['/usr/bin/perl','-Ilib','t/dictionary.t'],title=>'Replay original failed dictionary bundle'});
+  snapshot_id=>$snapshot->{snapshot_id},changes=>$fixture->{files},delete=>[],
+  argv=>['/usr/bin/perl','-Ilib','t/dictionary.t'],title=>'Replay original failed dictionary bundle'});
 my $job=decode_json($seed);
 die 'original failure was not reproduced: '.$seed unless ($job->{state}//'') eq 'failed';
 Bot::Runtime::Workbench::report_result($bot,'repo_run',$seed);

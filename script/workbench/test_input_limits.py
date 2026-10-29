@@ -60,7 +60,11 @@ class LargeBundleBrokerTests(unittest.TestCase):
     def test_repair_inspect_publish_and_overflow(self):
         files = {'lib/main.py': 'x' * 70000, 't/test.py': 'x' * 61072}
         self.repo.files = files.copy()
-        req = self.repo_req | {'files': files}
+        snapshot = self.b.handle(self.b.capability_envelope('repo_read', self.req['scope'], self.req['channel'], self.req['network']) | dict(
+            action='repo_read', branch='burt/dictionary', project='dictionary'))
+        req = self.b.capability_envelope('repo_run', self.req['scope'], self.req['channel'], self.req['network']) | dict(
+            action='repo_run', snapshot_id=snapshot['snapshot_id'], changes={}, delete=[],
+            argv=['/bin/sh','-c','true'], title='large project')
         job = self.b.handle(req)
         self.assertEqual(job['state'], 'passed')
         with self.assertRaisesRegex(InputSizeError, 'submitted_bytes=131073.*excess_bytes=1'):
@@ -85,13 +89,13 @@ class LargeWireTests(unittest.TestCase):
         # Preserve the trusted baseline; add escaped text only under the policy's
         # allowed regression directory. Exercise the real broker wire handler.
         req = self.req.copy()
-        req['files'] = self.files | {'tests/large.txt': '\x01' *
+        req['changes'] = {'tests/large.txt': '\x01' *
                                     (131072 - sum(len(v.encode()) for v in self.files.values()))}
         result = self.wire(json.dumps(req).encode() + b'\n')
         self.assertNotIn('error', result)
         saved = self.b.db.execute('SELECT files FROM jobs WHERE id=?', (result['id'],)).fetchone()[0]
-        self.assertEqual(json.loads(saved), req['files'])
-        req['files']['tests/large.txt'] += 'x'
+        self.assertEqual(json.loads(saved), self.files | req['changes'])
+        req['changes']['tests/large.txt'] += 'x'
         result = self.wire(json.dumps(req).encode() + b'\n')
         self.assertIn('submitted_bytes=131073 allowed_bytes=131072 excess_bytes=1', result['error'])
         self.assertEqual(self.b.db.execute('SELECT COUNT(*) FROM jobs').fetchone()[0], 1)

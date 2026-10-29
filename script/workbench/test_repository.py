@@ -99,8 +99,11 @@ class RepositoryBrokerTests(unittest.TestCase):
     def setUp(self):
         test_broker.BrokerTests.setUp(self)
         self.repo=FakeRepository();self.b.repository=self.repo
-        self.repo_req=self.req|dict(action='repo_run',branch='burt/dictionary',project='dictionary',base_sha=A,
-                  files={'lib/main.py':'print(42)','t/test.py':'assert 42==42'})
+        snapshot=self.b.handle(self.b.capability_envelope('repo_read', self.req['scope'], self.req['channel'], self.req['network']) | dict(action='repo_read',branch='burt/dictionary',project='dictionary'))
+        self.repo_req={k:v for k,v in self.req.items() if k not in ('files','argv','title')}|dict(
+                  action='repo_run',snapshot_id=snapshot['snapshot_id'],
+                  changes={'lib/main.py':'print(42)','t/test.py':'assert 42==42'},delete=[],
+                  argv=['/bin/sh','-c','true'],title='repository test')
 
     def request(self, action):
         return self.b.capability_envelope(action, self.req['scope'], self.req['channel'], self.req['network'])
@@ -110,7 +113,7 @@ class RepositoryBrokerTests(unittest.TestCase):
 
     def test_repo_idempotence_restart_exact_inputs_and_destination(self):
         r=self.b.handle(self.repo_req)
-        self.assertEqual(self.runs[-1]['files'],self.repo_req['files'])
+        self.assertEqual(self.runs[-1]['files'],self.repo_req['changes'])
         with self.assertRaises(ValueError): self.publish(r)
         self.repo_publish(r)
         # Publisher returns stored URL even after restart, without networking.
@@ -158,9 +161,9 @@ class RepositoryBrokerTests(unittest.TestCase):
         self.b.execute=lambda job: self.runs.append(job) or {'reason':'exited','exit_code':0,'output':'ok'}
         fixed=self.repair(original)
         self.assertNotEqual(original['id'],fixed['id'])
-        expected=self.repo_req['files'] | {'lib/main.py':'print(43)'}
+        expected=self.repo_req['changes'] | {'lib/main.py':'print(43)'}
         self.assertEqual(self.runs[-1]['files'],expected)
-        self.assertEqual(self.b.db.execute('SELECT files FROM jobs WHERE id=?',(original['id'],)).fetchone()[0],json.dumps(self.repo_req['files']))
+        self.assertEqual(self.b.db.execute('SELECT files FROM jobs WHERE id=?',(original['id'],)).fetchone()[0],json.dumps(self.repo_req['changes']))
         self.assertEqual(self.repair(original)['id'],fixed['id'])
         self.assertEqual(len(self.runs),1)
         with self.assertRaises(ValueError): self.repo_publish(original)
@@ -172,7 +175,7 @@ class RepositoryBrokerTests(unittest.TestCase):
         job=self.b.handle(self.repo_req)
         req=self.request('repo_inspect') | dict(action='repo_inspect',id=job['id'])
         inspected=self.b.handle(req)
-        self.assertEqual(inspected['files'],self.repo_req['files'])
+        self.assertEqual(inspected['files'],self.repo_req['changes'])
         self.assertEqual(inspected['attempts_remaining'],4)
         with self.assertRaises(ValueError): self.b.handle(req | {'scope':'b'*64})
         self.req['scope']='b'*64
@@ -211,7 +214,7 @@ class RepositoryBrokerTests(unittest.TestCase):
         request=self.request('repo_diagnose') | dict(
             action='repo_diagnose',id=original['id'],argv=['/usr/bin/perl','-e','print 42'],title='diagnostic')
         diagnostic=self.b.handle(request)
-        self.assertEqual(self.runs[-1]['files'],self.repo_req['files'])
+        self.assertEqual(self.runs[-1]['files'],self.repo_req['changes'])
         self.assertEqual(diagnostic['attempts_remaining'],3)
         self.assertEqual(diagnostic['state'],'passed')
         with self.assertRaisesRegex(ValueError,'diagnostic jobs cannot be published'): self.repo_publish(diagnostic)
