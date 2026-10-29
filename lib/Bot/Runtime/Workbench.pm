@@ -227,7 +227,8 @@ sub report_result {
   }
   $pending->{coding_last_result}=$notice if $action =~ /(?:run|repair)/;
   $pending->{coding_last_result}=$notice if $publication;
-  task_notice($self,$pending,$notice) unless $quiet && $state ne 'error';
+  task_notice($self,$pending,$notice) unless $quiet && !exists($r->{error})
+    && ($r->{rejection_schema}//'') ne '1';
 }
 
 sub broker_call {

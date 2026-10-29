@@ -136,6 +136,13 @@ is(Bot::Runtime::Workbench::request_scope($bot,'edit_test'),$task_scope,'job sco
 is(scalar @{$bot->{sent}},1,'one start notice');
 {
   no warnings 'redefine';
+  local *Bot::Runtime::Workbench::broker_call=sub { '{"reference":"python-csv","text":"documentation","untrusted":true}' };
+  my $before=scalar @{$bot->{sent}};
+  $defs{read_coding_reference}{code}->($tool,{key=>'python-csv'});
+  is(scalar @{$bot->{sent}},$before,'successful read stays quiet during coding task');
+}
+{
+  no warnings 'redefine';
   local *Bot::Runtime::Workbench::broker_call=sub { '{"rejection_schema":1,"code":"invalid_request","disposition":"terminal"}' };
   $defs{read_coding_reference}{code}->($tool,{key=>'python-csv'});
 }
