@@ -210,11 +210,13 @@ sub finish_task {
   return '' unless $pending && $pending->{coding_task};
   my $phase=$reason eq 'final_report' ? 'reported' : 'stopped';
   my $jobs=task_status($pending,$phase,$reason);
-  task_checkpoint($pending,$phase,$reason);
+  my $checkpoint=task_checkpoint($pending,$phase,$reason);
   my $saved=!defined($jobs) ? 'Saved-bundle status unavailable; operator inspection required.'
     : !@$jobs ? 'No project bundle was saved.'
     : 'Saved jobs: ' . join(', ',map { "$_->{id} ($_->{state})" } @$jobs) . '.';
-  return $saved . ' This task is not continuing.';
+  my $receipt=ref($checkpoint) eq 'HASH' && ($checkpoint->{checkpoint_id}//'') =~ /\A[a-f0-9]{32}\z/
+    ? " Checkpoint: $checkpoint->{checkpoint_id}." : '';
+  return $saved . $receipt . ' This task is not continuing.';
 }
 
 sub report_result {

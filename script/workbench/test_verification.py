@@ -107,6 +107,24 @@ class VerificationTests(unittest.TestCase):
         result = self.b.handle(self.repo_run(title='final'))
         self.assertEqual(result['attempts_remaining'], 0)
 
+    def test_resumed_diagnostics_still_reserve_final_verification_attempt(self):
+        job = self.b.handle(self.req)
+        diagnostic = self.request('repo_diagnose')
+        for i in range(2):
+            self.b.handle(diagnostic | {'action': 'repo_diagnose', 'id': job['id'],
+                                        'argv': ['/bin/sh', '-c', 'true'], 'title': str(i)})
+        checkpoint = self.b.handle(self.b.capability_envelope('task_checkpoint', 'a'*64, '#ai', 'irc.perl.org') | {
+            'action': 'task_checkpoint', 'requester': 'mateu', 'phase': 'stopped', 'reason': 'iteration_limit'})
+        resumed_scope = 'b' * 64
+        self.b.handle(self.b.capability_envelope('task_resume', resumed_scope, '#ai', 'irc.perl.org') | {
+            'action': 'task_resume', 'checkpoint_id': checkpoint['checkpoint_id'], 'requester': 'mateu'})
+        resumed = self.b.capability_envelope('repo_diagnose', resumed_scope, '#ai', 'irc.perl.org')
+        self.b.handle(resumed | {'action': 'repo_diagnose', 'id': job['id'],
+                                 'argv': ['/bin/sh', '-c', 'true'], 'title': 'resumed diagnostic'})
+        with self.assertRaisesRegex(ValueError, 'reserved'):
+            self.b.handle(resumed | {'action': 'repo_diagnose', 'id': job['id'],
+                                     'argv': ['/bin/sh', '-c', 'true'], 'title': 'reserved final'})
+
     def test_reference_cannot_accept_url_or_escape_catalog(self):
         for key in ['https://127.0.0.1/', '../token', 'http://169.254.169.254/', 4]:
             with self.assertRaises(ValueError): References().read(key)

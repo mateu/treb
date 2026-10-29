@@ -559,8 +559,8 @@ class Broker:
             old = self.db.execute('SELECT * FROM jobs WHERE scope=? AND digest=?', (scope, digest)).fetchone()
             if old:
                 return self.result(old)
-            if (_diagnostic and self.verification is not None and self.db.execute(
-                    'SELECT COUNT(*) FROM jobs WHERE scope=?', (scope,)).fetchone()[0] >= MAX_ATTEMPTS - 1):
+            if (_diagnostic and self.verification is not None and len(
+                    self.task_job_rows(self.task_binding(scope)['task_id'])) >= MAX_ATTEMPTS - 1):
                 raise ValueError('last execution reserved for trusted project verification')
             now = time.time()
             # Retain a bounded journal; ambiguous submissions remain for manual reconciliation.
