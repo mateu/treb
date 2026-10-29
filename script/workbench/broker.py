@@ -220,10 +220,25 @@ class Broker:
         self.db.execute('UPDATE repo_snapshots SET state="expired" WHERE state="active" AND expires<=?', (now,))
         for row in expired_snapshots:
             self.resource_checkpoint('snapshot', row['id'], dict(row), 'expired', now)
-        self.db.execute('DELETE FROM repo_snapshots WHERE created<?', (now - AUDIT_TTL,))
-        self.db.execute('DELETE FROM repo_snapshots WHERE id NOT IN '
-                        '(SELECT id FROM repo_snapshots ORDER BY created DESC LIMIT ?)', (AUDIT_LIMIT,))
+        self.prune_snapshots(now)
         self.db.execute('DELETE FROM rejection_fingerprints WHERE updated<?', (now - AUDIT_TTL,))
+
+    def recoverable_snapshot_ids(self):
+        rows = self.db.execute('SELECT r.destination FROM repo_jobs r JOIN jobs j ON j.id=r.id '
+                               'LEFT JOIN task_scopes s ON s.scope=j.scope WHERE j.state IN (\'passed\',\'failed\') AND EXISTS '
+                               '(SELECT 1 FROM task_checkpoints c WHERE c.task_id=COALESCE(s.task_id,j.scope))').fetchall()
+        return {snapshot_id for row in rows
+                for snapshot_id in [json.loads(row['destination']).get('snapshot_id')] if snapshot_id}
+
+    def prune_snapshots(self, now):
+        protected=sorted(self.recoverable_snapshot_ids())
+        placeholders=','.join('?' for _ in protected)
+        keep=(f' AND id NOT IN ({placeholders})' if protected else '')
+        self.db.execute('DELETE FROM repo_snapshots WHERE created<?'+keep,
+                        (now - AUDIT_TTL, *protected))
+        self.db.execute('DELETE FROM repo_snapshots WHERE id NOT IN '
+                        '(SELECT id FROM repo_snapshots ORDER BY created DESC LIMIT ?)'+keep,
+                        (AUDIT_LIMIT, *protected))
 
     def create_snapshot(self, req):
         snapshot = self.repository.snapshot(req['branch'], req['project'])

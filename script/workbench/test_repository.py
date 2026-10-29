@@ -214,6 +214,17 @@ class RepositoryBrokerTests(unittest.TestCase):
             'argv':['/usr/bin/python3','-c','print(1)'], 'title':'expired snapshot diagnostic'})
         self.assertEqual(diagnostic['state'], 'passed')
 
+    def test_checkpointed_jobs_keep_their_snapshot_through_pruning(self):
+        original=self.b.handle(self.repo_req)
+        snapshot_id=json.loads(self.b.db.execute('SELECT destination FROM repo_jobs WHERE id=?',
+                                                  (original['id'],)).fetchone()[0])['snapshot_id']
+        self.checkpoint()
+        self.b.db.execute('UPDATE repo_snapshots SET created=0,expires=0 WHERE id=?', (snapshot_id,))
+        self.b.db.commit()
+        self.checkpoint()
+        self.assertIsNotNone(self.b.db.execute('SELECT id FROM repo_snapshots WHERE id=?', (snapshot_id,)).fetchone())
+        self.assertEqual(self.repair(original)['state'], 'passed')
+
     def test_repair_preserves_bundle_and_publishes_only_retested_inputs(self):
         self.b.execute=lambda job: {'reason':'exited','exit_code':1,'output':'broken'}
         original=self.b.handle(self.repo_req)
