@@ -43,6 +43,9 @@ PROPOSAL_FIELDS = {
     'publish': frozenset(('id',)),
     'repo_publish': frozenset(('id',)),
 }
+# `irc_fold` on the Perl side emits the rfc1459 canonical alphabet. Do not
+# require an alphanumeric first character: IRC permits a leading special.
+REQUESTER_IDENTITY = re.compile(r'[a-z0-9_{}|~][a-z0-9_{}|~\-]{0,63}')
 SAFE_REASONS = frozenset({
     'Burt gist credential is not installed; ask the operator',
     'branch changed; read project and retest against the new base',
@@ -478,7 +481,7 @@ class Broker:
             raise ValueError('invalid action or fields')
         if set(params) != PROPOSAL_FIELDS[action]:
             raise ValueError('invalid action or fields')
-        if not isinstance(requester, str) or not re.fullmatch(r'[a-z0-9][a-z0-9_\-\[\]\\\\^{}|]{0,63}', requester):
+        if not isinstance(requester, str) or not REQUESTER_IDENTITY.fullmatch(requester):
             raise ValueError('invalid requester identity')
         if action == 'reference':
             if not isinstance(params['key'], str) or params['key'] not in CATALOG:
@@ -509,7 +512,7 @@ class Broker:
 
     def confirm_proposal(self, req):
         requester = req['requester']
-        if not isinstance(requester, str) or not re.fullmatch(r'[a-z0-9][a-z0-9_\-\[\]\\\\^{}|]{0,63}', requester):
+        if not isinstance(requester, str) or not REQUESTER_IDENTITY.fullmatch(requester):
             raise ValueError('invalid requester identity')
         self.prune_audit()
         now = time.time()

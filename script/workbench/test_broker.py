@@ -165,6 +165,11 @@ class BrokerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'missing or ambiguous'):
             self.confirm()
 
+    def test_proposal_accepts_casemapped_irc_requester_identities(self):
+        for requester in ('mateu~', '_mateu', '{mateu'):
+            proposal = self.proposal('reference', {'key':'python-json'}, requester=requester)
+            self.assertEqual(proposal['state'], 'proposed')
+
     def test_confirmation_rejects_ambiguity_expiry_and_altered_parameters(self):
         one = self.proposal('reference', {'key':'python-json'})
         two = self.proposal('reference', {'key':'python-csv'})
