@@ -264,7 +264,8 @@ $bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
   local *Bot::Runtime::Workbench::broker_call=sub {
     $forwarded=$_[0];
     $resume_scope=$forwarded->{scope} if ++$calls==1;
-    return $calls==1 ? JSON::PP::encode_json({resumed_scope=>$resume_scope,jobs=>[],attempts_remaining=>4})
+    return $calls==1 ? JSON::PP::encode_json({resumed_scope=>$resume_scope,jobs=>[],
+      latest_repository_job=>{id=>'d'x32,state=>'failed'},attempts_remaining=>4})
       : JSON::PP::encode_json({checkpoint_id=>'c'x32,jobs=>[],attempts_remaining=>4});
   };
   like($defs{resume_coding_task}{code}->($tool,{checkpoint_id=>'a'x32}),qr/resumed_scope/,
@@ -273,6 +274,9 @@ $bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
 is($forwarded->{action},'task_checkpoint','resume creates a new immutable lineage receipt');
 is($forwarded->{scope},$bot->{pending}{coding_scope},'post-resume checkpoint retains the broker-bound scope');
 is($bot->{pending}{coding_requester},'mateu','resume preserves broker-bound requester identity');
+is($bot->{pending}{coding_last_repo_job},'d'x32,'resume restores the latest complete repository job');
+is($bot->{pending}{coding_last_repo_state},'failed','resume restores repository job state');
+is($bot->{pending}{coding_attempts_remaining},4,'resume restores the broker-derived task budget');
 cmp_ok($bot->{pending}{expires_at},'>=',time+1799,'resume grants a fresh bounded coding lifetime');
 $bot->{bot}='astrid';
 is_deeply(Bot::Runtime::Workbench::tool_specs($bot),[],'other bots unchanged');

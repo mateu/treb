@@ -173,8 +173,10 @@ class RepositoryBrokerTests(unittest.TestCase):
         checkpoint = self.checkpoint()
         resumed_scope = 'b' * 64
         resume = self.b.capability_envelope('task_resume', resumed_scope, '#ai', 'irc.perl.org')
-        self.b.handle(resume | {'action': 'task_resume', 'checkpoint_id': checkpoint['checkpoint_id'],
-                                'requester': 'mateu'})
+        resumed_task = self.b.handle(resume | {'action': 'task_resume', 'checkpoint_id': checkpoint['checkpoint_id'],
+                                               'requester': 'mateu'})
+        self.assertEqual(resumed_task['latest_repository_job'],
+                         {'id': original['id'], 'state': 'passed'})
 
         def resumed(action):
             return self.b.capability_envelope(action, resumed_scope, '#ai', 'irc.perl.org')

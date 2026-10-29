@@ -373,11 +373,24 @@ sub tool_specs {
               capability=>$issued_capability,grant=>$grant,channel=>lc($pending->{channel}),network=>'irc.perl.org'});
             my $r=JSON::PP::decode_json($raw);
             die "Invalid task resume" unless ref($r) eq 'HASH' && ($r->{resumed_scope}//'') eq $scope
-              && ref($r->{jobs}) eq 'ARRAY' && @{$r->{jobs}}<=5;
+              && ref($r->{jobs}) eq 'ARRAY' && @{$r->{jobs}}<=5
+              && defined($r->{attempts_remaining}) && "$r->{attempts_remaining}" =~ /\A[0-5]\z/;
+            my $repo=$r->{latest_repository_job};
+            die "Invalid task resume" if defined($repo) && !(ref($repo) eq 'HASH'
+              && ($repo->{id}//'') =~ /\A[a-f0-9]{32}\z/
+              && ($repo->{state}//'') =~ /\A(?:passed|failed|published|publishing|uncertain)\z/);
             $pending->{coding_task}=1;
             $pending->{coding_scope}=$scope;
             $pending->{coding_requester}=$requester;
             $pending->{coding_checkpoint_id}=$args->{checkpoint_id};
+            $pending->{coding_attempts_remaining}=0+$r->{attempts_remaining};
+            if ($repo) {
+              $pending->{coding_last_repo_job}=$repo->{id};
+              $pending->{coding_last_repo_state}=$repo->{state};
+            } else {
+              delete $pending->{coding_last_repo_job};
+              delete $pending->{coding_last_repo_state};
+            }
             task_checkpoint($pending,'started','admitted');
             task_notice($self,$pending,"Resumed coding task (up to ${ttl}s; bounded test/tool attempts). I will report test results and publication status.");
             return $tool->text_result($raw);

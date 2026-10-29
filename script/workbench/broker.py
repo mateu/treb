@@ -349,7 +349,8 @@ class Broker:
         return job
 
     def task_job_rows(self, task_id):
-        return self.db.execute('SELECT j.id,j.state,j.created FROM jobs j LEFT JOIN task_scopes s ON s.scope=j.scope '
+        return self.db.execute('SELECT j.id,j.state,j.created,r.destination FROM jobs j '
+                               'LEFT JOIN task_scopes s ON s.scope=j.scope LEFT JOIN repo_jobs r ON r.id=j.id '
                                'WHERE COALESCE(s.task_id,j.scope)=? ORDER BY j.created,j.id', (task_id,)).fetchall()
 
     def task_publication_count(self, task_id):
@@ -359,9 +360,17 @@ class Broker:
 
     def checkpoint_summary(self, row):
         jobs = self.task_job_rows(row['task_id'])
+        latest_repository_job = None
+        for job in reversed(jobs):
+            if job['destination']:
+                destination = json.loads(job['destination'])
+                if not destination.get('diagnostic_only'):
+                    latest_repository_job = {'id': job['id'], 'state': job['state']}
+                    break
         return {'checkpoint_id': row['id'], 'task_id': row['task_id'], 'parent_checkpoint_id': row['parent'],
                 'phase': row['phase'], 'reason': row['reason'],
                 'jobs': [{'id': j['id'], 'state': j['state']} for j in jobs],
+                'latest_repository_job': latest_repository_job,
                 'attempts_remaining': max(0, MAX_ATTEMPTS - len(jobs))}
 
     def handle(self, req, _diagnostic=False):
