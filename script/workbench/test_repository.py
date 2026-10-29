@@ -219,10 +219,14 @@ class RepositoryBrokerTests(unittest.TestCase):
         snapshot_id=json.loads(self.b.db.execute('SELECT destination FROM repo_jobs WHERE id=?',
                                                   (original['id'],)).fetchone()[0])['snapshot_id']
         self.checkpoint()
+        self.b.db.execute('UPDATE jobs SET created=0 WHERE id=?', (original['id'],))
         self.b.db.execute('UPDATE repo_snapshots SET created=0,expires=0 WHERE id=?', (snapshot_id,))
         self.b.db.commit()
+        other=self.b.capability_envelope('run', 'b'*64, '#ai', 'irc.perl.org') | {k:v for k,v in self.req.items() if k not in ('scope','capability','grant')} | {'title':'unrelated retention trigger'}
+        self.b.handle(other)
         self.checkpoint()
         self.assertIsNotNone(self.b.db.execute('SELECT id FROM repo_snapshots WHERE id=?', (snapshot_id,)).fetchone())
+        self.assertIsNotNone(self.b.db.execute('SELECT id FROM jobs WHERE id=?', (original['id'],)).fetchone())
         self.assertEqual(self.repair(original)['state'], 'passed')
 
     def test_repair_preserves_bundle_and_publishes_only_retested_inputs(self):

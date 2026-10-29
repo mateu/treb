@@ -230,6 +230,14 @@ class Broker:
         return {snapshot_id for row in rows
                 for snapshot_id in [json.loads(row['destination']).get('snapshot_id')] if snapshot_id}
 
+    def prune_jobs(self, now):
+        # A checkpoint is a recovery receipt, so keep the complete saved bundle
+        # for every task it still names even after ordinary journal retention.
+        self.db.execute("DELETE FROM jobs WHERE created<? AND state NOT IN ('publishing','uncertain') "
+                        'AND NOT EXISTS (SELECT 1 FROM task_checkpoints c LEFT JOIN task_scopes s '
+                        'ON s.scope=jobs.scope WHERE c.task_id=COALESCE(s.task_id,jobs.scope))',
+                        (now - 7*86400,))
+
     def prune_snapshots(self, now):
         protected=sorted(self.recoverable_snapshot_ids())
         placeholders=','.join('?' for _ in protected)
@@ -623,7 +631,8 @@ class Broker:
                 raise ValueError('last execution reserved for trusted project verification')
             now = time.time()
             # Retain a bounded journal; ambiguous submissions remain for manual reconciliation.
-            self.db.execute("DELETE FROM jobs WHERE created<? AND state NOT IN ('publishing','uncertain')", (now - 7*86400,))
+            # Retain checkpointed bundles as well as uncertain publications.
+            self.prune_jobs(now)
             count = self.db.execute('SELECT COUNT(*) FROM jobs WHERE created>?', (now - 3600,)).fetchone()[0]
             if count >= 30:
                 raise ValueError('global limit: 30 sandbox runs per hour')
