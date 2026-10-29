@@ -50,6 +50,9 @@ sub capability_set_from_messages {
 
 sub resume_requested {
   my ($self)=@_;
+  # Lightweight runtime fixtures and non-IRC callers do not necessarily
+  # implement a nickname accessor; they cannot express a bot-addressed resume.
+  return 0 unless $self->can(q(get_nickname));
   my $nick=quotemeta($self->get_nickname);
   for my $m (@{$self->_pending_raid->{messages}||[]}) {
     next unless ($m->{source_kind}//'') eq 'conversation' && $self->_is_human_nick($m->{nick}//'');
