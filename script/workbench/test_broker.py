@@ -171,6 +171,7 @@ class BrokerTests(unittest.TestCase):
             self.confirm()
 
     def test_repeated_identical_proposal_reuses_pending_row(self):
+        self.b.references.read = lambda key: {'reference':key, 'untrusted':True}
         first = self.proposal('reference', {'key':'python-json'})
         second = self.proposal('reference', {'key':'python-json'})
         self.assertEqual(second, first)
