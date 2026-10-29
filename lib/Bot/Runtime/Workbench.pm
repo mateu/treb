@@ -378,7 +378,7 @@ sub tool_specs {
             my $repo=$r->{latest_repository_job};
             die "Invalid task resume" if defined($repo) && !(ref($repo) eq 'HASH'
               && ($repo->{id}//'') =~ /\A[a-f0-9]{32}\z/
-              && ($repo->{state}//'') =~ /\A(?:passed|failed|published|publishing|uncertain)\z/);
+              && ($repo->{state}//'') =~ /\A(?:running|passed|failed|published|publishing|uncertain)\z/);
             $pending->{coding_task}=1;
             $pending->{coding_scope}=$scope;
             $pending->{coding_requester}=$requester;
