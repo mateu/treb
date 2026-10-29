@@ -48,6 +48,17 @@ sub capability_set_from_messages {
   return \%capability;
 }
 
+sub resume_requested {
+  my ($self)=@_;
+  my $nick=quotemeta($self->get_nickname);
+  for my $m (@{$self->_pending_raid->{messages}||[]}) {
+    next unless ($m->{source_kind}//'') eq 'conversation' && $self->_is_human_nick($m->{nick}//'');
+    my $text=$m->{msg}//'';
+    return 1 if $text =~ /(?:^|\W)$nick(?:\W|$)/i && $text =~ /\bresume\b/i;
+  }
+  return 0;
+}
+
 sub request_scope {
   my ($self,$capability)=@_;
   die "Unknown Workbench capability\n" unless defined $capability && $capability =~ /\A(?:read_status|edit_test|publish_gist|publish_repo)\z/;
@@ -128,6 +139,9 @@ sub admit_task {
   my ($self)=@_;
   my $pending=$self->_pending_raid or return;
   return if $pending->{coding_task};
+  # A fresh explicit resume request must reach the resume tool with an unbound
+  # scope; ordinary coding requests still receive automatic admission.
+  return if resume_requested($self);
   return unless eval { request_scope($self,'edit_test') };
   my $requester=eval { trusted_requester($self) } or return;
   my $ttl=runtime_limit('CODING_TASK_TTL_SECONDS',1800);
@@ -344,8 +358,14 @@ sub tool_specs {
           }
           if ($action eq 'task_resume') {
             die "A coding task is already active\n" if ($self->_pending_raid||{})->{coding_task};
-            my ($scope,$issued_capability,$grant)=capability_grant($self,$action);
             my $pending=$self->_pending_raid;
+            # Scope includes expires_at. Set the fresh bounded task deadline
+            # before minting the resume grant so later tool grants retain the
+            # broker-bound resumed scope.
+            my $ttl=runtime_limit('CODING_TASK_TTL_SECONDS',1800);
+            $ttl=3600 if $ttl>3600;
+            $pending->{expires_at}=now()+$ttl;
+            my ($scope,$issued_capability,$grant)=capability_grant($self,$action);
             my $requester=trusted_requester($self);
             my $raw=broker_call({%$args,action=>$action,requester=>$requester,scope=>$scope,
               capability=>$issued_capability,grant=>$grant,channel=>lc($pending->{channel}),network=>'irc.perl.org'});
@@ -356,9 +376,6 @@ sub tool_specs {
             $pending->{coding_scope}=$scope;
             $pending->{coding_requester}=$requester;
             $pending->{coding_checkpoint_id}=$args->{checkpoint_id};
-            my $ttl=runtime_limit('CODING_TASK_TTL_SECONDS',1800);
-            $ttl=3600 if $ttl>3600;
-            $pending->{expires_at}=now()+$ttl;
             task_checkpoint($pending,'started','admitted');
             task_notice($self,$pending,"Resumed coding task (up to ${ttl}s; bounded test/tool attempts). I will report test results and publication status.");
             return $tool->text_result($raw);

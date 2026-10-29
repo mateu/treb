@@ -183,6 +183,10 @@ for my $kind ('reminder','activity_followup','conversation') {
  Bot::Runtime::Workbench::admit_task($bot);
  ok(!$pending->{coding_task},"noncoding $kind gets no longer lifetime");
 }
+$bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
+  {nick=>'mateu',source_kind=>'conversation',msg=>'burt_bot: resume and test this coding project'}]};
+Bot::Runtime::Workbench::admit_task($bot);
+ok(!$bot->{pending}{coding_task},'explicit resume stays unbound for the resume tool');
 # Proposal confirmations are a fresh trusted runtime envelope, not model/retrieval text.
 $bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
   {nick=>'MaTeu[]',source_kind=>'conversation',queued_at=>time,msg=>'burt_bot: yes'}]};
@@ -254,17 +258,20 @@ $bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
   {nick=>'mateu',source_kind=>'conversation',msg=>'burt_bot: resume and test this coding project'}]};
 {
   my $calls=0;
+  my $resume_scope='';
   no warnings 'redefine';
   # The fresh runtime scope is opaque, so echo it from the request in the mock.
   local *Bot::Runtime::Workbench::broker_call=sub {
     $forwarded=$_[0];
-    return ++$calls==1 ? JSON::PP::encode_json({resumed_scope=>$forwarded->{scope},jobs=>[],attempts_remaining=>4})
+    $resume_scope=$forwarded->{scope} if ++$calls==1;
+    return $calls==1 ? JSON::PP::encode_json({resumed_scope=>$resume_scope,jobs=>[],attempts_remaining=>4})
       : JSON::PP::encode_json({checkpoint_id=>'c'x32,jobs=>[],attempts_remaining=>4});
   };
   like($defs{resume_coding_task}{code}->($tool,{checkpoint_id=>'a'x32}),qr/resumed_scope/,
     'resume accepts one exact checkpoint id');
 }
 is($forwarded->{action},'task_checkpoint','resume creates a new immutable lineage receipt');
+is($forwarded->{scope},$bot->{pending}{coding_scope},'post-resume checkpoint retains the broker-bound scope');
 is($bot->{pending}{coding_requester},'mateu','resume preserves broker-bound requester identity');
 cmp_ok($bot->{pending}{expires_at},'>=',time+1799,'resume grants a fresh bounded coding lifetime');
 $bot->{bot}='astrid';
