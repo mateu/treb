@@ -110,6 +110,11 @@ sub confirmation_envelope {
 sub capability_grant {
   my ($self,$action)=@_;
   my $capability=$ACTION_CAPABILITY{$action} or die "Unknown Workbench action\n";
+  # An edit/test request needs a broker-owned project snapshot before its
+  # first repository candidate. Prefer explicit read authority when present.
+  if ($action eq 'repo_read' && !capability_set($self)->{read_status}) {
+    $capability='edit_test';
+  }
   my $scope=request_scope($self,$capability);
   my $channel=lc($self->_pending_raid->{channel});
   return ($scope,$capability,sha256_hex(JSON::PP->new->canonical->utf8->encode(

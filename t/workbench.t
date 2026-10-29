@@ -83,6 +83,9 @@ eval {Bot::Runtime::Workbench::request_scope($bot,'publish_gist')};
 like($@,qr/explicitly asking for a gist/,'publishing needs explicit current request');
 $bot->{pending}{messages}[0]{msg}='burt_bot: write tests and publish to the repository';
 is(Bot::Runtime::Workbench::request_scope($bot,'edit_test'),Bot::Runtime::Workbench::request_scope($bot,'publish_repo'),'repo run and publish share envelope');
+my ($read_scope,$read_capability,$read_grant)=Bot::Runtime::Workbench::capability_grant($bot,'repo_read');
+is($read_capability,'edit_test','edit authority can obtain its required repository snapshot');
+is($read_scope,Bot::Runtime::Workbench::request_scope($bot,'edit_test'),'repository snapshot stays in the edit request scope');
 eval {Bot::Runtime::Workbench::request_scope($bot,'publish_gist')};
 like($@,qr/gist/,'repo permission does not authorize gist');
 for my $text ('burt_bot: write tests and publish a gist', 'burt_bot: inspect the repo code', 'burt_bot: commit this code') {

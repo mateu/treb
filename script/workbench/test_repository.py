@@ -111,6 +111,13 @@ class RepositoryBrokerTests(unittest.TestCase):
     def repo_publish(self, job):
         return self.b.handle(self.b.capability_envelope('repo_publish', self.req['scope'], self.req['channel'], self.req['network'])|{'action':'repo_publish','id':job['id']})
 
+    def test_edit_authority_can_read_its_required_snapshot(self):
+        req=self.b.capability_envelope('repo_run', self.req['scope'], self.req['channel'], self.req['network']) | {
+            'action':'repo_read', 'branch':'burt/dictionary', 'project':'dictionary'}
+        snapshot=self.b.handle(req)
+        self.assertIn('snapshot_id', snapshot)
+        self.assertEqual(snapshot['files'], self.repo.files)
+
     def test_repo_idempotence_restart_exact_inputs_and_destination(self):
         r=self.b.handle(self.repo_req)
         self.assertEqual(self.runs[-1]['files'],self.repo_req['changes'])
