@@ -184,16 +184,17 @@ class Broker:
         self.db.commit()
         return snapshot | {'snapshot_id': snapshot_id}
 
-    def load_snapshot(self, req, snapshot_id):
+    def load_snapshot(self, req, snapshot_id, require_active=True):
         if not isinstance(snapshot_id, str) or not re.fullmatch(r'[a-f0-9]{32}', snapshot_id):
             raise ValueError('invalid repository snapshot id')
         row = self.db.execute('SELECT * FROM repo_snapshots WHERE id=?', (snapshot_id,)).fetchone()
         if not row or row['scope'] != req['scope'] or row['channel'] != req['channel'] or row['network'] != req['network']:
             raise ValueError('repository snapshot not found in this request')
-        if row['state'] != 'active' or row['expires'] <= time.time():
-            if row['state'] == 'active':
-                self.db.execute('UPDATE repo_snapshots SET state="expired" WHERE id=?', (snapshot_id,))
-                self.db.commit()
+        if row['state'] == 'active' and row['expires'] <= time.time():
+            self.db.execute('UPDATE repo_snapshots SET state="expired" WHERE id=?', (snapshot_id,))
+            self.db.commit()
+            row = self.db.execute('SELECT * FROM repo_snapshots WHERE id=?', (snapshot_id,)).fetchone()
+        if require_active and row['state'] != 'active':
             raise ValueError('repository snapshot expired; read project again')
         return json.loads(row['snapshot']) | {'snapshot_id': snapshot_id}
 
@@ -259,7 +260,7 @@ class Broker:
             self.record_rejection(req, exc)
             raise
 
-    def _handle(self, req, _diagnostic=False):
+    def _handle(self, req, _diagnostic=False, _saved_snapshot=False):
         if not isinstance(req, dict):
             raise ValueError('object required')
         action = req.get('action')
@@ -343,28 +344,28 @@ class Broker:
             if action == 'repo_diagnose':
                 # Same exact source, different diagnostic argv. This job can NEVER
                 # publish, even if its command exits zero.
-                source = self.load_snapshot(req, destination['snapshot_id'])
+                source = self.load_snapshot(req, destination['snapshot_id'], require_active=False)
                 changes, deleted = self.candidate_delta(source['files'], json.loads(job['files']))
                 return Broker._handle(self, self.capability_envelope('repo_run', req['scope'], req['channel'], req['network'])
                                      | {k: req[k] for k in ('argv','title')}
                                      | {'action':'repo_run', 'snapshot_id':source['snapshot_id'],
                                         'changes':changes, 'delete':deleted},
-                                     _diagnostic=True)
+                                     _diagnostic=True, _saved_snapshot=True)
             files = self.materialize_files(json.loads(job['files']), req['changes'], req['delete'])
-            source = self.load_snapshot(req, destination['snapshot_id'])
+            source = self.load_snapshot(req, destination['snapshot_id'], require_active=False)
             changes, deleted = self.candidate_delta(source['files'], files)
             # Re-enter the ordinary run path through the same snapshot materializer.
             return self._handle(self.capability_envelope('repo_run', req['scope'], req['channel'], req['network'])
                                | {k: req[k] for k in ('argv','title')}
                                | {'action': 'repo_run', 'snapshot_id': source['snapshot_id'],
-                                  'changes': changes, 'delete': deleted})
+                                  'changes': changes, 'delete': deleted}, _saved_snapshot=True)
         destination = None
         policy = None
         if action == 'repo_read':
             validate_destination(req['branch'], req['project'])
             return self.create_snapshot(req)
         if action == 'repo_run':
-            snapshot = self.load_snapshot(req, req['snapshot_id'])
+            snapshot = self.load_snapshot(req, req['snapshot_id'], require_active=not _saved_snapshot)
             current = self.repository.snapshot(snapshot['branch'], snapshot['project'])
             if any(current[key] != snapshot[key] for key in ('base_sha', 'tree_sha', 'exists', 'files')):
                 raise ValueError('branch changed; read project and retest against the new base')

@@ -162,6 +162,21 @@ class RepositoryBrokerTests(unittest.TestCase):
                              | dict(action='repo_repair',id=job['id'],changes={'lib/main.py':'print(43)'},
                                     delete=[],argv=self.repo_req['argv'],title='repair') | changes)
 
+    def test_saved_jobs_repair_and_diagnose_after_snapshot_expiry(self):
+        original=self.b.handle(self.repo_req)
+        snapshot_id=json.loads(self.b.db.execute('SELECT destination FROM repo_jobs WHERE id=?',
+                                                  (original['id'],)).fetchone()[0])['snapshot_id']
+        self.b.db.execute('UPDATE repo_snapshots SET expires=0 WHERE id=?', (snapshot_id,))
+        self.b.db.commit()
+        with self.assertRaisesRegex(ValueError, 'snapshot expired'):
+            self.b.handle(self.repo_req)
+        repaired=self.repair(original)
+        self.assertEqual(repaired['state'], 'passed')
+        diagnostic=self.b.handle(self.request('repo_diagnose') | {
+            'action':'repo_diagnose', 'id':original['id'],
+            'argv':['/usr/bin/python3','-c','print(1)'], 'title':'expired snapshot diagnostic'})
+        self.assertEqual(diagnostic['state'], 'passed')
+
     def test_repair_preserves_bundle_and_publishes_only_retested_inputs(self):
         self.b.execute=lambda job: {'reason':'exited','exit_code':1,'output':'broken'}
         original=self.b.handle(self.repo_req)
