@@ -184,9 +184,14 @@ for my $kind ('reminder','activity_followup','conversation') {
  ok(!$pending->{coding_task},"noncoding $kind gets no longer lifetime");
 }
 $bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
-  {nick=>'mateu',source_kind=>'conversation',msg=>'burt_bot: resume and test this coding project'}]};
+  {nick=>'mateu',source_kind=>'conversation',msg=>'burt_bot: resume checkpoint and test this coding project'}]};
 Bot::Runtime::Workbench::admit_task($bot);
-ok(!$bot->{pending}{coding_task},'explicit resume stays unbound for the resume tool');
+ok(!$bot->{pending}{coding_task},'explicit checkpoint resume stays unbound for the resume tool');
+$bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
+  {nick=>'mateu',source_kind=>'conversation',msg=>'burt_bot: write and test a resume parsing script'}]};
+Bot::Runtime::Workbench::admit_task($bot);
+ok($bot->{pending}{coding_task},'incidental resume wording still admits a coding task');
+delete $bot->{pending}{coding_task};
 # Proposal confirmations are a fresh trusted runtime envelope, not model/retrieval text.
 $bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
   {nick=>'MaTeu[]',source_kind=>'conversation',queued_at=>time,msg=>'burt_bot: yes'}]};
@@ -282,6 +287,16 @@ $bot->{pending}={channel=>'#ai',expires_at=>time-1,messages=>[
   {nick=>'mateu',source_kind=>'conversation',msg=>'burt_bot: resume and test this coding project'}]};
 like($defs{resume_coding_task}{code}->($tool,{checkpoint_id=>'a'x32}),qr/Error: No active #ai or #mateu-test request/,
   'expired resume request cannot extend its deadline');
+$bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
+  {nick=>'mateu',source_kind=>'conversation',msg=>'burt_bot: resume checkpoint and test this coding project'}]};
+my $resume_deadline=$bot->{pending}{expires_at};
+{
+  no warnings 'redefine';
+  local *Bot::Runtime::Workbench::broker_call=sub { die "checkpoint rejected\n" };
+  like($defs{resume_coding_task}{code}->($tool,{checkpoint_id=>'a'x32}),qr/Error: checkpoint rejected/,
+    'failed resume reports rejection');
+}
+is($bot->{pending}{expires_at},$resume_deadline,'failed resume restores its original deadline');
 $bot->{bot}='astrid';
 is_deeply(Bot::Runtime::Workbench::tool_specs($bot),[],'other bots unchanged');
 $bot->{bot}='burt';

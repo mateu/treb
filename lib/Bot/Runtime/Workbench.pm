@@ -57,7 +57,8 @@ sub resume_requested {
   for my $m (@{$self->_pending_raid->{messages}||[]}) {
     next unless ($m->{source_kind}//'') eq 'conversation' && $self->_is_human_nick($m->{nick}//'');
     my $text=$m->{msg}//'';
-    return 1 if $text =~ /(?:^|\W)$nick(?:\W|$)/i && $text =~ /\bresume\b/i;
+    return 1 if $text =~ /(?:^|\W)$nick(?:\W|$)/i
+      && $text =~ /\bresume\b.*\bcheckpoint\b|\bcheckpoint\b.*\bresume\b/i;
   }
   return 0;
 }
@@ -372,19 +373,25 @@ sub tool_specs {
             # broker-bound resumed scope.
             my $ttl=runtime_limit('CODING_TASK_TTL_SECONDS',1800);
             $ttl=3600 if $ttl>3600;
+            my $old_expires=$pending->{expires_at};
             $pending->{expires_at}=now()+$ttl;
-            my ($scope,$issued_capability,$grant)=capability_grant($self,$action);
-            my $requester=trusted_requester($self);
-            my $raw=broker_call({%$args,action=>$action,requester=>$requester,scope=>$scope,
-              capability=>$issued_capability,grant=>$grant,channel=>lc($pending->{channel}),network=>'irc.perl.org'});
-            my $r=JSON::PP::decode_json($raw);
-            die "Invalid task resume" unless ref($r) eq 'HASH' && ($r->{resumed_scope}//'') eq $scope
-              && ref($r->{jobs}) eq 'ARRAY' && @{$r->{jobs}}<=5
-              && defined($r->{attempts_remaining}) && "$r->{attempts_remaining}" =~ /\A[0-5]\z/;
-            my $repo=$r->{latest_repository_job};
-            die "Invalid task resume" if defined($repo) && !(ref($repo) eq 'HASH'
-              && ($repo->{id}//'') =~ /\A[a-f0-9]{32}\z/
-              && ($repo->{state}//'') =~ /\A(?:running|passed|failed|published|publishing|uncertain)\z/);
+            my ($scope,$issued_capability,$grant,$requester,$raw,$r,$repo);
+            my $ok=eval {
+              ($scope,$issued_capability,$grant)=capability_grant($self,$action);
+              $requester=trusted_requester($self);
+              $raw=broker_call({%$args,action=>$action,requester=>$requester,scope=>$scope,
+                capability=>$issued_capability,grant=>$grant,channel=>lc($pending->{channel}),network=>'irc.perl.org'});
+              $r=JSON::PP::decode_json($raw);
+              die "Invalid task resume" unless ref($r) eq 'HASH' && ($r->{resumed_scope}//'') eq $scope
+                && ref($r->{jobs}) eq 'ARRAY' && @{$r->{jobs}}<=5
+                && defined($r->{attempts_remaining}) && "$r->{attempts_remaining}" =~ /\A[0-5]\z/;
+              $repo=$r->{latest_repository_job};
+              die "Invalid task resume" if defined($repo) && !(ref($repo) eq 'HASH'
+                && ($repo->{id}//'') =~ /\A[a-f0-9]{32}\z/
+                && ($repo->{state}//'') =~ /\A(?:running|passed|failed|published|publishing|uncertain)\z/);
+              1;
+            };
+            if (!$ok) { my $err=$@; $pending->{expires_at}=$old_expires; die $err; }
             $pending->{coding_task}=1;
             $pending->{coding_scope}=$scope;
             $pending->{coding_requester}=$requester;
