@@ -84,9 +84,10 @@ def score(task, bundle, acceptance):
 
 
 def req(task, files, title='control'):
-    return dict(action='repo_run', scope='a'*64, network='irc.perl.org', channel='#ai',
-                branch=task['branch'], project=task['project'], base_sha=r.digest(task['files'])[:40],
-                files=files, argv=['/bin/sh','-c','true'], title=title)
+    return (r.Broker.capability_envelope('repo_run', 'a'*64, '#ai', 'irc.perl.org')
+            | dict(action='repo_run', branch=task['branch'], project=task['project'],
+                   base_sha=r.digest(task['files'])[:40], files=files,
+                   argv=['/bin/sh','-c','true'], title=title))
 
 
 def preflight(repo, output, env_file, perl_root):

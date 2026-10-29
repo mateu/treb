@@ -1,8 +1,20 @@
 import unittest
-from trusted_experiment import score, evaluator_verdict
+from trusted_experiment import score, evaluator_verdict, req
+from broker import Broker
+from trial_support import digest
 
 
 class ScoringTests(unittest.TestCase):
+    def test_experiment_request_uses_action_bound_capability_envelope(self):
+        task = {'branch':'burt/dictionary', 'project':'dictionary', 'files':{'main.py':'pass\n'}}
+        request = req(task, task['files'])
+        self.assertEqual(request['action'], 'repo_run')
+        self.assertEqual(request['capability'], 'edit_test')
+        self.assertEqual(request, Broker.capability_envelope('repo_run', 'a'*64, '#ai', 'irc.perl.org') | {
+            'action':'repo_run', 'branch':'burt/dictionary', 'project':'dictionary',
+            'base_sha':digest(task['files'])[:40],
+            'files':task['files'], 'argv':['/bin/sh','-c','true'], 'title':'control'})
+
     def test_returned_launcher_failure_is_unscored(self):
         result = evaluator_verdict({'reason':'exited', 'exit_code':1,
             'output':'Failed to find executable /usr/bin/bwrap'}, 'start-nonce', 'finish-nonce')

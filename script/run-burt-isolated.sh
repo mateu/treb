@@ -20,7 +20,7 @@ case "$mode" in
       --ro-bind "$repo/script/workbench/repair-fixture.json" /repair-fixture.json)
     command=(/usr/bin/perl -I/app/lib /smoke.pl) ;;
   probe) command=(/usr/bin/python3 -I -c '
-import os, pathlib, socket
+import os, pathlib, socket, hashlib, json
 hidden=["/home/hunter", "/run/user", "/app/astrid.env", "/app/treb.sqlite", "/app/script", "/publisher", "/state/gist.token"]
 assert all(not pathlib.Path(p).exists() for p in hidden), "host files visible"
 assert not pathlib.Path("/proc/1/root/home/hunter").exists()
@@ -29,8 +29,12 @@ except OSError: pass
 else: raise AssertionError("code is writable")
 assert pathlib.Path("/state/burt.sqlite").exists()
 s=socket.socket(socket.AF_UNIX); s.settimeout(35); s.connect("/broker/broker.sock")
-import json
-request=dict(action="run",scope="e"*64,channel="#ai",network="irc.perl.org",title="namespace IPC probe",files={"main.py":"print(42)\n"},argv=["/usr/bin/python3","-I","/work/main.py"])
+scope="e"*64
+channel="#ai"
+network="irc.perl.org"
+capability="edit_test"
+grant=hashlib.sha256(json.dumps([scope,channel,network,capability],separators=(",",":"),ensure_ascii=True).encode()).hexdigest()
+request=dict(action="run",scope=scope,capability=capability,grant=grant,channel=channel,network=network,title="namespace IPC probe",files={"main.py":"print(42)\n"},argv=["/usr/bin/python3","-I","/work/main.py"])
 s.sendall(json.dumps(request).encode()+b"\n")
 result=json.loads(s.makefile().readline()); s.close()
 assert result.get("state")=="passed" and result["result"]["output"]=="42\n", result
