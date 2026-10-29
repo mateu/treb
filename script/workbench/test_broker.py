@@ -33,6 +33,61 @@ class BrokerTests(unittest.TestCase):
         return self.b.handle({k:self.req[k] for k in ('scope', 'channel', 'network')}
                              | {'capability':'publish_gist', 'grant':'651dd50e7ef8d6ee04e34ce5b6844653529b739e54d693e8d1f6e8ff9abeef87', 'action':'publish', 'id':job['id']})
 
+    def checkpoint(self, scope=None, requester='mateu', phase='stopped', reason='iteration_limit'):
+        scope = scope or self.req['scope']
+        envelope = self.b.capability_envelope('task_checkpoint', scope, '#ai', 'irc.perl.org')
+        return self.b.handle(envelope | {'action': 'task_checkpoint', 'requester': requester,
+                                         'phase': phase, 'reason': reason})
+
+    def test_checkpoint_lineage_uses_fresh_scope_and_task_wide_budget(self):
+        first = self.b.handle(self.req)
+        checkpoint = self.checkpoint()
+        self.assertEqual(checkpoint['jobs'], [{'id': first['id'], 'state': 'passed'}])
+        self.assertEqual(checkpoint['attempts_remaining'], 4)
+        fresh_scope = 'b' * 64
+        stale = self.b.capability_envelope('task_resume', self.req['scope'], '#ai', 'irc.perl.org')
+        with self.assertRaisesRegex(ValueError, 'fresh task scope'):
+            self.b.handle(stale | {'action': 'task_resume', 'checkpoint_id': checkpoint['checkpoint_id'],
+                                   'requester': 'mateu'})
+        resume = self.b.capability_envelope('task_resume', fresh_scope, '#ai', 'irc.perl.org')
+        resumed = self.b.handle(resume | {'action': 'task_resume', 'checkpoint_id': checkpoint['checkpoint_id'],
+                                          'requester': 'mateu'})
+        self.assertEqual(resumed['resumed_scope'], fresh_scope)
+        self.assertEqual(resumed['attempts_remaining'], 4)
+        with self.assertRaisesRegex(ValueError, 'fresh task scope is already bound'):
+            self.b.handle(resume | {'action': 'task_resume', 'checkpoint_id': checkpoint['checkpoint_id'],
+                                    'requester': 'mateu'})
+        wrong_channel = self.b.capability_envelope('checkpoint_status', 'c' * 64, '#mateu-test', 'irc.perl.org')
+        with self.assertRaisesRegex(ValueError, 'checkpoint not found'):
+            self.b.handle(wrong_channel | {'action': 'checkpoint_status', 'checkpoint_id': checkpoint['checkpoint_id'],
+                                            'requester': 'mateu'})
+        resumed_request = self.req | {'scope': fresh_scope,
+            'grant': self.b.capability_envelope('run', fresh_scope, '#ai', 'irc.perl.org')['grant'], 'title': 'fresh'}
+        second = self.b.handle(resumed_request)
+        self.assertNotEqual(second['id'], first['id'])
+        self.assertEqual(second['attempts_remaining'], 3)
+        next_checkpoint = self.checkpoint(fresh_scope)
+        self.assertEqual(next_checkpoint['parent_checkpoint_id'], checkpoint['checkpoint_id'])
+        self.assertEqual([job['id'] for job in next_checkpoint['jobs']], [first['id'], second['id']])
+
+    def test_uncertain_checkpoint_is_visible_and_absorbs_resume_and_publication(self):
+        job = self.b.handle(self.req)
+        self.b.post_gist = lambda payload: (_ for _ in ()).throw(OSError('lost response'))
+        with self.assertRaisesRegex(ValueError, 'do not retry'):
+            self.publish(job)
+        checkpoint = self.checkpoint()
+        self.assertEqual(checkpoint['jobs'][0]['state'], 'uncertain')
+        status = self.b.capability_envelope('checkpoint_status', 'b' * 64, '#ai', 'irc.perl.org')
+        visible = self.b.handle(status | {'action': 'checkpoint_status', 'checkpoint_id': checkpoint['checkpoint_id'],
+                                          'requester': 'mateu'})
+        self.assertEqual(visible['jobs'][0]['state'], 'uncertain')
+        resume = self.b.capability_envelope('task_resume', 'b' * 64, '#ai', 'irc.perl.org')
+        with self.assertRaisesRegex(ValueError, 'operator reconciliation'):
+            self.b.handle(resume | {'action': 'task_resume', 'checkpoint_id': checkpoint['checkpoint_id'],
+                                    'requester': 'mateu'})
+        with self.assertRaisesRegex(ValueError, 'operator reconciliation'):
+            self.publish(job)
+
     def test_capability_grant_is_required_and_action_bound(self):
         for request in (
             {k:v for k,v in self.req.items() if k not in ('capability', 'grant')},

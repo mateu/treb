@@ -22,7 +22,7 @@ is($scope,Bot::Runtime::Workbench::request_scope($bot,'publish_gist'),'run and p
 like($scope,qr/^[a-f0-9]{64}$/,'scope is bounded digest');
 my $tool=bless {},'WorkbenchTool';
 my %defs=map {$_->{name}=>$_} @{Bot::Runtime::Workbench::tool_specs($bot)};
-is(scalar keys %defs,11,'eleven narrow tools including brokered documentation and proposals');
+is(scalar keys %defs,14,'fourteen narrow tools including checkpoint recovery');
 {
   no warnings 'redefine';
   local *Bot::Runtime::Workbench::broker_call=sub { '{"reference":"python-csv","text":"documentation","untrusted":true}' };
@@ -237,6 +237,36 @@ $bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
 is($forwarded->{requester},'mateu','confirmation requester is runtime-derived');
 is_deeply([sort keys %$forwarded],[sort qw(action capability channel confirmed_at grant network requester scope)],
   'confirmation tool accepts no model-selected action or parameters');
+# Recovery tools derive requester and fresh authorization from the current
+# envelope; a checkpoint id is the only model-supplied selector.
+$bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
+  {nick=>'mateu',source_kind=>'conversation',msg=>'burt_bot: status this coding session'}]};
+{
+  no warnings 'redefine';
+  local *Bot::Runtime::Workbench::broker_call=sub {$forwarded=$_[0]; return '{"checkpoint_id":"'.('a'x32).'","jobs":[],"attempts_remaining":4}'};
+  like($defs{coding_checkpoint_status}{code}->($tool,{checkpoint_id=>'a'x32}),qr/checkpoint_id/,
+    'checkpoint status is broker-derived');
+}
+is($forwarded->{requester},'mateu','checkpoint status requester is runtime-derived');
+is_deeply([sort keys %$forwarded],[sort qw(action capability channel checkpoint_id grant network requester scope)],
+  'status cannot supply channel, requester, scope, or grants');
+$bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
+  {nick=>'mateu',source_kind=>'conversation',msg=>'burt_bot: resume and test this coding project'}]};
+{
+  my $calls=0;
+  no warnings 'redefine';
+  # The fresh runtime scope is opaque, so echo it from the request in the mock.
+  local *Bot::Runtime::Workbench::broker_call=sub {
+    $forwarded=$_[0];
+    return ++$calls==1 ? JSON::PP::encode_json({resumed_scope=>$forwarded->{scope},jobs=>[],attempts_remaining=>4})
+      : JSON::PP::encode_json({checkpoint_id=>'c'x32,jobs=>[],attempts_remaining=>4});
+  };
+  like($defs{resume_coding_task}{code}->($tool,{checkpoint_id=>'a'x32}),qr/resumed_scope/,
+    'resume accepts one exact checkpoint id');
+}
+is($forwarded->{action},'task_checkpoint','resume creates a new immutable lineage receipt');
+is($bot->{pending}{coding_requester},'mateu','resume preserves broker-bound requester identity');
+cmp_ok($bot->{pending}{expires_at},'>=',time+1799,'resume grants a fresh bounded coding lifetime');
 $bot->{bot}='astrid';
 is_deeply(Bot::Runtime::Workbench::tool_specs($bot),[],'other bots unchanged');
 $bot->{bot}='burt';
