@@ -361,6 +361,9 @@ sub tool_specs {
           if ($action eq 'task_resume') {
             die "A coding task is already active\n" if ($self->_pending_raid||{})->{coding_task};
             my $pending=$self->_pending_raid;
+            # Verify the current human envelope before extending anything; an
+            # expired request cannot gain a new coding lifetime through resume.
+            request_scope($self,'edit_test');
             # Scope includes expires_at. Set the fresh bounded task deadline
             # before minting the resume grant so later tool grants retain the
             # broker-bound resumed scope.

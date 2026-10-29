@@ -278,6 +278,10 @@ is($bot->{pending}{coding_last_repo_job},'d'x32,'resume restores the latest comp
 is($bot->{pending}{coding_last_repo_state},'running','resume accepts a broker-interrupted repository job');
 is($bot->{pending}{coding_attempts_remaining},4,'resume restores the broker-derived task budget');
 cmp_ok($bot->{pending}{expires_at},'>=',time+1799,'resume grants a fresh bounded coding lifetime');
+$bot->{pending}={channel=>'#ai',expires_at=>time-1,messages=>[
+  {nick=>'mateu',source_kind=>'conversation',msg=>'burt_bot: resume and test this coding project'}]};
+like($defs{resume_coding_task}{code}->($tool,{checkpoint_id=>'a'x32}),qr/Error: No active #ai or #mateu-test request/,
+  'expired resume request cannot extend its deadline');
 $bot->{bot}='astrid';
 is_deeply(Bot::Runtime::Workbench::tool_specs($bot),[],'other bots unchanged');
 $bot->{bot}='burt';
