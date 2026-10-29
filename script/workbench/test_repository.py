@@ -102,8 +102,11 @@ class RepositoryBrokerTests(unittest.TestCase):
         self.repo_req=self.req|dict(action='repo_run',branch='burt/dictionary',project='dictionary',base_sha=A,
                   files={'lib/main.py':'print(42)','t/test.py':'assert 42==42'})
 
+    def request(self, action):
+        return self.b.capability_envelope(action, self.req['scope'], self.req['channel'], self.req['network'])
+
     def repo_publish(self, job):
-        return self.b.handle({k:self.req[k] for k in ('scope','channel','network')}|{'action':'repo_publish','id':job['id']})
+        return self.b.handle(self.b.capability_envelope('repo_publish', self.req['scope'], self.req['channel'], self.req['network'])|{'action':'repo_publish','id':job['id']})
 
     def test_repo_idempotence_restart_exact_inputs_and_destination(self):
         r=self.b.handle(self.repo_req)
@@ -113,11 +116,11 @@ class RepositoryBrokerTests(unittest.TestCase):
         # Publisher returns stored URL even after restart, without networking.
         from broker import Broker
         second=Broker(self.tmp.name,self.token);self.addCleanup(second.db.close)
-        result=second.handle({k:self.req[k] for k in ('scope','channel','network')}|{'action':'repo_publish','id':r['id']})
+        result=second.handle(second.capability_envelope('repo_publish',self.req['scope'],self.req['channel'],self.req['network'])|{'action':'repo_publish','id':r['id']})
         self.assertEqual(result['state'],'published')
         self.assertEqual(self.repo_publish(r)['url'],result['url'])
         self.assertEqual(len([1 for _,p,_ in self.repo.calls if p is not None]),3)
-        gist=self.b.handle(self.req|{'scope':'f'*64})
+        gist=self.b.handle(self.b.capability_envelope('run','f'*64,self.req['channel'],self.req['network']) | {k:v for k,v in self.req.items() if k not in ('scope','capability','grant')})
         self.req['scope']='f'*64
         with self.assertRaises(ValueError): self.repo_publish(gist)
 
@@ -145,7 +148,7 @@ class RepositoryBrokerTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.repo_publish(failed)
 
     def repair(self, job, **changes):
-        return self.b.handle({k:self.req[k] for k in ('scope','channel','network')}
+        return self.b.handle(self.b.capability_envelope('repo_repair', self.req['scope'], self.req['channel'], self.req['network'])
                              | dict(action='repo_repair',id=job['id'],changes={'lib/main.py':'print(43)'},
                                     delete=[],argv=self.repo_req['argv'],title='repair') | changes)
 
@@ -167,7 +170,7 @@ class RepositoryBrokerTests(unittest.TestCase):
 
     def test_inspect_and_repair_scope_and_stale_base(self):
         job=self.b.handle(self.repo_req)
-        req={k:self.req[k] for k in ('scope','channel','network')} | dict(action='repo_inspect',id=job['id'])
+        req=self.request('repo_inspect') | dict(action='repo_inspect',id=job['id'])
         inspected=self.b.handle(req)
         self.assertEqual(inspected['files'],self.repo_req['files'])
         self.assertEqual(inspected['attempts_remaining'],4)
@@ -205,7 +208,7 @@ class RepositoryBrokerTests(unittest.TestCase):
         self.b.execute=lambda job: {'reason':'exited','exit_code':1,'output':'failure'}
         original=self.b.handle(self.repo_req)
         self.b.execute=lambda job: self.runs.append(job) or {'reason':'exited','exit_code':0,'output':'diagnostic'}
-        request={k:self.req[k] for k in ('scope','channel','network')} | dict(
+        request=self.request('repo_diagnose') | dict(
             action='repo_diagnose',id=original['id'],argv=['/usr/bin/perl','-e','print 42'],title='diagnostic')
         diagnostic=self.b.handle(request)
         self.assertEqual(self.runs[-1]['files'],self.repo_req['files'])
@@ -216,6 +219,6 @@ class RepositoryBrokerTests(unittest.TestCase):
         from broker import Broker
         second=Broker(self.tmp.name,self.token);self.addCleanup(second.db.close)
         with self.assertRaisesRegex(ValueError,'diagnostic jobs cannot be published'):
-            second.handle({k:self.req[k] for k in ('scope','channel','network')} | dict(action='repo_publish',id=diagnostic['id']))
+            second.handle(second.capability_envelope('repo_publish',self.req['scope'],self.req['channel'],self.req['network']) | dict(action='repo_publish',id=diagnostic['id']))
         with self.assertRaises(ValueError): self.b.handle(request | {'scope':'b'*64})
         self.assertFalse(any(p is not None for _,p,_ in self.repo.calls))

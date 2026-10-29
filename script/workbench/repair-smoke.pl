@@ -32,16 +32,18 @@ select STDERR; $|=1; select STDOUT; $|=1;
 open my $fh,'<:raw','/repair-fixture.json' or die $!;
 my $fixture=decode_json(do {local $/;<$fh>});
 close $fh;
-my $request='burt_bot: test and repair the saved dictionary project. Preserve existing files and tests; fix the actual defects. Do not publish anything.';
+my $request='burt_bot: read the saved dictionary project and inspect its repository job, then test and repair it. Preserve existing files and tests; fix the actual defects. Do not publish anything.';
 my $bot=bless {pending=>{channel=>'#ai',expires_at=>time+300,messages=>[
   {source_kind=>'conversation',nick=>'operator',msg=>$request}]}},'RepairSmoke';
 Bot::Runtime::Workbench::admit_task($bot);
-my $scope=Bot::Runtime::Workbench::request_scope($bot,0);
-my %envelope=(scope=>$scope,channel=>'#ai',network=>'irc.perl.org');
-my $snapshot=decode_json(Bot::Runtime::Workbench::broker_call({%envelope,action=>'repo_read',
+my ($read_scope,$read_capability,$read_grant)=Bot::Runtime::Workbench::capability_grant($bot,'repo_read');
+my %read_envelope=(scope=>$read_scope,capability=>$read_capability,grant=>$read_grant,channel=>'#ai',network=>'irc.perl.org');
+my ($test_scope,$test_capability,$test_grant)=Bot::Runtime::Workbench::capability_grant($bot,'repo_run');
+my %test_envelope=(scope=>$test_scope,capability=>$test_capability,grant=>$test_grant,channel=>'#ai',network=>'irc.perl.org');
+my $snapshot=decode_json(Bot::Runtime::Workbench::broker_call({%read_envelope,action=>'repo_read',
   branch=>'burt/dictionary',project=>'dictionary'}));
 die encode_json($snapshot) unless $snapshot->{base_sha};
-my $seed=Bot::Runtime::Workbench::broker_call({%envelope,action=>'repo_run',
+my $seed=Bot::Runtime::Workbench::broker_call({%test_envelope,action=>'repo_run',
   branch=>'burt/dictionary',project=>'dictionary',base_sha=>$snapshot->{base_sha},
   files=>$fixture->{files},argv=>['/usr/bin/perl','-Ilib','t/dictionary.t'],title=>'Replay original failed dictionary bundle'});
 my $job=decode_json($seed);
@@ -53,7 +55,7 @@ my $result=$raider->raid("Current #ai operator request: $request\nThe original f
 print "$result\n";
 print 'FINAL_METADATA: '.encode_json($bot->_pending_raid)."\n";
 die 'acceptance failed: no passed repository repair' unless ($bot->_pending_raid->{coding_last_repo_state}//'') eq 'passed';
-my $final=decode_json(Bot::Runtime::Workbench::broker_call({%envelope,action=>'repo_inspect',
+my $final=decode_json(Bot::Runtime::Workbench::broker_call({%read_envelope,action=>'repo_inspect',
   id=>$bot->_pending_raid->{coding_last_repo_job}}));
 die 'acceptance changed the complete-project test argv' unless
   encode_json($final->{result}{argv}) eq encode_json(['/usr/bin/perl','-Ilib','t/dictionary.t']);

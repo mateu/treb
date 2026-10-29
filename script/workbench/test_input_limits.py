@@ -69,7 +69,7 @@ class LargeBundleBrokerTests(unittest.TestCase):
         reason = self.b.db.execute('SELECT reason FROM rejections').fetchone()[0]
         self.assertIn('allowed_bytes=131072', reason)
         fixed = self.repair(job, changes={'lib/main.py': 'y' * 70000})
-        inspected = self.b.handle({k: req[k] for k in ('scope', 'channel', 'network')} |
+        inspected = self.b.handle(self.b.capability_envelope('repo_inspect', req['scope'], req['channel'], req['network']) |
                                  {'action': 'repo_inspect', 'id': fixed['id']})
         self.assertEqual(inspected['files'], files | {'lib/main.py': 'y' * 70000})
         self.repo_publish(fixed)
@@ -97,7 +97,7 @@ class LargeWireTests(unittest.TestCase):
         self.assertEqual(self.b.db.execute('SELECT COUNT(*) FROM jobs').fetchone()[0], 1)
 
     def test_gist_input_budget_is_not_widened(self):
-        req = {k: self.req[k] for k in ('scope', 'channel', 'network')}
+        req = self.b.capability_envelope('run', self.req['scope'], self.req['channel'], self.req['network'])
         req |= dict(action='run', files={'main.py': 'x' * 65537},
                     argv=['/bin/sh'], title='unchanged gist bound')
         with self.assertRaisesRegex(InputSizeError, 'submitted_bytes=65537 allowed_bytes=65536 excess_bytes=1'):
