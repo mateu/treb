@@ -242,9 +242,10 @@ class Broker:
         digest = hashlib.sha256(raw if raw is not None else
             json.dumps(original, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
         message = str(exc)
-        uncertain = 'submission failed or response lost' in message
+        uncertain = ('submission failed or response lost' in message
+                     or 'submission failed or response was lost' in message)
         stale = message.startswith('branch changed') or 'snapshot expired' in message
-        budget = message.startswith(('limit:', 'global limit:', 'last execution reserved'))
+        budget = message.startswith(('limit:', 'global limit:'))
         code, public, disposition = (
             ('publication_uncertain', 'publication outcome requires operator reconciliation', 'terminal') if uncertain else
             ('stale_base', 'repository base changed; read and retest', 'retryable') if stale else

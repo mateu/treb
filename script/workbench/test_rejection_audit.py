@@ -107,11 +107,16 @@ class RejectionAuditTests(unittest.TestCase):
 
     def test_publication_uncertainty_is_terminal_and_requires_reconciliation(self):
         response = self.b.record_rejection(
-            self.req, ValueError('gist submission failed or response lost; operator reconciliation required; do not retry'))
+            self.req, ValueError('gist submission failed or response was lost; operator reconciliation required; do not retry'))
         self.assertEqual((response['code'], response['disposition'], response['reconciliation']),
                          ('publication_uncertain', 'terminal', 'required'))
         self.assertEqual(self.b.db.execute('SELECT code FROM rejections ORDER BY seq DESC').fetchone()[0],
                          'publication_uncertain')
+
+    def test_reserved_final_verification_attempt_remains_retryable(self):
+        response = self.b.record_rejection(
+            self.req, ValueError('last execution reserved for trusted project verification'))
+        self.assertEqual((response['code'], response['disposition']), ('invalid_request', 'retryable'))
 
     def test_nonobject_requests_keep_original_digest(self):
         for req in [None, ['SECRET_SOURCE'], 7]:
