@@ -134,10 +134,30 @@ Bot::Runtime::Workbench::admit_task($bot);
 is($bot->{pending}{expires_at},$task_expiry,'admission never renews deadline');
 is(Bot::Runtime::Workbench::request_scope($bot,'edit_test'),$task_scope,'job scope stable');
 is(scalar @{$bot->{sent}},1,'one start notice');
+{
+  no warnings 'redefine';
+  local *Bot::Runtime::Workbench::broker_call=sub { '{"reference":"python-csv","text":"documentation","untrusted":true}' };
+  my $before=scalar @{$bot->{sent}};
+  $defs{read_coding_reference}{code}->($tool,{key=>'python-csv'});
+  is(scalar @{$bot->{sent}},$before,'successful read stays quiet during coding task');
+}
+{
+  no warnings 'redefine';
+  local *Bot::Runtime::Workbench::broker_call=sub { '{"rejection_schema":1,"code":"invalid_request","disposition":"terminal"}' };
+  $defs{read_coding_reference}{code}->($tool,{key=>'python-csv'});
+}
+is($bot->{pending}{coding_stop_reason},'Workbench request cannot be retried in this task',
+ 'terminal read rejection stops coding task');
+delete $bot->{pending}{coding_stop_reason};
 Bot::Runtime::Workbench::report_result($bot,'repo_run',JSON::PP::encode_json({
  id=>'a'x32,state=>'failed',result=>{exit_code=>1,output=>'INJECTED stdout'}}));
 like($bot->{sent}[-1],qr/repo_run: failed.*exit 1/,'failed test notice includes stored job and exit');
 unlike($bot->{sent}[-1],qr/INJECTED/,'generated output not reflected into channel');
+Bot::Runtime::Workbench::report_result($bot,'repo_run',JSON::PP::encode_json({
+ rejection_schema=>1,code=>'invalid_request',disposition=>'terminal'}));
+is($bot->{pending}{coding_stop_reason},'Workbench request cannot be retried in this task',
+ 'terminal structured rejection stops coding task');
+delete $bot->{pending}{coding_stop_reason};
 Bot::Runtime::Workbench::report_result($bot,'repo_publish',JSON::PP::encode_json({
  id=>'a'x32,state=>'published',url=>'https://github.com/burt-agent/workspace/commit/'.('b'x40)}));
 like($bot->{sent}[-1],qr{https://github.com/burt-agent/workspace/commit/},'actual broker commit URL reported');

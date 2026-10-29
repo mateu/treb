@@ -88,11 +88,35 @@ class RejectionAuditTests(unittest.TestCase):
         for raw in [b'{"SECRET_SOURCE":\n', b'x'*(MAX_REQUEST+1)+b'\n',
                     json.dumps(self.req | {'argv': ['SECRET_COMMAND']}).encode()+b'\n']:
             before = len(self.records())
-            self.assertIn('error', self.wire(raw))
+            response=self.wire(raw)
+            self.assertEqual(set(response), {'rejection_schema','code','message','action','disposition','reconciliation','repeat_count'})
+            self.assertEqual(response['rejection_schema'], 1)
+            self.assertNotIn('SECRET', json.dumps(response))
             self.assertEqual(len(self.records()), before+1)
         self.assertEqual(self.records()[1]['reason'], 'oversized or unterminated request')
         self.assertIsNone(self.records()[0]['scope'])
         self.assertNotIn('SECRET', json.dumps(self.records()))
+
+    def test_repeated_canonical_rejection_becomes_terminal_without_jobs(self):
+        req = self.req | {'argv':['SECRET_COMMAND']}
+        responses = [self.wire(json.dumps(req, sort_keys=bool(i % 2)).encode()+b'\n') for i in range(3)]
+        self.assertEqual([r['disposition'] for r in responses], ['retryable','retryable','terminal'])
+        self.assertEqual(responses[-1]['repeat_count'], 3)
+        self.assertEqual(self.b.db.execute('SELECT COUNT(*) FROM jobs').fetchone()[0], 0)
+        self.assertEqual(self.b.db.execute('SELECT code FROM rejections ORDER BY seq DESC').fetchone()[0], 'invalid_request')
+
+    def test_publication_uncertainty_is_terminal_and_requires_reconciliation(self):
+        response = self.b.record_rejection(
+            self.req, ValueError('gist submission failed or response was lost; operator reconciliation required; do not retry'))
+        self.assertEqual((response['code'], response['disposition'], response['reconciliation']),
+                         ('publication_uncertain', 'terminal', 'required'))
+        self.assertEqual(self.b.db.execute('SELECT code FROM rejections ORDER BY seq DESC').fetchone()[0],
+                         'publication_uncertain')
+
+    def test_reserved_final_verification_attempt_remains_retryable(self):
+        response = self.b.record_rejection(
+            self.req, ValueError('last execution reserved for trusted project verification'))
+        self.assertEqual((response['code'], response['disposition']), ('invalid_request', 'retryable'))
 
     def test_nonobject_requests_keep_original_digest(self):
         for req in [None, ['SECRET_SOURCE'], 7]:

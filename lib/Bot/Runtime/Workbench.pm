@@ -179,7 +179,7 @@ sub finish_task {
 }
 
 sub report_result {
-  my ($self,$action,$raw)=@_;
+  my ($self,$action,$raw,$quiet)=@_;
   my $pending=$self->_pending_raid;
   return unless $pending && $pending->{coding_task};
   my $publication=$action eq 'publish' || $action eq 'repo_publish';
@@ -192,6 +192,14 @@ sub report_result {
   my $state=exists($r->{error}) ? 'error' : ($r->{state}//'');
   $state='error' unless $state =~ /\A(?:passed|failed|published|publishing|uncertain)\z/;
   my $notice="$action: $state" . ($id ? " (job $id)" : '');
+  if ($state eq 'error' && ($r->{rejection_schema}//'') eq '1') {
+    my $code=$r->{code}//'';
+    $code='' unless $code =~ /\A(?:invalid_request|stale_base|budget_exhausted|transport_unavailable|publication_uncertain)\z/;
+    $notice.="; $code" if $code;
+    if (($r->{disposition}//'') eq 'terminal') {
+      $pending->{coding_stop_reason}='Workbench request cannot be retried in this task';
+    }
+  }
   if ($publication && $state ne 'published') {
     $notice.='; success unconfirmed; the public write may already have succeeded; operator reconciliation required before retrying; do not retry';
   }
@@ -219,7 +227,8 @@ sub report_result {
   }
   $pending->{coding_last_result}=$notice if $action =~ /(?:run|repair)/;
   $pending->{coding_last_result}=$notice if $publication;
-  task_notice($self,$pending,$notice);
+  task_notice($self,$pending,$notice) unless $quiet && !exists($r->{error})
+    && ($r->{rejection_schema}//'') ne '1';
 }
 
 sub broker_call {
@@ -297,20 +306,23 @@ sub tool_specs {
             my $raw=broker_call({action=>'proposal_create',proposal_action=>$target,params=>$args->{params},
               requester=>trusted_requester($self),scope=>$scope,capability=>$issued_capability,grant=>$grant,
               channel=>lc($self->_pending_raid->{channel}),network=>'irc.perl.org'});
+            report_result($self,'proposal_create',$raw,1);
             task_notice($self,$self->_pending_raid,"$target awaits one fresh same-requester confirmation.");
             return $tool->text_result($raw);
           }
           if ($action eq 'proposal_confirm') {
             my $raw=broker_call(confirmation_envelope($self));
             my $confirmed=eval { JSON::PP::decode_json($raw)->{confirmed_action}//'' };
-            report_result($self,$confirmed,$raw) if $confirmed =~ /\A(?:publish|repo_publish)\z/;
+            report_result($self,$confirmed || 'proposal_confirm',$raw,
+              $confirmed =~ /\A(?:publish|repo_publish)\z/ ? 0 : 1);
             return $tool->text_result($raw);
           }
           my ($scope,$issued_capability,$grant)=capability_grant($self,$action);
           task_notice($self,$self->_pending_raid,"$action started.") unless $action =~ /\A(?:repo_(?:read|inspect)|reference)\z/;
           $publication_attempted=1 if $action eq 'publish' || $action eq 'repo_publish';
           my $raw=broker_call({%$args,action=>$action,scope=>$scope,capability=>$issued_capability,grant=>$grant,channel=>lc($self->_pending_raid->{channel}),network=>'irc.perl.org'});
-          report_result($self,$action,$raw) unless $action =~ /\A(?:repo_(?:read|inspect)|reference)\z/;
+          report_result($self,$action,$raw,
+            $action =~ /\A(?:repo_(?:read|inspect)|reference)\z/);
           $raw;
         };
         if ($@) {

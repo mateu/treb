@@ -29,6 +29,8 @@ AUDIT_LIMIT = 512
 AUDIT_TTL = 7 * 86400
 PROPOSAL_TTL = 300
 SNAPSHOT_TTL = 300
+REJECTION_SCHEMA_VERSION = 1
+REPEAT_REJECTION_LIMIT = 3
 ACTIONS = frozenset(('run', 'publish', 'repo_read', 'repo_run', 'repo_publish',
                      'repo_inspect', 'repo_repair', 'repo_diagnose', 'reference', 'task_status',
                      'proposal_create', 'proposal_confirm'))
@@ -135,7 +137,15 @@ class Broker:
         self.db.execute('CREATE TABLE IF NOT EXISTS repo_jobs (id TEXT PRIMARY KEY, destination TEXT NOT NULL)')
         self.db.execute('''CREATE TABLE IF NOT EXISTS rejections
             (seq INTEGER PRIMARY KEY, created REAL, scope TEXT, channel TEXT,
-             network TEXT, action TEXT, request_sha256 TEXT, reason TEXT, error_kind TEXT)''')
+             network TEXT, action TEXT, request_sha256 TEXT, reason TEXT, error_kind TEXT,
+             code TEXT, schema_version INTEGER)''')
+        for column, definition in (('code', 'TEXT'), ('schema_version', 'INTEGER')):
+            try: self.db.execute(f'ALTER TABLE rejections ADD COLUMN {column} {definition}')
+            except sqlite3.OperationalError: pass
+        self.db.execute('''CREATE TABLE IF NOT EXISTS rejection_fingerprints
+            (scope TEXT NOT NULL, action TEXT NOT NULL, digest TEXT NOT NULL,
+             count INTEGER NOT NULL, updated REAL NOT NULL,
+             PRIMARY KEY(scope, action, digest))''')
         self.db.execute('''CREATE TABLE IF NOT EXISTS task_status
             (scope TEXT PRIMARY KEY, channel TEXT, network TEXT, created REAL,
              updated REAL, phase TEXT, reason TEXT)''')
@@ -172,6 +182,7 @@ class Broker:
         self.db.execute('DELETE FROM repo_snapshots WHERE created<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM repo_snapshots WHERE id NOT IN '
                         '(SELECT id FROM repo_snapshots ORDER BY created DESC LIMIT ?)', (AUDIT_LIMIT,))
+        self.db.execute('DELETE FROM rejection_fingerprints WHERE updated<?', (now - AUDIT_TTL,))
 
     def create_snapshot(self, req):
         snapshot = self.repository.snapshot(req['branch'], req['project'])
@@ -219,7 +230,7 @@ class Broker:
 
     def record_rejection(self, req, exc, raw=None):
         # Scope/channel/action come only from the trusted runtime IPC envelope.
-        # Invalid/malformed envelopes have NULL metadata, not attacker text.
+        # Never reflect exception/request bytes; fingerprint them only for bounded retry control.
         original = req
         req = req if isinstance(req, dict) else {}
         scope = req.get('scope')
@@ -231,19 +242,38 @@ class Broker:
         digest = hashlib.sha256(raw if raw is not None else
             json.dumps(original, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
         message = str(exc)
+        uncertain = ('submission failed or response lost' in message
+                     or 'submission failed or response was lost' in message)
+        stale = message.startswith('branch changed') or 'snapshot expired' in message
+        budget = message.startswith(('limit:', 'global limit:'))
+        code, public, disposition = (
+            ('publication_uncertain', 'publication outcome requires operator reconciliation', 'terminal') if uncertain else
+            ('stale_base', 'repository base changed; read and retest', 'retryable') if stale else
+            ('budget_exhausted', 'request budget exhausted', 'terminal') if budget else
+            ('transport_unavailable', 'broker unavailable; operator inspection required', 'retryable') if isinstance(exc, (TimeoutError, OSError)) else
+            ('invalid_request', 'request rejected by Workbench policy', 'retryable'))
         reason = message if message in SAFE_REASONS or isinstance(exc, InputSizeError) else 'unclassified broker error'
         for prefix in ('baseline files cannot be deleted: ', 'protected baseline file changed: ',
                        'new files restricted to approved regression directories: ', 'unknown reference; available: '):
-            if message.startswith(prefix):
-                reason = prefix.rstrip(': ')
-        kind = ('validation' if isinstance(exc, ValueError) else
-                'type' if isinstance(exc, TypeError) else
-                'missing_field' if isinstance(exc, KeyError) else
-                'transport' if isinstance(exc, (TimeoutError, OSError)) else 'internal')
-        self.db.execute('INSERT INTO rejections VALUES (NULL,?,?,?,?,?,?,?,?)',
-                        (time.time(), scope, channel, network, action, digest, reason, kind))
-        self.prune_audit()
-        self.db.commit()
+            if message.startswith(prefix): reason = prefix.rstrip(': ')
+        kind = ('validation' if isinstance(exc, ValueError) else 'type' if isinstance(exc, TypeError) else
+                'missing_field' if isinstance(exc, KeyError) else 'transport' if isinstance(exc, (TimeoutError, OSError)) else 'internal')
+        repeated = 0
+        if scope and action:
+            self.db.execute('INSERT INTO rejection_fingerprints VALUES (?,?,?,?,?) '
+                            'ON CONFLICT(scope,action,digest) DO UPDATE SET count=count+1,updated=excluded.updated',
+                            (scope, action, digest, 1, time.time()))
+            repeated = self.db.execute('SELECT count FROM rejection_fingerprints WHERE scope=? AND action=? AND digest=?',
+                                       (scope, action, digest)).fetchone()[0]
+            if repeated >= REPEAT_REJECTION_LIMIT: disposition = 'terminal'
+        self.db.execute('INSERT INTO rejections (created,scope,channel,network,action,request_sha256,reason,error_kind,code,schema_version) '
+                        'VALUES (?,?,?,?,?,?,?,?,?,?)',
+                        (time.time(), scope, channel, network, action, digest, reason, kind, code, REJECTION_SCHEMA_VERSION))
+        self.prune_audit(); self.db.commit()
+        return {'rejection_schema': REJECTION_SCHEMA_VERSION, 'code': code, 'message': public,
+                'action': action, 'disposition': disposition,
+                'reconciliation': 'required' if uncertain else None,
+                'repeat_count': min(repeated, REPEAT_REJECTION_LIMIT)}
 
     @staticmethod
     def capability_envelope(action, scope, channel, network):
@@ -257,7 +287,7 @@ class Broker:
         try:
             return self._handle(req, _diagnostic=_diagnostic)
         except Exception as exc:
-            self.record_rejection(req, exc)
+            exc.rejection = self.record_rejection(req, exc)
             raise
 
     def _handle(self, req, _diagnostic=False, _saved_snapshot=False):
@@ -639,13 +669,13 @@ class Handler(socketserver.StreamRequestHandler):
             dispatched = True
             result = self.server.broker.handle(req)
         except (ValueError, TypeError, KeyError) as exc:
-            if not dispatched:
-                self.server.broker.record_rejection(req, exc, raw=raw)
-            result = {'error': str(exc)[:300]}
+            result = getattr(exc, 'rejection', None)
+            if result is None:
+                result = self.server.broker.record_rejection(req, exc, raw=raw)
         except Exception as exc:
-            if not dispatched:
-                self.server.broker.record_rejection(req, exc, raw=raw)
-            result = {'error': 'broker unavailable; operator inspection required'}
+            result = getattr(exc, 'rejection', None)
+            if result is None:
+                result = self.server.broker.record_rejection(req, exc, raw=raw)
         try:
             self.wfile.write(json.dumps(result).encode() + b'\n')
         except (BrokenPipeError, TimeoutError):
