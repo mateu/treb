@@ -192,6 +192,14 @@ sub report_result {
   my $state=exists($r->{error}) ? 'error' : ($r->{state}//'');
   $state='error' unless $state =~ /\A(?:passed|failed|published|publishing|uncertain)\z/;
   my $notice="$action: $state" . ($id ? " (job $id)" : '');
+  if ($state eq 'error' && ($r->{rejection_schema}//'') eq '1') {
+    my $code=$r->{code}//'';
+    $code='' unless $code =~ /\A(?:invalid_request|stale_base|budget_exhausted|transport_unavailable|publication_uncertain)\z/;
+    $notice.="; $code" if $code;
+    if (($r->{disposition}//'') eq 'terminal') {
+      $pending->{coding_stop_reason}='Workbench request cannot be retried in this task';
+    }
+  }
   if ($publication && $state ne 'published') {
     $notice.='; success unconfirmed; the public write may already have succeeded; operator reconciliation required before retrying; do not retry';
   }

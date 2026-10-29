@@ -97,7 +97,8 @@ class LargeWireTests(unittest.TestCase):
         self.assertEqual(json.loads(saved), self.files | req['changes'])
         req['changes']['tests/large.txt'] += 'x'
         result = self.wire(json.dumps(req).encode() + b'\n')
-        self.assertIn('submitted_bytes=131073 allowed_bytes=131072 excess_bytes=1', result['error'])
+        self.assertEqual(result['code'], 'invalid_request')
+        self.assertEqual(result['message'], 'request rejected by Workbench policy')
         self.assertEqual(self.b.db.execute('SELECT COUNT(*) FROM jobs').fetchone()[0], 1)
 
     def test_gist_input_budget_is_not_widened(self):
