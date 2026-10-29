@@ -105,6 +105,14 @@ class RejectionAuditTests(unittest.TestCase):
         self.assertEqual(self.b.db.execute('SELECT COUNT(*) FROM jobs').fetchone()[0], 0)
         self.assertEqual(self.b.db.execute('SELECT code FROM rejections ORDER BY seq DESC').fetchone()[0], 'invalid_request')
 
+    def test_publication_uncertainty_is_terminal_and_requires_reconciliation(self):
+        response = self.b.record_rejection(
+            self.req, ValueError('gist submission failed or response lost; operator reconciliation required; do not retry'))
+        self.assertEqual((response['code'], response['disposition'], response['reconciliation']),
+                         ('publication_uncertain', 'terminal', 'required'))
+        self.assertEqual(self.b.db.execute('SELECT code FROM rejections ORDER BY seq DESC').fetchone()[0],
+                         'publication_uncertain')
+
     def test_nonobject_requests_keep_original_digest(self):
         for req in [None, ['SECRET_SOURCE'], 7]:
             with self.assertRaisesRegex(ValueError, 'object required'): self.b.handle(req)

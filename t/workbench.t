@@ -138,6 +138,11 @@ Bot::Runtime::Workbench::report_result($bot,'repo_run',JSON::PP::encode_json({
  id=>'a'x32,state=>'failed',result=>{exit_code=>1,output=>'INJECTED stdout'}}));
 like($bot->{sent}[-1],qr/repo_run: failed.*exit 1/,'failed test notice includes stored job and exit');
 unlike($bot->{sent}[-1],qr/INJECTED/,'generated output not reflected into channel');
+Bot::Runtime::Workbench::report_result($bot,'repo_run',JSON::PP::encode_json({
+ rejection_schema=>1,code=>'invalid_request',disposition=>'terminal'}));
+is($bot->{pending}{coding_stop_reason},'Workbench request cannot be retried in this task',
+ 'terminal structured rejection stops coding task');
+delete $bot->{pending}{coding_stop_reason};
 Bot::Runtime::Workbench::report_result($bot,'repo_publish',JSON::PP::encode_json({
  id=>'a'x32,state=>'published',url=>'https://github.com/burt-agent/workspace/commit/'.('b'x40)}));
 like($bot->{sent}[-1],qr{https://github.com/burt-agent/workspace/commit/},'actual broker commit URL reported');
