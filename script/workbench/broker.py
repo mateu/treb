@@ -160,6 +160,10 @@ class Broker:
             (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, parent TEXT, scope TEXT NOT NULL,
              requester TEXT NOT NULL, channel TEXT NOT NULL, network TEXT NOT NULL,
              created REAL NOT NULL, phase TEXT NOT NULL, reason TEXT NOT NULL)''')
+        # Attempt budget is durable task state, not a count over the prunable
+        # job journal. It must survive restart and job-retention pruning.
+        self.db.execute('''CREATE TABLE IF NOT EXISTS task_budgets
+            (task_id TEXT PRIMARY KEY, attempts INTEGER NOT NULL, updated REAL NOT NULL)''')
         self.db.execute('''CREATE TABLE IF NOT EXISTS proposals
             (id TEXT PRIMARY KEY, scope TEXT NOT NULL, requester TEXT NOT NULL,
              channel TEXT NOT NULL, network TEXT NOT NULL, action TEXT NOT NULL,
@@ -197,6 +201,8 @@ class Broker:
                         '(SELECT id FROM task_checkpoints ORDER BY created DESC LIMIT ?)', (AUDIT_LIMIT,))
         self.db.execute('DELETE FROM task_scopes WHERE task_id NOT IN (SELECT DISTINCT task_id FROM task_checkpoints) '
                         'AND created<?', (now - AUDIT_TTL,))
+        self.db.execute('DELETE FROM task_budgets WHERE task_id NOT IN (SELECT DISTINCT task_id FROM task_checkpoints) '
+                        'AND updated<?', (now - AUDIT_TTL,))
         expired_proposals = self.db.execute(
             'SELECT id,scope,channel,network FROM proposals WHERE state="proposed" AND expires<=?', (now,)).fetchall()
         self.db.execute('UPDATE proposals SET state="expired" WHERE state="proposed" AND expires<=?', (now,))
@@ -353,6 +359,20 @@ class Broker:
                                'LEFT JOIN task_scopes s ON s.scope=j.scope LEFT JOIN repo_jobs r ON r.id=j.id '
                                'WHERE COALESCE(s.task_id,j.scope)=? ORDER BY j.created,j.id', (task_id,)).fetchall()
 
+    def task_attempt_count(self, task_id):
+        row = self.db.execute('SELECT attempts FROM task_budgets WHERE task_id=?', (task_id,)).fetchone()
+        if row:
+            return row['attempts']
+        # Migration-safe baseline for a task created before durable accounting.
+        attempts = len(self.task_job_rows(task_id))
+        self.db.execute('INSERT OR IGNORE INTO task_budgets VALUES (?,?,?)', (task_id, attempts, time.time()))
+        return attempts
+
+    def consume_task_attempt(self, task_id, now):
+        self.db.execute('INSERT INTO task_budgets VALUES (?,?,?) '
+                        'ON CONFLICT(task_id) DO UPDATE SET attempts=attempts+1,updated=excluded.updated',
+                        (task_id, 1, now))
+
     def task_publication_count(self, task_id):
         return self.db.execute('SELECT COUNT(*) FROM jobs j LEFT JOIN task_scopes s ON s.scope=j.scope '
                                "WHERE COALESCE(s.task_id,j.scope)=? AND j.state IN ('published','publishing','uncertain')",
@@ -371,7 +391,7 @@ class Broker:
                 'phase': row['phase'], 'reason': row['reason'],
                 'jobs': [{'id': j['id'], 'state': j['state']} for j in jobs],
                 'latest_repository_job': latest_repository_job,
-                'attempts_remaining': max(0, MAX_ATTEMPTS - len(jobs))}
+                'attempts_remaining': max(0, MAX_ATTEMPTS - self.task_attempt_count(row['task_id']))}
 
     def handle(self, req, _diagnostic=False):
         try:
@@ -568,8 +588,8 @@ class Broker:
             old = self.db.execute('SELECT * FROM jobs WHERE scope=? AND digest=?', (scope, digest)).fetchone()
             if old:
                 return self.result(old)
-            if (_diagnostic and self.verification is not None and len(
-                    self.task_job_rows(self.task_binding(scope)['task_id'])) >= MAX_ATTEMPTS - 1):
+            task_id = self.task_binding(scope)['task_id']
+            if (_diagnostic and self.verification is not None and self.task_attempt_count(task_id) >= MAX_ATTEMPTS - 1):
                 raise ValueError('last execution reserved for trusted project verification')
             now = time.time()
             # Retain a bounded journal; ambiguous submissions remain for manual reconciliation.
@@ -577,11 +597,12 @@ class Broker:
             count = self.db.execute('SELECT COUNT(*) FROM jobs WHERE created>?', (now - 3600,)).fetchone()[0]
             if count >= 30:
                 raise ValueError('global limit: 30 sandbox runs per hour')
-            if len(self.task_job_rows(self.task_binding(scope)['task_id'])) >= MAX_ATTEMPTS:
+            if self.task_attempt_count(task_id) >= MAX_ATTEMPTS:
                 raise ValueError('limit: 5 sandbox attempts per IRC request')
             job_id = uuid.uuid4().hex
             self.db.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?)',
                             (job_id, scope, digest, now, json.dumps(files), title, '{}', 'running', None))
+            self.consume_task_attempt(task_id, now)
             self.resource_checkpoint('job', job_id, req, 'running', now)
             if destination:
                 self.db.execute('INSERT INTO repo_jobs VALUES (?,?)', (job_id, json.dumps(destination)))
@@ -802,8 +823,8 @@ class Broker:
     def result(self, job):
         return {'id': job['id'], 'state': job['state'], 'result': json.loads(job['result']),
                 'url': job['url'], 'files': list(json.loads(job['files'])),
-                'attempts_remaining': max(0, MAX_ATTEMPTS - len(
-                    self.task_job_rows(self.task_binding(job['scope'])['task_id'])))}
+                'attempts_remaining': max(0, MAX_ATTEMPTS - self.task_attempt_count(
+                    self.task_binding(job['scope'])['task_id']))}
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):

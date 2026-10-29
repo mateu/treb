@@ -70,6 +70,28 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(next_checkpoint['parent_checkpoint_id'], checkpoint['checkpoint_id'])
         self.assertEqual([job['id'] for job in next_checkpoint['jobs']], [first['id'], second['id']])
 
+    def test_checkpointed_task_budget_survives_pruned_job_journal(self):
+        for attempt in range(5):
+            self.b.handle(self.req | {'title': f'attempt-{attempt}'})
+        checkpoint = self.checkpoint()
+        self.assertEqual(checkpoint['attempts_remaining'], 0)
+        # Model the bounded job-journal retention path; durable task budget must
+        # not be reconstructed from the remaining job rows.
+        self.b.db.execute('DELETE FROM repo_jobs')
+        self.b.db.execute('DELETE FROM jobs')
+        self.b.db.commit()
+        fresh_scope = 'b' * 64
+        resume = self.b.capability_envelope('task_resume', fresh_scope, '#ai', 'irc.perl.org')
+        resumed = self.b.handle(resume | {'action': 'task_resume', 'checkpoint_id': checkpoint['checkpoint_id'],
+                                          'requester': 'mateu'})
+        self.assertEqual(resumed['attempts_remaining'], 0)
+        sixth = self.req | {'scope': fresh_scope,
+                            'grant': self.b.capability_envelope('run', fresh_scope, '#ai', 'irc.perl.org')['grant'],
+                            'title': 'must-not-run'}
+        with self.assertRaisesRegex(ValueError, 'limit: 5 sandbox attempts'):
+            self.b.handle(sixth)
+        self.assertEqual(self.runs.__len__(), 5)
+
     def test_uncertain_checkpoint_is_visible_and_absorbs_resume_and_publication(self):
         job = self.b.handle(self.req)
         self.b.post_gist = lambda payload: (_ for _ in ()).throw(OSError('lost response'))
