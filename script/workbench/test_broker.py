@@ -54,6 +54,9 @@ class BrokerTests(unittest.TestCase):
                                           'requester': 'mateu'})
         self.assertEqual(resumed['resumed_scope'], fresh_scope)
         self.assertEqual(resumed['attempts_remaining'], 4)
+        inspected = self.b.handle(self.b.capability_envelope('job_inspect', fresh_scope, '#ai', 'irc.perl.org') | {'action': 'job_inspect', 'id': first['id']})
+        self.assertEqual(inspected['files'], self.req['files'])
+        self.assertEqual(inspected['state'], 'passed')
         with self.assertRaisesRegex(ValueError, 'fresh task scope is already bound'):
             self.b.handle(resume | {'action': 'task_resume', 'checkpoint_id': checkpoint['checkpoint_id'],
                                     'requester': 'mateu'})

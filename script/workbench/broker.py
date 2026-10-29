@@ -32,11 +32,11 @@ SNAPSHOT_TTL = 300
 REJECTION_SCHEMA_VERSION = 1
 REPEAT_REJECTION_LIMIT = 3
 ACTIONS = frozenset(('run', 'publish', 'repo_read', 'repo_run', 'repo_publish',
-                     'repo_inspect', 'repo_repair', 'repo_diagnose', 'reference', 'task_status',
+                     'repo_inspect', 'job_inspect', 'repo_repair', 'repo_diagnose', 'reference', 'task_status',
                      'task_checkpoint', 'checkpoint_status', 'task_resume',
                      'proposal_create', 'proposal_confirm'))
 ACTION_CAPABILITY = {
-    'reference': 'read_status', 'repo_read': 'read_status', 'repo_inspect': 'read_status',
+    'reference': 'read_status', 'repo_read': 'read_status', 'repo_inspect': 'read_status', 'job_inspect': 'read_status',
     'run': 'edit_test', 'repo_run': 'edit_test', 'repo_repair': 'edit_test',
     'repo_diagnose': 'edit_test', 'task_status': 'edit_test',
     'task_checkpoint': 'edit_test', 'checkpoint_status': 'read_status', 'task_resume': 'edit_test',
@@ -446,7 +446,7 @@ class Broker:
         fields = {'run': {'files','argv','title'}, 'publish': {'id'},
                   'repo_read': {'branch','project'},
                   'repo_run': {'snapshot_id','changes','delete','argv','title'},
-                  'repo_publish': {'id'}, 'repo_inspect': {'id'},
+                  'repo_publish': {'id'}, 'repo_inspect': {'id'}, 'job_inspect': {'id'},
                   'repo_repair': {'id','changes','delete','argv','title'},
                   'repo_diagnose': {'id','argv','title'}}
         fields['reference'] = {'key'}
@@ -557,6 +557,12 @@ class Broker:
                              self.task_job_rows(self.task_binding(scope)['task_id'])]}
         if action == 'reference':
             return self.references.read(req['key'])
+        if action == 'job_inspect':
+            job_id = req['id']
+            if not isinstance(job_id, str) or not re.fullmatch(r'[a-f0-9]{32}', job_id):
+                raise ValueError('invalid job id')
+            job = self.load_job(req, job_id, 'saved job not found in this request')
+            return self.result(job) | {'files': json.loads(job['files'])}
         if action in ('repo_inspect', 'repo_repair', 'repo_diagnose'):
             job_id = req['id']
             if not isinstance(job_id, str) or not re.fullmatch(r'[a-f0-9]{32}', job_id):

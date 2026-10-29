@@ -22,7 +22,7 @@ is($scope,Bot::Runtime::Workbench::request_scope($bot,'publish_gist'),'run and p
 like($scope,qr/^[a-f0-9]{64}$/,'scope is bounded digest');
 my $tool=bless {},'WorkbenchTool';
 my %defs=map {$_->{name}=>$_} @{Bot::Runtime::Workbench::tool_specs($bot)};
-is(scalar keys %defs,14,'fourteen narrow tools including checkpoint recovery');
+is(scalar keys %defs,15,'fifteen narrow tools including standalone checkpoint recovery');
 {
   no warnings 'redefine';
   local *Bot::Runtime::Workbench::broker_call=sub { '{"reference":"python-csv","text":"documentation","untrusted":true}' };
@@ -35,6 +35,7 @@ like($defs{publish_gist}{code}->($tool,{id=>'x',channel=>'#ai'}),qr/Invalid tool
 # named capability; generic coding discussion is not an authority signal.
 for my $case (
   ['read_status','burt_bot: inspect the python-csv reference'],
+  ['read_status','burt_bot: inspect job '.('a'x32)],
   ['edit_test','burt_bot: write and test this Perl program'],
   ['publish_gist','burt_bot: publish this as a gist'],
   ['publish_repo','burt_bot: push this project to the repository'],
