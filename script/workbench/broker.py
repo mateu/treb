@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Narrow local IPC: run immutable text inputs; publish only successful bundles."""
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -27,6 +28,12 @@ AUDIT_LIMIT = 512
 AUDIT_TTL = 7 * 86400
 ACTIONS = frozenset(('run', 'publish', 'repo_read', 'repo_run', 'repo_publish',
                      'repo_inspect', 'repo_repair', 'repo_diagnose', 'reference', 'task_status'))
+ACTION_CAPABILITY = {
+    'reference': 'read_status', 'repo_read': 'read_status', 'repo_inspect': 'read_status',
+    'run': 'edit_test', 'repo_run': 'edit_test', 'repo_repair': 'edit_test',
+    'repo_diagnose': 'edit_test', 'task_status': 'edit_test',
+    'publish': 'publish_gist', 'repo_publish': 'publish_repo',
+}
 SAFE_REASONS = frozenset({
     'Burt gist credential is not installed; ask the operator',
     'branch changed; read project and retest against the new base',
@@ -163,6 +170,14 @@ class Broker:
         self.prune_audit()
         self.db.commit()
 
+    @staticmethod
+    def capability_envelope(action, scope, channel, network):
+        capability = ACTION_CAPABILITY[action]
+        grant = hashlib.sha256(json.dumps(
+            [scope, channel, network, capability], separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
+        return {'scope': scope, 'capability': capability, 'grant': grant,
+                'channel': channel, 'network': network}
+
     def handle(self, req, _diagnostic=False):
         try:
             return self._handle(req, _diagnostic=_diagnostic)
@@ -174,7 +189,7 @@ class Broker:
         if not isinstance(req, dict):
             raise ValueError('object required')
         action = req.get('action')
-        allowed = {'action', 'scope', 'channel', 'network'}
+        allowed = {'action', 'scope', 'capability', 'grant', 'channel', 'network'}
         fields = {'run': {'files','argv','title'}, 'publish': {'id'},
                   'repo_read': {'branch','project'},
                   'repo_run': {'files','argv','title','branch','project','base_sha'},
@@ -191,6 +206,13 @@ class Broker:
         scope = req['scope']
         if not isinstance(scope, str) or not re.fullmatch(r'[a-f0-9]{64}', scope):
             raise ValueError('invalid turn scope')
+        capability = req['capability']
+        expected_capability = ACTION_CAPABILITY[action]
+        expected_grant = self.capability_envelope(
+            action, scope, req['channel'], req['network'])['grant']
+        if (capability != expected_capability or not isinstance(req['grant'], str)
+                or not hmac.compare_digest(req['grant'], expected_grant)):
+            raise ValueError('invalid capability grant')
         if action == 'task_status':
             if (req['phase'] not in ('started', 'stopped', 'reported') or req['reason'] not in
                     ('admitted', 'deadline', 'iteration_limit', 'runtime_error', 'no_report',
@@ -229,7 +251,8 @@ class Broker:
             if action == 'repo_diagnose':
                 # Same exact source, different diagnostic argv. This job can NEVER
                 # publish, even if its command exits zero.
-                return Broker._handle(self, {k: req[k] for k in ('scope','channel','network','argv','title')}
+                return Broker._handle(self, self.capability_envelope('repo_run', req['scope'], req['channel'], req['network'])
+                                     | {k: req[k] for k in ('argv','title')}
                                      | {'action':'repo_run', 'files':json.loads(job['files']),
                                         **{k: destination[k] for k in ('branch','project','base_sha')}},
                                      _diagnostic=True)
@@ -246,7 +269,8 @@ class Broker:
                 del files[name]
             # Re-enter the ordinary run path: same destination/base, full validation,
             # quota, fresh base check and new immutable job. No publication here.
-            return self._handle({k: req[k] for k in ('scope','channel','network','argv','title')}
+            return self._handle(self.capability_envelope('repo_run', req['scope'], req['channel'], req['network'])
+                               | {k: req[k] for k in ('argv','title')}
                                | {'action': 'repo_run', 'files': files,
                                   **{k: destination[k] for k in ('branch','project','base_sha')}})
         destination = None

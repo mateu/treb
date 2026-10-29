@@ -29,9 +29,12 @@ class VerificationTests(unittest.TestCase):
         self.repo = FakeRepository()
         self.repo.files = self.files.copy()
         self.b.repository = self.repo
-        self.req = dict(action='repo_run', scope='a'*64, channel='#ai', network='irc.perl.org',
+        self.req = dict(action='repo_run', scope='a'*64, capability='edit_test', grant='b1bb9ad6930eaa6c19e1ff53a03596d14cf56b7d02598413f52b942e3e516d93', channel='#ai', network='irc.perl.org',
                         branch='burt/dictionary', project='dictionary', base_sha=A,
                         files=self.files.copy(), argv=['/bin/sh', '-c', 'true'], title='control')
+
+    def request(self, action):
+        return self.b.capability_envelope(action, self.req['scope'], self.req['channel'], self.req['network'])
 
     def test_model_command_and_fake_success_cannot_replace_gate(self):
         job = self.b.handle(self.req)
@@ -68,7 +71,7 @@ class VerificationTests(unittest.TestCase):
         changed = copy.deepcopy(self.policy)
         changed['checks']['verify.py'] += '\n# new policy'
         self.b.verification = Verification({'burt/dictionary:dictionary': changed})
-        publish = {k: self.req[k] for k in ['scope', 'channel', 'network']}
+        publish = self.request('repo_publish')
         with self.assertRaisesRegex(ValueError, 'receipt missing or stale'):
             self.b.handle(publish | {'action': 'repo_publish', 'id': first['id']})
         second = self.b.handle(self.req)
@@ -79,14 +82,14 @@ class VerificationTests(unittest.TestCase):
         self.b.execute = lambda job: {'reason': 'exited', 'exit_code': 0}
         job = self.b.handle(self.req)
         self.b.verification = self.gate
-        publish = {k: self.req[k] for k in ['scope', 'channel', 'network']}
+        publish = self.request('repo_publish')
         with self.assertRaisesRegex(ValueError, 'receipt missing or stale'):
             self.b.handle(publish | {'action': 'repo_publish', 'id': job['id']})
 
     def test_final_execution_reserved(self):
         job = self.b.handle(self.req)
         self.b.execute = lambda job: {'reason': 'exited', 'exit_code': 0}
-        req = {k: self.req[k] for k in ['scope', 'channel', 'network']}
+        req = self.request('repo_diagnose')
         for i in range(3):
             self.b.handle(req | {'action': 'repo_diagnose', 'id': job['id'], 'argv': ['/bin/sh', '-c', 'true'], 'title': str(i)})
         with self.assertRaisesRegex(ValueError, 'reserved'):

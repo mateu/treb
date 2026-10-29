@@ -14,11 +14,11 @@ use Bot::Runtime::Workbench;
   sub text_result { $_[1] }
 }
 my $bot=bless {pending=>{channel=>'#ai',expires_at=>time+100,messages=>[
-  {nick=>'mateu',source_kind=>'conversation',msg=>'burt_bot: write a Perl fizzbuzz script and post a gist'}]}},'WorkbenchBot';
+  {nick=>'mateu',source_kind=>'conversation',msg=>'burt_bot: inspect the python-csv reference, write a Perl fizzbuzz script and post a gist'}]}},'WorkbenchBot';
 local $ENV{BURT_WORKBENCH_SOCKET}='/not/a/socket';
 local $ENV{IRC_SERVER}='irc.perl.org';
-my $scope=Bot::Runtime::Workbench::request_scope($bot,0);
-is($scope,Bot::Runtime::Workbench::request_scope($bot,1),'run and publish bind to same runtime request');
+my $scope=Bot::Runtime::Workbench::request_scope($bot,'edit_test');
+is($scope,Bot::Runtime::Workbench::request_scope($bot,'publish_gist'),'run and publish bind to same runtime request');
 like($scope,qr/^[a-f0-9]{64}$/,'scope is bounded digest');
 my $tool=bless {},'WorkbenchTool';
 my %defs=map {$_->{name}=>$_} @{Bot::Runtime::Workbench::tool_specs($bot)};
@@ -31,6 +31,37 @@ is(scalar keys %defs,9,'nine narrow tools including brokered documentation');
   is(scalar @{$bot->{sent}||[]},$before,'successful read is not reported as failed execution');
 }
 like($defs{publish_gist}{code}->($tool,{id=>'x',channel=>'#ai'}),qr/Invalid tool fields/,'model cannot choose scope/channel');
+# Authoritative transition table: only a direct trusted envelope can mint its
+# named capability; generic coding discussion is not an authority signal.
+for my $case (
+  ['read_status','burt_bot: inspect the python-csv reference'],
+  ['edit_test','burt_bot: write and test this Perl program'],
+  ['publish_gist','burt_bot: publish this as a gist'],
+  ['publish_repo','burt_bot: push this project to the repository'],
+) {
+  my ($cap,$text)=@$case;
+  my $saved=JSON::PP::decode_json(JSON::PP::encode_json($bot->{pending}));
+  $bot->{pending}{messages}[0]{msg}=$text;
+  ok(Bot::Runtime::Workbench::request_scope($bot,$cap),"$cap is granted only by its direct request");
+  for my $other (grep { $_ ne $cap } qw(read_status edit_test publish_gist publish_repo)) {
+    eval { Bot::Runtime::Workbench::request_scope($bot,$other) };
+    ok($@,"$cap does not upgrade $other");
+  }
+  $bot->{pending}=$saved;
+}
+{
+  my $saved=JSON::PP::decode_json(JSON::PP::encode_json($bot->{pending}));
+  $bot->{pending}{messages}[0]{msg}='burt_bot: how was the coding session?';
+  for my $cap (qw(read_status edit_test publish_gist publish_repo)) {
+    eval { Bot::Runtime::Workbench::request_scope($bot,$cap) };
+    ok($@,"coding-vocabulary-only text grants no $cap authority");
+  }
+  $bot->{pending}=$saved;
+}
+for my $name (qw(read_coding_reference run_code publish_gist read_repo_project publish_repo)) {
+  like($defs{$name}{description},qr/Requires a current trusted human/,
+    "$name describes its bounded human capability");
+}
 for my $case (
   ['private channel',sub {$_[0]{pending}{channel}='mateu'}],
   ['different channel',sub {$_[0]{pending}{channel}='#other'}],
@@ -42,37 +73,37 @@ for my $case (
 ) {
   my $copy=JSON::PP::decode_json(JSON::PP::encode_json($bot->{pending}));
   $case->[1]->($bot);
-  eval {Bot::Runtime::Workbench::request_scope($bot,1)};
+  eval {Bot::Runtime::Workbench::request_scope($bot,'publish_gist')};
   ok($@,"reject $case->[0]");
   $bot->{pending}=$copy;
 }
 $bot->{pending}{messages}[0]{msg}='burt_bot: write a script';
-ok(Bot::Runtime::Workbench::request_scope($bot,0),'run without publish permission');
-eval {Bot::Runtime::Workbench::request_scope($bot,1)};
+ok(Bot::Runtime::Workbench::request_scope($bot,'edit_test'),'run without publish permission');
+eval {Bot::Runtime::Workbench::request_scope($bot,'publish_gist')};
 like($@,qr/explicitly asking for a gist/,'publishing needs explicit current request');
 $bot->{pending}{messages}[0]{msg}='burt_bot: write tests and publish to the repository';
-is(Bot::Runtime::Workbench::request_scope($bot,0),Bot::Runtime::Workbench::request_scope($bot,'repo'),'repo run and publish share envelope');
-eval {Bot::Runtime::Workbench::request_scope($bot,1)};
+is(Bot::Runtime::Workbench::request_scope($bot,'edit_test'),Bot::Runtime::Workbench::request_scope($bot,'publish_repo'),'repo run and publish share envelope');
+eval {Bot::Runtime::Workbench::request_scope($bot,'publish_gist')};
 like($@,qr/gist/,'repo permission does not authorize gist');
 for my $text ('burt_bot: write tests and publish a gist', 'burt_bot: inspect the repo code', 'burt_bot: commit this code') {
   $bot->{pending}{messages}[0]{msg}=$text;
-  eval {Bot::Runtime::Workbench::request_scope($bot,'repo')};
+  eval {Bot::Runtime::Workbench::request_scope($bot,'publish_repo')};
   like($@,qr/explicitly asking to publish/,'repo publication needs both destination and action');
 }
-$bot->{pending}{messages}[0]{msg}='burt_bot: update code and push to repo';
-ok(Bot::Runtime::Workbench::request_scope($bot,'repo'),'explicit push admitted');
+$bot->{pending}{messages}[0]{msg}='burt_bot: inspect the repository, update code and push to repo';
+ok(Bot::Runtime::Workbench::request_scope($bot,'publish_repo'),'explicit push admitted');
 like($defs{publish_repo}{code}->($tool,{id=>'x',branch=>'main'}),qr/Invalid tool fields/,'publication cannot substitute destination');
 {
   local $ENV{IRC_SERVER}='elsewhere';
-  eval {Bot::Runtime::Workbench::request_scope($bot,0)};
+  eval {Bot::Runtime::Workbench::request_scope($bot,'edit_test')};
   like($@,qr/network/,'network cannot be overridden');
 }
 # Test-channel admission uses the same fresh human/publication gates.
 {
   my $saved=JSON::PP::decode_json(JSON::PP::encode_json($bot->{pending}));
-  my $ai_scope=Bot::Runtime::Workbench::request_scope($bot,'repo');
+  my $ai_scope=Bot::Runtime::Workbench::request_scope($bot,'publish_repo');
   $bot->{pending}{channel}='#mateu-test';
-  my $test_scope=Bot::Runtime::Workbench::request_scope($bot,'repo');
+  my $test_scope=Bot::Runtime::Workbench::request_scope($bot,'publish_repo');
   ok($test_scope,'test channel accepts explicit current human publication request');
   isnt($test_scope,$ai_scope,'request scope remains channel-bound');
   my $forwarded;
@@ -81,10 +112,10 @@ like($defs{publish_repo}{code}->($tool,{id=>'x',branch=>'main'}),qr/Invalid tool
   $defs{read_repo_project}{code}->($tool,{branch=>'burt/dictionary',project=>'dictionary'});
   is($forwarded->{channel},'#mateu-test','broker receives actual runtime channel, not hardcoded #ai');
   $bot->{pending}{messages}[0]{msg}='burt_bot: write a script';
-  eval {Bot::Runtime::Workbench::request_scope($bot,'repo')};
+  eval {Bot::Runtime::Workbench::request_scope($bot,'publish_repo')};
   like($@,qr/explicitly asking to publish/,'test channel still requires explicit publication');
   $bot->{pending}{messages}[0]{source_kind}='reminder';
-  eval {Bot::Runtime::Workbench::request_scope($bot,0)};
+  eval {Bot::Runtime::Workbench::request_scope($bot,'edit_test')};
   ok($@,'test channel reminder cannot authorize coding');
   $bot->{pending}=$saved;
 }
@@ -95,10 +126,10 @@ Bot::Runtime::Workbench::admit_task($bot);
 ok($bot->{pending}{coding_task},'current addressed coding envelope admitted');
 cmp_ok($bot->{pending}{expires_at},'>=',time+1799,'separate thirty-minute coding lifetime');
 my $task_expiry=$bot->{pending}{expires_at};
-my $task_scope=Bot::Runtime::Workbench::request_scope($bot,0);
+my $task_scope=Bot::Runtime::Workbench::request_scope($bot,'edit_test');
 Bot::Runtime::Workbench::admit_task($bot);
 is($bot->{pending}{expires_at},$task_expiry,'admission never renews deadline');
-is(Bot::Runtime::Workbench::request_scope($bot,0),$task_scope,'job scope stable');
+is(Bot::Runtime::Workbench::request_scope($bot,'edit_test'),$task_scope,'job scope stable');
 is(scalar @{$bot->{sent}},1,'one start notice');
 Bot::Runtime::Workbench::report_result($bot,'repo_run',JSON::PP::encode_json({
  id=>'a'x32,state=>'failed',result=>{exit_code=>1,output=>'INJECTED stdout'}}));
@@ -120,7 +151,7 @@ is($bot->{pending}{coding_last_result},$project_failure,'passing diagnostic does
 like($defs{run_code}{code}->($tool,{files=>{'x.pl'=>'1;'},argv=>['/usr/bin/perl','x.pl'],title=>'probe'}),
  qr/Repository diagnostics must use diagnose_repo_job/,'repository diagnostics reuse the immutable bundle');
 $bot->{pending}{expires_at}=time-1;
-eval {Bot::Runtime::Workbench::request_scope($bot,0)};
+eval {Bot::Runtime::Workbench::request_scope($bot,'edit_test')};
 ok($@,'extended deadline still expires');
 for my $kind ('reminder','activity_followup','conversation') {
  my $pending={channel=>'#ai',expires_at=>time+100,messages=>[

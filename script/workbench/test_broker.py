@@ -20,7 +20,7 @@ class BrokerTests(unittest.TestCase):
         self.b = Broker(self.tmp.name, self.token, execute)
         self.addCleanup(self.b.db.close)
         self.b.post_gist = self.post
-        self.req = dict(action='run', scope='a'*64, channel='#ai', network='irc.perl.org',
+        self.req = dict(action='run', scope='a'*64, capability='edit_test', grant='b1bb9ad6930eaa6c19e1ff53a03596d14cf56b7d02598413f52b942e3e516d93', channel='#ai', network='irc.perl.org',
                         files={'main.py': 'print(42)\n', 'test.py': 'assert 6*7==42\n'},
                         argv=['/usr/bin/python3', '/work/test.py'], title='test')
 
@@ -30,7 +30,19 @@ class BrokerTests(unittest.TestCase):
 
     def publish(self, job):
         return self.b.handle({k:self.req[k] for k in ('scope', 'channel', 'network')}
-                             | {'action':'publish', 'id':job['id']})
+                             | {'capability':'publish_gist', 'grant':'651dd50e7ef8d6ee04e34ce5b6844653529b739e54d693e8d1f6e8ff9abeef87', 'action':'publish', 'id':job['id']})
+
+    def test_capability_grant_is_required_and_action_bound(self):
+        for request in (
+            {k:v for k,v in self.req.items() if k not in ('capability', 'grant')},
+            self.req | {'grant': '0' * 64},
+            self.req | {'capability': 'read_status'},
+            self.req | {'action': 'publish', 'id': '0' * 32},
+        ):
+            with self.assertRaisesRegex(ValueError, 'capability|action'):
+                self.b.handle(request)
+        # The exact runtime-shaped envelope remains acceptable for its action.
+        self.assertEqual(self.b.handle(self.req)['state'], 'passed')
 
     def test_exact_bundle_and_idempotence(self):
         r = self.b.handle(self.req)
@@ -62,7 +74,7 @@ class BrokerTests(unittest.TestCase):
             with self.assertRaises(ValueError): self.b.handle(req)
 
     def test_test_channel_allowed_without_widening_boundary(self):
-        r = self.b.handle(self.req | {'channel':'#mateu-test'})
+        r = self.b.handle(self.req | {'channel':'#mateu-test', 'grant':'5d8e24c11404ff3205a576035858801de0067350db9649f99b7d4f9e38c569a2'})
         self.assertEqual(r['state'], 'passed')
         for channel in ('#mateu-test-other', '#AI', 'mateu', '#other'):
             with self.assertRaises(ValueError):
@@ -108,6 +120,7 @@ class BrokerTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.publish(r)
         # A fresh scope can run at most five distinct attempts.
         self.req['scope'] = 'c'*64
+        self.req['grant'] = '98d4412bd6e494e71d8fa5db3821efdf8340ca898f201f039f0dad29021d7169'
         for i in range(5): self.b.handle(self.req | {'title':str(i)})
         with self.assertRaises(ValueError): self.b.handle(self.req | {'title':'sixth'})
 
@@ -124,7 +137,7 @@ class BrokerTests(unittest.TestCase):
         second = Broker(self.tmp.name, self.token)
         self.addCleanup(second.db.close)
         result = second.handle({k:self.req[k] for k in ('scope','channel','network')}
-                               | {'action':'publish','id':r['id']})
+                               | {'capability':'publish_gist','grant':'651dd50e7ef8d6ee04e34ce5b6844653529b739e54d693e8d1f6e8ff9abeef87','action':'publish','id':r['id']})
         self.assertEqual(result['url'], 'https://gist.github.com/burt-agent/abcdef')
 
     def test_verbose_failure_keeps_error_head_and_suite_summary_tail(self):

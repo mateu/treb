@@ -17,8 +17,11 @@ class RejectionAuditTests(unittest.TestCase):
         return [dict(row) for row in self.b.db.execute('SELECT * FROM rejections ORDER BY seq')]
 
     def status(self, phase='stopped', reason='iteration_limit', **kw):
-        return self.b.handle({k: self.req[k] for k in ('scope', 'channel', 'network')} |
-                             dict(action='task_status', phase=phase, reason=reason) | kw)
+        scope = kw.pop('scope', self.req['scope'])
+        channel = kw.pop('channel', self.req['channel'])
+        network = kw.pop('network', self.req['network'])
+        envelope = self.b.capability_envelope('task_status', scope, channel, network)
+        return self.b.handle(envelope | dict(action='task_status', phase=phase, reason=reason) | kw)
 
     def test_rejections_survive_restart_without_jobs_or_quota_cost(self):
         cases = [
@@ -113,7 +116,7 @@ class RejectionAuditTests(unittest.TestCase):
 
     def test_recursive_repair_records_original_rejection_only_once(self):
         job = self.b.handle(self.req)
-        req = {k: self.req[k] for k in ('scope', 'channel', 'network')}
+        req = {k: self.req[k] for k in ('scope', 'capability', 'grant', 'channel', 'network')}
         req |= dict(action='repo_repair', id=job['id'], changes={'data.txt': 'SECRET'},
                     delete=[], argv=self.req['argv'], title='repair')
         with self.assertRaises(ValueError): self.b.handle(req)
