@@ -164,6 +164,8 @@ class Broker:
         # job journal. It must survive restart and job-retention pruning.
         self.db.execute('''CREATE TABLE IF NOT EXISTS task_budgets
             (task_id TEXT PRIMARY KEY, attempts INTEGER NOT NULL, updated REAL NOT NULL)''')
+        self.db.execute('''CREATE TABLE IF NOT EXISTS task_publications
+            (task_id TEXT PRIMARY KEY, consumed INTEGER NOT NULL, updated REAL NOT NULL)''')
         self.db.execute('''CREATE TABLE IF NOT EXISTS proposals
             (id TEXT PRIMARY KEY, scope TEXT NOT NULL, requester TEXT NOT NULL,
              channel TEXT NOT NULL, network TEXT NOT NULL, action TEXT NOT NULL,
@@ -202,6 +204,8 @@ class Broker:
         self.db.execute('DELETE FROM task_scopes WHERE task_id NOT IN (SELECT DISTINCT task_id FROM task_checkpoints) '
                         'AND created<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM task_budgets WHERE task_id NOT IN (SELECT DISTINCT task_id FROM task_checkpoints) '
+                        'AND updated<?', (now - AUDIT_TTL,))
+        self.db.execute('DELETE FROM task_publications WHERE task_id NOT IN (SELECT DISTINCT task_id FROM task_checkpoints) '
                         'AND updated<?', (now - AUDIT_TTL,))
         expired_proposals = self.db.execute(
             'SELECT id,scope,channel,network FROM proposals WHERE state="proposed" AND expires<=?', (now,)).fetchall()
@@ -282,7 +286,8 @@ class Broker:
             json.dumps(original, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
         message = str(exc)
         uncertain = ('submission failed or response lost' in message
-                     or 'submission failed or response was lost' in message)
+                     or 'submission failed or response was lost' in message
+                     or 'publication outcome requires operator reconciliation' in message)
         stale = message.startswith('branch changed') or 'snapshot expired' in message
         budget = message.startswith(('limit:', 'global limit:'))
         code, public, disposition = (
@@ -374,9 +379,19 @@ class Broker:
                         (task_id, 1, now))
 
     def task_publication_count(self, task_id):
-        return self.db.execute('SELECT COUNT(*) FROM jobs j LEFT JOIN task_scopes s ON s.scope=j.scope '
-                               "WHERE COALESCE(s.task_id,j.scope)=? AND j.state IN ('published','publishing','uncertain')",
-                               (task_id,)).fetchone()[0]
+        row = self.db.execute('SELECT consumed FROM task_publications WHERE task_id=?', (task_id,)).fetchone()
+        if row:
+            return row['consumed']
+        consumed = self.db.execute('SELECT COUNT(*) FROM jobs j LEFT JOIN task_scopes s ON s.scope=j.scope '
+                                   "WHERE COALESCE(s.task_id,j.scope)=? AND j.state IN ('published','publishing','uncertain')",
+                                   (task_id,)).fetchone()[0]
+        self.db.execute('INSERT OR IGNORE INTO task_publications VALUES (?,?,?)', (task_id, consumed, time.time()))
+        return consumed
+
+    def consume_task_publication(self, task_id, now):
+        self.db.execute('INSERT INTO task_publications VALUES (?,?,?) '
+                        'ON CONFLICT(task_id) DO UPDATE SET consumed=1,updated=excluded.updated',
+                        (task_id, 1, now))
 
     def checkpoint_summary(self, row):
         jobs = self.task_job_rows(row['task_id'])
@@ -661,6 +676,7 @@ class Broker:
             raise ValueError('global limit: 10 gist submissions per day')
         if self.task_publication_count(self.task_binding(scope)['task_id']):
             raise ValueError('limit: one gist submission per IRC request')
+        self.consume_task_publication(self.task_binding(scope)['task_id'], time.time())
         self.db.execute("UPDATE jobs SET state='publishing' WHERE id=?", (job_id,))
         self.resource_checkpoint('publication', job_id, req, 'publishing')
         self.db.commit()
@@ -696,6 +712,7 @@ class Broker:
             raise ValueError('global limit: 10 submissions per day')
         if self.task_publication_count(self.task_binding(job['scope'])['task_id']):
             raise ValueError('limit: one submission per IRC request')
+        self.consume_task_publication(self.task_binding(job['scope'])['task_id'], time.time())
         self.db.execute("UPDATE jobs SET state='publishing' WHERE id=?", (job['id'],))
         self.resource_checkpoint('publication', job['id'], req, 'publishing')
         self.db.commit()

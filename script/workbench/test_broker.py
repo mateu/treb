@@ -92,6 +92,24 @@ class BrokerTests(unittest.TestCase):
             self.b.handle(sixth)
         self.assertEqual(self.runs.__len__(), 5)
 
+    def test_checkpointed_publication_budget_survives_pruned_job_journal(self):
+        first = self.b.handle(self.req)
+        self.publish(first)
+        checkpoint = self.checkpoint()
+        self.b.db.execute('DELETE FROM repo_jobs')
+        self.b.db.execute('DELETE FROM jobs')
+        self.b.db.commit()
+        fresh_scope = 'b' * 64
+        resume = self.b.capability_envelope('task_resume', fresh_scope, '#ai', 'irc.perl.org')
+        self.b.handle(resume | {'action': 'task_resume', 'checkpoint_id': checkpoint['checkpoint_id'],
+                                'requester': 'mateu'})
+        candidate = self.b.handle(self.req | {'scope': fresh_scope,
+            'grant': self.b.capability_envelope('run', fresh_scope, '#ai', 'irc.perl.org')['grant'],
+            'title': 'fresh-after-prune'})
+        with self.assertRaisesRegex(ValueError, 'one gist submission'):
+            self.b.handle(self.b.capability_envelope('publish', fresh_scope, '#ai', 'irc.perl.org')
+                          | {'action': 'publish', 'id': candidate['id']})
+
     def test_uncertain_checkpoint_is_visible_and_absorbs_resume_and_publication(self):
         job = self.b.handle(self.req)
         self.b.post_gist = lambda payload: (_ for _ in ()).throw(OSError('lost response'))
