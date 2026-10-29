@@ -28,6 +28,7 @@ MAX_ATTEMPTS = 5
 AUDIT_LIMIT = 512
 AUDIT_TTL = 7 * 86400
 PROPOSAL_TTL = 300
+SNAPSHOT_TTL = 300
 ACTIONS = frozenset(('run', 'publish', 'repo_read', 'repo_run', 'repo_publish',
                      'repo_inspect', 'repo_repair', 'repo_diagnose', 'reference', 'task_status',
                      'proposal_create', 'proposal_confirm'))
@@ -143,6 +144,10 @@ class Broker:
              channel TEXT NOT NULL, network TEXT NOT NULL, action TEXT NOT NULL,
              params TEXT NOT NULL, created REAL NOT NULL, expires REAL NOT NULL,
              state TEXT NOT NULL)''')
+        self.db.execute('''CREATE TABLE IF NOT EXISTS repo_snapshots
+            (id TEXT PRIMARY KEY, scope TEXT NOT NULL, channel TEXT NOT NULL,
+             network TEXT NOT NULL, snapshot TEXT NOT NULL, created REAL NOT NULL,
+             expires REAL NOT NULL, state TEXT NOT NULL)''')
         (self.base / 'jobs.sqlite').chmod(0o600)
         self.prune_audit()
         self.db.commit()
@@ -163,6 +168,54 @@ class Broker:
         self.db.execute('DELETE FROM proposals WHERE created<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM proposals WHERE id NOT IN '
                         '(SELECT id FROM proposals ORDER BY created DESC LIMIT ?)', (AUDIT_LIMIT,))
+        self.db.execute('UPDATE repo_snapshots SET state="expired" WHERE state="active" AND expires<=?', (now,))
+        self.db.execute('DELETE FROM repo_snapshots WHERE created<?', (now - AUDIT_TTL,))
+        self.db.execute('DELETE FROM repo_snapshots WHERE id NOT IN '
+                        '(SELECT id FROM repo_snapshots ORDER BY created DESC LIMIT ?)', (AUDIT_LIMIT,))
+
+    def create_snapshot(self, req):
+        snapshot = self.repository.snapshot(req['branch'], req['project'])
+        now = time.time()
+        snapshot_id = uuid.uuid4().hex
+        self.db.execute('INSERT INTO repo_snapshots VALUES (?,?,?,?,?,?,?,?)',
+                        (snapshot_id, req['scope'], req['channel'], req['network'],
+                         json.dumps(snapshot, sort_keys=True), now, now + SNAPSHOT_TTL, 'active'))
+        self.prune_audit()
+        self.db.commit()
+        return snapshot | {'snapshot_id': snapshot_id}
+
+    def load_snapshot(self, req, snapshot_id, require_active=True):
+        if not isinstance(snapshot_id, str) or not re.fullmatch(r'[a-f0-9]{32}', snapshot_id):
+            raise ValueError('invalid repository snapshot id')
+        row = self.db.execute('SELECT * FROM repo_snapshots WHERE id=?', (snapshot_id,)).fetchone()
+        if not row or row['scope'] != req['scope'] or row['channel'] != req['channel'] or row['network'] != req['network']:
+            raise ValueError('repository snapshot not found in this request')
+        if row['state'] == 'active' and row['expires'] <= time.time():
+            self.db.execute('UPDATE repo_snapshots SET state="expired" WHERE id=?', (snapshot_id,))
+            self.db.commit()
+            row = self.db.execute('SELECT * FROM repo_snapshots WHERE id=?', (snapshot_id,)).fetchone()
+        if require_active and row['state'] != 'active':
+            raise ValueError('repository snapshot expired; read project again')
+        return json.loads(row['snapshot']) | {'snapshot_id': snapshot_id}
+
+    @staticmethod
+    def materialize_files(base, changes, deleted):
+        if (not isinstance(changes, dict) or not isinstance(deleted, list)
+                or any(not isinstance(name, str) for name in deleted)
+                or len(deleted) != len(set(deleted))):
+            raise ValueError('repository test requires file replacements and an explicit deletion list')
+        if any(name not in base or name in changes for name in deleted):
+            raise ValueError('delete only existing files, without also replacing them')
+        files = dict(base)
+        files.update(changes)
+        for name in deleted:
+            del files[name]
+        return files
+
+    @staticmethod
+    def candidate_delta(base, files):
+        return ({name: value for name, value in files.items() if base.get(name) != value},
+                sorted(set(base) - set(files)))
 
     def record_rejection(self, req, exc, raw=None):
         # Scope/channel/action come only from the trusted runtime IPC envelope.
@@ -207,14 +260,14 @@ class Broker:
             self.record_rejection(req, exc)
             raise
 
-    def _handle(self, req, _diagnostic=False):
+    def _handle(self, req, _diagnostic=False, _saved_snapshot=False):
         if not isinstance(req, dict):
             raise ValueError('object required')
         action = req.get('action')
         allowed = {'action', 'scope', 'capability', 'grant', 'channel', 'network'}
         fields = {'run': {'files','argv','title'}, 'publish': {'id'},
                   'repo_read': {'branch','project'},
-                  'repo_run': {'files','argv','title','branch','project','base_sha'},
+                  'repo_run': {'snapshot_id','changes','delete','argv','title'},
                   'repo_publish': {'id'}, 'repo_inspect': {'id'},
                   'repo_repair': {'id','changes','delete','argv','title'},
                   'repo_diagnose': {'id','argv','title'}}
@@ -239,9 +292,13 @@ class Broker:
                                if action == 'proposal_create' else ACTION_CAPABILITY.get(action))
         if expected_capability is None:
             raise ValueError('invalid action or fields')
-        grant_action = req['proposal_action'] if action == 'proposal_create' else action
-        expected_grant = self.capability_envelope(
-            grant_action, scope, req['channel'], req['network'])['grant']
+        # A bounded project read is a prerequisite for an edit-authorized
+        # repository test. It remains read-only but shares the edit scope.
+        if action == 'repo_read' and capability in ('read_status', 'edit_test'):
+            expected_capability = capability
+        expected_grant = hashlib.sha256(json.dumps(
+            [scope, req['channel'], req['network'], expected_capability],
+            separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
         if (capability != expected_capability or not isinstance(req['grant'], str)
                 or not hmac.compare_digest(req['grant'], expected_grant)):
             raise ValueError('invalid capability grant')
@@ -287,46 +344,40 @@ class Broker:
             if action == 'repo_diagnose':
                 # Same exact source, different diagnostic argv. This job can NEVER
                 # publish, even if its command exits zero.
+                source = self.load_snapshot(req, destination['snapshot_id'], require_active=False)
+                changes, deleted = self.candidate_delta(source['files'], json.loads(job['files']))
                 return Broker._handle(self, self.capability_envelope('repo_run', req['scope'], req['channel'], req['network'])
                                      | {k: req[k] for k in ('argv','title')}
-                                     | {'action':'repo_run', 'files':json.loads(job['files']),
-                                        **{k: destination[k] for k in ('branch','project','base_sha')}},
-                                     _diagnostic=True)
-            changes, deleted = req['changes'], req['delete']
-            if (not isinstance(changes, dict) or not isinstance(deleted, list)
-                    or any(not isinstance(n, str) for n in deleted)
-                    or len(deleted) != len(set(deleted))):
-                raise ValueError('repair requires file replacements and an explicit deletion list')
-            files = json.loads(job['files'])
-            if any(n not in files or n in changes for n in deleted):
-                raise ValueError('delete only existing files, without also replacing them')
-            files.update(changes)
-            for name in deleted:
-                del files[name]
-            # Re-enter the ordinary run path: same destination/base, full validation,
-            # quota, fresh base check and new immutable job. No publication here.
+                                     | {'action':'repo_run', 'snapshot_id':source['snapshot_id'],
+                                        'changes':changes, 'delete':deleted},
+                                     _diagnostic=True, _saved_snapshot=True)
+            files = self.materialize_files(json.loads(job['files']), req['changes'], req['delete'])
+            source = self.load_snapshot(req, destination['snapshot_id'], require_active=False)
+            changes, deleted = self.candidate_delta(source['files'], files)
+            # Re-enter the ordinary run path through the same snapshot materializer.
             return self._handle(self.capability_envelope('repo_run', req['scope'], req['channel'], req['network'])
                                | {k: req[k] for k in ('argv','title')}
-                               | {'action': 'repo_run', 'files': files,
-                                  **{k: destination[k] for k in ('branch','project','base_sha')}})
+                               | {'action': 'repo_run', 'snapshot_id': source['snapshot_id'],
+                                  'changes': changes, 'delete': deleted}, _saved_snapshot=True)
         destination = None
         policy = None
         if action == 'repo_read':
             validate_destination(req['branch'], req['project'])
-            return self.repository.snapshot(req['branch'], req['project'])
+            return self.create_snapshot(req)
         if action == 'repo_run':
-            validate_destination(req['branch'], req['project'], req['base_sha'])
-            snapshot = self.repository.snapshot(req['branch'], req['project'])
-            if snapshot['base_sha'] != req['base_sha']:
+            snapshot = self.load_snapshot(req, req['snapshot_id'], require_active=not _saved_snapshot)
+            current = self.repository.snapshot(snapshot['branch'], snapshot['project'])
+            if any(current[key] != snapshot[key] for key in ('base_sha', 'tree_sha', 'exists', 'files')):
                 raise ValueError('branch changed; read project and retest against the new base')
-            destination = {k: snapshot[k] for k in ('branch','project','base_sha','exists')}
+            files = self.materialize_files(snapshot['files'], req['changes'], req['delete'])
+            destination = {k: snapshot[k] for k in ('branch','project','base_sha','tree_sha','exists','snapshot_id')}
             if self.verification is not None:
                 policy = self.verification.policy(snapshot)
                 destination['verification_policy'] = self.verification.identity(policy)
             if _diagnostic:
                 destination['diagnostic_only'] = True
         if action in ('run', 'repo_run'):
-            files, argv = validate({'files': req['files'], 'argv': req['argv']},
+            files, argv = validate({'files': files if action == 'repo_run' else req['files'], 'argv': req['argv']},
                                    max_input_bytes=MAX_INPUT_BYTES if action == 'repo_run' else MAX_GIST_INPUT_BYTES)
             # Gists use flat filenames. No extraction, generated paths, symlinks,
             # stdout-as-files, or host file reads are part of publishing.

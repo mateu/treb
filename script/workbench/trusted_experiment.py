@@ -83,10 +83,12 @@ def score(task, bundle, acceptance):
                     bundle['result'].get('verification',{}).get('kind')=='trusted_checks'))
 
 
-def req(task, files, title='control'):
+def req(task, files, snapshot_id, title='control'):
+    baseline = task['files']
     return (r.Broker.capability_envelope('repo_run', 'a'*64, '#ai', 'irc.perl.org')
-            | dict(action='repo_run', branch=task['branch'], project=task['project'],
-                   base_sha=r.digest(task['files'])[:40], files=files,
+            | dict(action='repo_run', snapshot_id=snapshot_id,
+                   changes={n:c for n,c in files.items() if baseline.get(n) != c},
+                   delete=sorted(set(baseline) - set(files)),
                    argv=['/bin/sh','-c','true'], title=title))
 
 
@@ -100,8 +102,10 @@ def preflight(repo, output, env_file, perl_root):
         directory.mkdir()
         b = TrialBroker(directory, task, time.time()+180)
         good = task['files'] | {spec['editable'][0]: solutions()[name]}
+        snapshot = b.handle(r.Broker.capability_envelope('repo_read', 'a'*64, '#ai', 'irc.perl.org')
+                            | dict(action='repo_read', branch=task['branch'], project=task['project']))
         for label, files, expected in [('original',task['files'],False), ('gold',good,True)]:
-            job = b.handle(req(task,files,label))
+            job = b.handle(req(task,files,snapshot['snapshot_id'],label))
             verdict = job['state']=='passed'
             bundle = dict(files=files, result=job['result'], state=job['state'])
             r.write_json(directory/(label+'.json'),bundle)
@@ -115,7 +119,7 @@ def preflight(repo, output, env_file, perl_root):
                              ('deleted-readme',{n:c for n,c in good.items() if n!='README.md'}),
                              ('framework-shadow',good|{'unittest.py':'pass'})]:
             rejected = False
-            try: b.handle(req(task,files,label))
+            try: b.handle(req(task,files,snapshot['snapshot_id'],label))
             except ValueError: rejected=True
             report.append(dict(task=name,control=label,matched=rejected))
         b.db.close()

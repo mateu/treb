@@ -1,19 +1,47 @@
+import tempfile
+import time
 import unittest
-from trusted_experiment import score, evaluator_verdict, req
+from trusted_experiment import TrialBroker, score, evaluator_verdict, req
 from broker import Broker
-from trial_support import digest
+from trial_support import Snapshot
 
 
 class ScoringTests(unittest.TestCase):
     def test_experiment_request_uses_action_bound_capability_envelope(self):
         task = {'branch':'burt/dictionary', 'project':'dictionary', 'files':{'main.py':'pass\n'}}
-        request = req(task, task['files'])
+        request = req(task, task['files'], 'f'*32)
         self.assertEqual(request['action'], 'repo_run')
         self.assertEqual(request['capability'], 'edit_test')
         self.assertEqual(request, Broker.capability_envelope('repo_run', 'a'*64, '#ai', 'irc.perl.org') | {
-            'action':'repo_run', 'branch':'burt/dictionary', 'project':'dictionary',
-            'base_sha':digest(task['files'])[:40],
-            'files':task['files'], 'argv':['/bin/sh','-c','true'], 'title':'control'})
+            'action':'repo_run', 'snapshot_id':'f'*32, 'changes':{}, 'delete':[],
+            'argv':['/bin/sh','-c','true'], 'title':'control'})
+
+    def test_experiment_request_materializes_explicit_changes_and_deletions(self):
+        task = {'branch':'burt/dictionary', 'project':'dictionary',
+                'files':{'main.py':'old\n', 'old.py':'remove\n'}}
+        request = req(task, {'main.py':'new\n', 'new.py':'add\n'}, 'f'*32)
+        self.assertEqual(request['changes'], {'main.py':'new\n', 'new.py':'add\n'})
+        self.assertEqual(request['delete'], ['old.py'])
+
+    def test_experiment_snapshot_has_stable_tree_identity(self):
+        task = {'id':'dictionary', 'branch':'burt/dictionary', 'project':'dictionary',
+                'files':{'main.py':'pass\n'}}
+        snapshot = Snapshot(task).snapshot(task['branch'], task['project'])
+        changed = Snapshot(task | {'files':{'main.py':'changed\n'}}).snapshot(task['branch'], task['project'])
+        self.assertEqual(snapshot['tree_sha'], snapshot['base_sha'])
+        self.assertNotEqual(snapshot['tree_sha'], changed['tree_sha'])
+
+    def test_trial_broker_accepts_migrated_snapshot_request(self):
+        task = {'id':'dictionary', 'branch':'burt/dictionary', 'project':'dictionary',
+                'files':{'main.py':'pass\n'}}
+        with tempfile.TemporaryDirectory() as base:
+            broker = TrialBroker(base, task, time.time()+30)
+            self.addCleanup(broker.db.close)
+            broker.execute = lambda job: {'reason':'exited', 'exit_code':0, 'output':''}
+            snapshot = broker.handle(Broker.capability_envelope('repo_read', 'a'*64, '#ai', 'irc.perl.org') |
+                                     {'action':'repo_read', 'branch':task['branch'], 'project':task['project']})
+            job = broker.handle(req(task, {'main.py':'changed\n'}, snapshot['snapshot_id']))
+            self.assertEqual(job['state'], 'passed')
 
     def test_returned_launcher_failure_is_unscored(self):
         result = evaluator_verdict({'reason':'exited', 'exit_code':1,

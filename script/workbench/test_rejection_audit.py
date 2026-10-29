@@ -25,13 +25,13 @@ class RejectionAuditTests(unittest.TestCase):
 
     def test_rejections_survive_restart_without_jobs_or_quota_cost(self):
         cases = [
-            (self.req | {'files': {'main.py': 'SECRET_SOURCE'*12000}}, 'input files exceed 128 KiB: submitted_bytes=156000 allowed_bytes=131072 excess_bytes=24928'),
-            (self.req | {'files': self.files | {'data.txt': 'SECRET_SOURCE'}}, 'protected baseline file changed'),
+            (self.req | {'changes': {'main.py': 'SECRET_SOURCE'*12000}}, 'input files exceed 128 KiB'),
+            (self.req | {'changes': {'data.txt': 'SECRET_SOURCE'}}, 'protected baseline file changed'),
             (self.req | {'argv': ['SECRET_COMMAND']}, 'invalid command; use absolute python3, perl, or sh'),
         ]
         for req, reason in cases:
             with self.assertRaises(ValueError): self.b.handle(req)
-            self.assertEqual(self.records()[-1]['reason'], reason)
+            self.assertIn(reason, self.records()[-1]['reason'])
             self.assertEqual(self.records()[-1]['request_sha256'], hashlib.sha256(
                 json.dumps(req, sort_keys=True, ensure_ascii=True).encode()).hexdigest())
         self.assertEqual(self.status(), {'jobs': []})

@@ -115,7 +115,7 @@ class Snapshot:
     def snapshot(self, branch, project):
         if (branch, project) != (self.task['branch'], self.task['project']):
             raise ValueError('experiment task destination is fixed')
-        return dict(branch=branch, project=project, base_sha=self.base_sha,
+        return dict(branch=branch, project=project, base_sha=self.base_sha, tree_sha=self.base_sha,
                     exists=True, files=self.task['files'].copy())
 
     def publish(self, *_):

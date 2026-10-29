@@ -29,9 +29,19 @@ class VerificationTests(unittest.TestCase):
         self.repo = FakeRepository()
         self.repo.files = self.files.copy()
         self.b.repository = self.repo
-        self.req = dict(action='repo_run', scope='a'*64, capability='edit_test', grant='b1bb9ad6930eaa6c19e1ff53a03596d14cf56b7d02598413f52b942e3e516d93', channel='#ai', network='irc.perl.org',
-                        branch='burt/dictionary', project='dictionary', base_sha=A,
-                        files=self.files.copy(), argv=['/bin/sh', '-c', 'true'], title='control')
+        self.snapshot = self.b.handle(Broker.capability_envelope('repo_read', 'a'*64, '#ai', 'irc.perl.org') | dict(
+            action='repo_read', branch='burt/dictionary', project='dictionary'))
+        self.req = Broker.capability_envelope('repo_run', 'a'*64, '#ai', 'irc.perl.org') | dict(
+            action='repo_run', snapshot_id=self.snapshot['snapshot_id'], changes={}, delete=[],
+            argv=['/bin/sh', '-c', 'true'], title='control')
+
+    def repo_run(self, files=None, title='control'):
+        files = self.files if files is None else files
+        changes = {name: value for name, value in files.items() if self.files.get(name) != value}
+        deleted = sorted(set(self.files) - set(files))
+        return Broker.capability_envelope('repo_run', 'a'*64, '#ai', 'irc.perl.org') | dict(
+            action='repo_run', snapshot_id=self.snapshot['snapshot_id'], changes=changes, delete=deleted,
+            argv=['/bin/sh', '-c', 'true'], title=title)
 
     def request(self, action):
         return self.b.capability_envelope(action, self.req['scope'], self.req['channel'], self.req['network'])
@@ -49,20 +59,20 @@ class VerificationTests(unittest.TestCase):
                 files = self.files.copy()
                 if change == 'replace': files[name] = 'weakened'
                 else: del files[name]
-                with self.assertRaises(ValueError): self.b.handle(self.req | {'files': files})
+                with self.assertRaises(ValueError): self.b.handle(self.repo_run(files))
         with self.assertRaises(ValueError):
-            self.b.handle(self.req | {'files': self.files | {'unittest.py': 'shadow'}})
+            self.b.handle(self.repo_run(self.files | {'unittest.py': 'shadow'}))
         self.b.verification = Verification({})
         with self.assertRaisesRegex(ValueError, 'policy required'): self.b.handle(self.req)
         self.assertEqual(self.executions, [])
 
     def test_new_regression_and_edited_source_allowed(self):
-        self.b.handle(self.req | {'files': self.files | {'main.py': 'print(2)', 'tests/new.py': 'assert True'}})
+        self.b.handle(self.repo_run(self.files | {'main.py': 'print(2)', 'tests/new.py': 'assert True'}))
         self.assertEqual(len(self.executions), 1)
 
     def test_baseline_drift_fails_closed(self):
         self.repo.files['data.txt'] = 'changed'
-        with self.assertRaisesRegex(ValueError, 'baseline changed'): self.b.handle(self.req)
+        with self.assertRaisesRegex(ValueError, 'branch changed'): self.b.handle(self.req)
 
     def test_policy_identity_invalidates_dedup_and_publication(self):
         self.b.verify_execute = lambda job, checks: {'reason': 'exited', 'exit_code': 0}
@@ -94,7 +104,7 @@ class VerificationTests(unittest.TestCase):
             self.b.handle(req | {'action': 'repo_diagnose', 'id': job['id'], 'argv': ['/bin/sh', '-c', 'true'], 'title': str(i)})
         with self.assertRaisesRegex(ValueError, 'reserved'):
             self.b.handle(req | {'action': 'repo_diagnose', 'id': job['id'], 'argv': ['/bin/sh', '-c', 'true'], 'title': 'last'})
-        result = self.b.handle(self.req | {'title': 'final'})
+        result = self.b.handle(self.repo_run(title='final'))
         self.assertEqual(result['attempts_remaining'], 0)
 
     def test_reference_cannot_accept_url_or_escape_catalog(self):
