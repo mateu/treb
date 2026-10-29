@@ -207,6 +207,9 @@ class Broker:
                         'AND updated<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM task_publications WHERE task_id NOT IN (SELECT DISTINCT task_id FROM task_checkpoints) '
                         'AND updated<?', (now - AUDIT_TTL,))
+        self.db.execute('DELETE FROM resource_checkpoints WHERE created<?', (now - AUDIT_TTL,))
+        self.db.execute('DELETE FROM resource_checkpoints WHERE id NOT IN '
+                        '(SELECT id FROM resource_checkpoints ORDER BY created DESC,id DESC LIMIT ?)', (AUDIT_LIMIT,))
         expired_proposals = self.db.execute(
             'SELECT id,scope,channel,network FROM proposals WHERE state="proposed" AND expires<=?', (now,)).fetchall()
         self.db.execute('UPDATE proposals SET state="expired" WHERE state="proposed" AND expires<=?', (now,))

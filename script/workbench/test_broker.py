@@ -201,6 +201,14 @@ class BrokerTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.publish(r)
         self.assertEqual(self.posts, [])
 
+    def test_resource_checkpoints_have_bounded_retention(self):
+        now=time.time()
+        for i in range(513):
+            self.b.db.execute('INSERT INTO resource_checkpoints VALUES (?,?,?,?,?,?,?,?,?,?)',
+                              (f'{i:032x}', 'job', f'{i:032x}', 'a'*64, 'a'*64, 'mateu', '#ai', 'irc.perl.org', now, 'passed'))
+        self.b.prune_audit(); self.b.db.commit()
+        self.assertEqual(self.b.db.execute('SELECT COUNT(*) FROM resource_checkpoints').fetchone()[0], 512)
+
     def test_ambiguous_publish_cannot_retry(self):
         r = self.b.handle(self.req)
         def lost(payload):
