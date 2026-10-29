@@ -20,7 +20,11 @@ my $bot=bless {pending=>$p},'TerminalBot';
 my @requests;
 {
   no warnings 'redefine';
-  local *Bot::Runtime::Workbench::broker_call=sub { push @requests,$_[0]; '{"jobs":[]}' };
+  local *Bot::Runtime::Workbench::broker_call=sub {
+    push @requests,$_[0];
+    return $_[0]{action} eq 'task_checkpoint'
+      ? '{"checkpoint_id":"dddddddddddddddddddddddddddddddd","jobs":[]}' : '{"jobs":[]}';
+  };
   Bot::Runtime::Workbench::admit_task($bot);
   like($p->{coding_scope},qr/\A[a-f0-9]{64}\z/,'admission freezes trusted scope');
   is($requests[0]{phase},'started','admission persisted');
@@ -30,6 +34,7 @@ my @requests;
   my $notice=Bot::Runtime::Workbench::finish_task($bot,$p,'iteration_limit');
   like($notice,qr/No project bundle was saved.*not continuing/,'zero-job stop is honest');
   unlike($notice,qr/Saved bundles\/results/,'no blanket recovery promise');
+  like($notice,qr/Checkpoint: d{32}/,'terminal report exposes the durable recovery checkpoint');
   is($requests[-1]{scope},$p->{coding_scope},'terminal snapshot works after expiry and pending cleanup');
   is($requests[-1]{reason},'iteration_limit','operator gets trusted terminal reason');
 }

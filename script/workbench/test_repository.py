@@ -108,6 +108,12 @@ class RepositoryBrokerTests(unittest.TestCase):
     def request(self, action):
         return self.b.capability_envelope(action, self.req['scope'], self.req['channel'], self.req['network'])
 
+    def checkpoint(self, scope=None, requester='mateu'):
+        scope = scope or self.req['scope']
+        return self.b.handle(self.b.capability_envelope('task_checkpoint', scope, '#ai', 'irc.perl.org')
+                             | {'action': 'task_checkpoint', 'requester': requester,
+                                'phase': 'stopped', 'reason': 'iteration_limit'})
+
     def repo_publish(self, job):
         return self.b.handle(self.b.capability_envelope('repo_publish', self.req['scope'], self.req['channel'], self.req['network'])|{'action':'repo_publish','id':job['id']})
 
@@ -162,6 +168,37 @@ class RepositoryBrokerTests(unittest.TestCase):
                              | dict(action='repo_repair',id=job['id'],changes={'lib/main.py':'print(43)'},
                                     delete=[],argv=self.repo_req['argv'],title='repair') | changes)
 
+    def test_resumed_scope_accesses_same_task_resources_but_not_another_task(self):
+        original = self.b.handle(self.repo_req)
+        checkpoint = self.checkpoint()
+        resumed_scope = 'b' * 64
+        resume = self.b.capability_envelope('task_resume', resumed_scope, '#ai', 'irc.perl.org')
+        resumed_task = self.b.handle(resume | {'action': 'task_resume', 'checkpoint_id': checkpoint['checkpoint_id'],
+                                               'requester': 'mateu'})
+        self.assertEqual(resumed_task['latest_repository_job'],
+                         {'id': original['id'], 'state': 'passed'})
+
+        def resumed(action):
+            return self.b.capability_envelope(action, resumed_scope, '#ai', 'irc.perl.org')
+
+        inspected = self.b.handle(resumed('repo_inspect') | {'action': 'repo_inspect', 'id': original['id']})
+        self.assertEqual(inspected['id'], original['id'])
+        repaired = self.b.handle(resumed('repo_repair') | {
+            'action': 'repo_repair', 'id': original['id'],
+            'changes': {'lib/main.py': 'print(43)'}, 'delete': [],
+            'argv': self.repo_req['argv'], 'title': 'resumed repair'})
+        self.assertEqual(repaired['state'], 'passed')
+        published = self.b.handle(resumed('repo_publish') | {'action': 'repo_publish', 'id': repaired['id']})
+        self.assertEqual(published['state'], 'published')
+        self.assertGreaterEqual(self.b.db.execute(
+            "SELECT COUNT(*) FROM resource_checkpoints WHERE resource_id=?", (repaired['id'],)).fetchone()[0], 3)
+
+        other_scope = 'c' * 64
+        self.checkpoint(other_scope)
+        denied = self.b.capability_envelope('repo_inspect', other_scope, '#ai', 'irc.perl.org')
+        with self.assertRaisesRegex(ValueError, 'repository job not found'):
+            self.b.handle(denied | {'action': 'repo_inspect', 'id': original['id']})
+
     def test_saved_jobs_repair_and_diagnose_after_snapshot_expiry(self):
         original=self.b.handle(self.repo_req)
         snapshot_id=json.loads(self.b.db.execute('SELECT destination FROM repo_jobs WHERE id=?',
@@ -176,6 +213,21 @@ class RepositoryBrokerTests(unittest.TestCase):
             'action':'repo_diagnose', 'id':original['id'],
             'argv':['/usr/bin/python3','-c','print(1)'], 'title':'expired snapshot diagnostic'})
         self.assertEqual(diagnostic['state'], 'passed')
+
+    def test_checkpointed_jobs_keep_their_snapshot_through_pruning(self):
+        original=self.b.handle(self.repo_req)
+        snapshot_id=json.loads(self.b.db.execute('SELECT destination FROM repo_jobs WHERE id=?',
+                                                  (original['id'],)).fetchone()[0])['snapshot_id']
+        self.checkpoint()
+        self.b.db.execute('UPDATE jobs SET created=0 WHERE id=?', (original['id'],))
+        self.b.db.execute('UPDATE repo_snapshots SET created=0,expires=0 WHERE id=?', (snapshot_id,))
+        self.b.db.commit()
+        other=self.b.capability_envelope('run', 'b'*64, '#ai', 'irc.perl.org') | {k:v for k,v in self.req.items() if k not in ('scope','capability','grant')} | {'title':'unrelated retention trigger'}
+        self.b.handle(other)
+        self.checkpoint()
+        self.assertIsNotNone(self.b.db.execute('SELECT id FROM repo_snapshots WHERE id=?', (snapshot_id,)).fetchone())
+        self.assertIsNotNone(self.b.db.execute('SELECT id FROM jobs WHERE id=?', (original['id'],)).fetchone())
+        self.assertEqual(self.repair(original)['state'], 'passed')
 
     def test_repair_preserves_bundle_and_publishes_only_retested_inputs(self):
         self.b.execute=lambda job: {'reason':'exited','exit_code':1,'output':'broken'}

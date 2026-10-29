@@ -32,12 +32,14 @@ SNAPSHOT_TTL = 300
 REJECTION_SCHEMA_VERSION = 1
 REPEAT_REJECTION_LIMIT = 3
 ACTIONS = frozenset(('run', 'publish', 'repo_read', 'repo_run', 'repo_publish',
-                     'repo_inspect', 'repo_repair', 'repo_diagnose', 'reference', 'task_status',
+                     'repo_inspect', 'job_inspect', 'repo_repair', 'repo_diagnose', 'reference', 'task_status',
+                     'task_checkpoint', 'checkpoint_status', 'task_resume',
                      'proposal_create', 'proposal_confirm'))
 ACTION_CAPABILITY = {
-    'reference': 'read_status', 'repo_read': 'read_status', 'repo_inspect': 'read_status',
+    'reference': 'read_status', 'repo_read': 'read_status', 'repo_inspect': 'read_status', 'job_inspect': 'read_status',
     'run': 'edit_test', 'repo_run': 'edit_test', 'repo_repair': 'edit_test',
     'repo_diagnose': 'edit_test', 'task_status': 'edit_test',
+    'task_checkpoint': 'edit_test', 'checkpoint_status': 'read_status', 'task_resume': 'edit_test',
     'publish': 'publish_gist', 'repo_publish': 'publish_repo',
     'proposal_confirm': 'read_status',
 }
@@ -149,6 +151,21 @@ class Broker:
         self.db.execute('''CREATE TABLE IF NOT EXISTS task_status
             (scope TEXT PRIMARY KEY, channel TEXT, network TEXT, created REAL,
              updated REAL, phase TEXT, reason TEXT)''')
+        # Checkpoints are append-only recovery receipts. A resumed task gets a
+        # fresh authorization scope but retains its original task identity.
+        self.db.execute('''CREATE TABLE IF NOT EXISTS task_scopes
+            (scope TEXT PRIMARY KEY, task_id TEXT NOT NULL, requester TEXT NOT NULL,
+             channel TEXT NOT NULL, network TEXT NOT NULL, created REAL NOT NULL)''')
+        self.db.execute('''CREATE TABLE IF NOT EXISTS task_checkpoints
+            (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, parent TEXT, scope TEXT NOT NULL,
+             requester TEXT NOT NULL, channel TEXT NOT NULL, network TEXT NOT NULL,
+             created REAL NOT NULL, phase TEXT NOT NULL, reason TEXT NOT NULL)''')
+        # Attempt budget is durable task state, not a count over the prunable
+        # job journal. It must survive restart and job-retention pruning.
+        self.db.execute('''CREATE TABLE IF NOT EXISTS task_budgets
+            (task_id TEXT PRIMARY KEY, attempts INTEGER NOT NULL, updated REAL NOT NULL)''')
+        self.db.execute('''CREATE TABLE IF NOT EXISTS task_publications
+            (task_id TEXT PRIMARY KEY, consumed INTEGER NOT NULL, updated REAL NOT NULL)''')
         self.db.execute('''CREATE TABLE IF NOT EXISTS proposals
             (id TEXT PRIMARY KEY, scope TEXT NOT NULL, requester TEXT NOT NULL,
              channel TEXT NOT NULL, network TEXT NOT NULL, action TEXT NOT NULL,
@@ -158,6 +175,13 @@ class Broker:
             (id TEXT PRIMARY KEY, scope TEXT NOT NULL, channel TEXT NOT NULL,
              network TEXT NOT NULL, snapshot TEXT NOT NULL, created REAL NOT NULL,
              expires REAL NOT NULL, state TEXT NOT NULL)''')
+        # State tables above are mutable operational indexes. Keep an append-only
+        # receipt for every resource transition for recovery and audit.
+        self.db.execute('''CREATE TABLE IF NOT EXISTS resource_checkpoints
+            (id TEXT PRIMARY KEY, resource_kind TEXT NOT NULL, resource_id TEXT NOT NULL,
+             task_id TEXT NOT NULL, scope TEXT NOT NULL, requester TEXT,
+             channel TEXT NOT NULL, network TEXT NOT NULL, created REAL NOT NULL,
+             state TEXT NOT NULL)''')
         (self.base / 'jobs.sqlite').chmod(0o600)
         self.prune_audit()
         self.db.commit()
@@ -174,15 +198,58 @@ class Broker:
         self.db.execute('DELETE FROM task_status WHERE updated<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM task_status WHERE scope NOT IN '
                         '(SELECT scope FROM task_status ORDER BY updated DESC LIMIT ?)', (AUDIT_LIMIT,))
+        self.db.execute('DELETE FROM task_checkpoints WHERE created<?', (now - AUDIT_TTL,))
+        self.db.execute('DELETE FROM task_checkpoints WHERE id NOT IN '
+                        '(SELECT id FROM task_checkpoints ORDER BY created DESC LIMIT ?)', (AUDIT_LIMIT,))
+        self.db.execute('DELETE FROM task_scopes WHERE task_id NOT IN (SELECT DISTINCT task_id FROM task_checkpoints) '
+                        'AND created<?', (now - AUDIT_TTL,))
+        self.db.execute('DELETE FROM task_budgets WHERE task_id NOT IN (SELECT DISTINCT task_id FROM task_checkpoints) '
+                        'AND updated<?', (now - AUDIT_TTL,))
+        self.db.execute('DELETE FROM task_publications WHERE task_id NOT IN (SELECT DISTINCT task_id FROM task_checkpoints) '
+                        'AND updated<?', (now - AUDIT_TTL,))
+        self.db.execute('DELETE FROM resource_checkpoints WHERE created<?', (now - AUDIT_TTL,))
+        self.db.execute('DELETE FROM resource_checkpoints WHERE id NOT IN '
+                        '(SELECT id FROM resource_checkpoints ORDER BY created DESC,id DESC LIMIT ?)', (AUDIT_LIMIT,))
+        expired_proposals = self.db.execute(
+            'SELECT id,scope,channel,network FROM proposals WHERE state="proposed" AND expires<=?', (now,)).fetchall()
         self.db.execute('UPDATE proposals SET state="expired" WHERE state="proposed" AND expires<=?', (now,))
+        for row in expired_proposals:
+            self.resource_checkpoint('proposal', row['id'], dict(row), 'expired', now)
         self.db.execute('DELETE FROM proposals WHERE created<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM proposals WHERE id NOT IN '
                         '(SELECT id FROM proposals ORDER BY created DESC LIMIT ?)', (AUDIT_LIMIT,))
+        expired_snapshots = self.db.execute(
+            'SELECT id,scope,channel,network FROM repo_snapshots WHERE state="active" AND expires<=?', (now,)).fetchall()
         self.db.execute('UPDATE repo_snapshots SET state="expired" WHERE state="active" AND expires<=?', (now,))
-        self.db.execute('DELETE FROM repo_snapshots WHERE created<?', (now - AUDIT_TTL,))
-        self.db.execute('DELETE FROM repo_snapshots WHERE id NOT IN '
-                        '(SELECT id FROM repo_snapshots ORDER BY created DESC LIMIT ?)', (AUDIT_LIMIT,))
+        for row in expired_snapshots:
+            self.resource_checkpoint('snapshot', row['id'], dict(row), 'expired', now)
+        self.prune_snapshots(now)
         self.db.execute('DELETE FROM rejection_fingerprints WHERE updated<?', (now - AUDIT_TTL,))
+
+    def recoverable_snapshot_ids(self):
+        rows = self.db.execute('SELECT r.destination FROM repo_jobs r JOIN jobs j ON j.id=r.id '
+                               'LEFT JOIN task_scopes s ON s.scope=j.scope WHERE j.state IN (\'passed\',\'failed\') AND EXISTS '
+                               '(SELECT 1 FROM task_checkpoints c WHERE c.task_id=COALESCE(s.task_id,j.scope))').fetchall()
+        return {snapshot_id for row in rows
+                for snapshot_id in [json.loads(row['destination']).get('snapshot_id')] if snapshot_id}
+
+    def prune_jobs(self, now):
+        # A checkpoint is a recovery receipt, so keep the complete saved bundle
+        # for every task it still names even after ordinary journal retention.
+        self.db.execute("DELETE FROM jobs WHERE created<? AND state NOT IN ('publishing','uncertain') "
+                        'AND NOT EXISTS (SELECT 1 FROM task_checkpoints c LEFT JOIN task_scopes s '
+                        'ON s.scope=jobs.scope WHERE c.task_id=COALESCE(s.task_id,jobs.scope))',
+                        (now - 7*86400,))
+
+    def prune_snapshots(self, now):
+        protected=sorted(self.recoverable_snapshot_ids())
+        placeholders=','.join('?' for _ in protected)
+        keep=(f' AND id NOT IN ({placeholders})' if protected else '')
+        self.db.execute('DELETE FROM repo_snapshots WHERE created<?'+keep,
+                        (now - AUDIT_TTL, *protected))
+        self.db.execute('DELETE FROM repo_snapshots WHERE id NOT IN '
+                        '(SELECT id FROM repo_snapshots ORDER BY created DESC LIMIT ?)'+keep,
+                        (AUDIT_LIMIT, *protected))
 
     def create_snapshot(self, req):
         snapshot = self.repository.snapshot(req['branch'], req['project'])
@@ -191,6 +258,7 @@ class Broker:
         self.db.execute('INSERT INTO repo_snapshots VALUES (?,?,?,?,?,?,?,?)',
                         (snapshot_id, req['scope'], req['channel'], req['network'],
                          json.dumps(snapshot, sort_keys=True), now, now + SNAPSHOT_TTL, 'active'))
+        self.resource_checkpoint('snapshot', snapshot_id, req, 'active', now)
         self.prune_audit()
         self.db.commit()
         return snapshot | {'snapshot_id': snapshot_id}
@@ -199,10 +267,11 @@ class Broker:
         if not isinstance(snapshot_id, str) or not re.fullmatch(r'[a-f0-9]{32}', snapshot_id):
             raise ValueError('invalid repository snapshot id')
         row = self.db.execute('SELECT * FROM repo_snapshots WHERE id=?', (snapshot_id,)).fetchone()
-        if not row or row['scope'] != req['scope'] or row['channel'] != req['channel'] or row['network'] != req['network']:
+        if not row or not self.resource_scope_authorized(req, row['scope'], row['channel'], row['network']):
             raise ValueError('repository snapshot not found in this request')
         if row['state'] == 'active' and row['expires'] <= time.time():
             self.db.execute('UPDATE repo_snapshots SET state="expired" WHERE id=?', (snapshot_id,))
+            self.resource_checkpoint('snapshot', snapshot_id, req, 'expired')
             self.db.commit()
             row = self.db.execute('SELECT * FROM repo_snapshots WHERE id=?', (snapshot_id,)).fetchone()
         if require_active and row['state'] != 'active':
@@ -243,7 +312,8 @@ class Broker:
             json.dumps(original, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
         message = str(exc)
         uncertain = ('submission failed or response lost' in message
-                     or 'submission failed or response was lost' in message)
+                     or 'submission failed or response was lost' in message
+                     or 'publication outcome requires operator reconciliation' in message)
         stale = message.startswith('branch changed') or 'snapshot expired' in message
         budget = message.startswith(('limit:', 'global limit:'))
         code, public, disposition = (
@@ -283,6 +353,87 @@ class Broker:
         return {'scope': scope, 'capability': capability, 'grant': grant,
                 'channel': channel, 'network': network}
 
+    def task_binding(self, scope):
+        row = self.db.execute('SELECT * FROM task_scopes WHERE scope=?', (scope,)).fetchone()
+        return row or {'scope': scope, 'task_id': scope}
+
+    def resource_scope_authorized(self, req, resource_scope, resource_channel, resource_network):
+        """Authorize resources by durable task identity, never by grant reuse."""
+        if resource_channel != req['channel'] or resource_network != req['network']:
+            return False
+        # Keep same-scope legacy rows usable before their first checkpoint.
+        if resource_scope == req['scope']:
+            return True
+        current = self.db.execute('SELECT * FROM task_scopes WHERE scope=?', (req['scope'],)).fetchone()
+        resource = self.db.execute('SELECT * FROM task_scopes WHERE scope=?', (resource_scope,)).fetchone()
+        return bool(current and resource and current['task_id'] == resource['task_id']
+                    and current['requester'] == resource['requester']
+                    and current['channel'] == resource['channel']
+                    and current['network'] == resource['network'])
+
+    def resource_checkpoint(self, resource_kind, resource_id, req, state, now=None):
+        binding = self.task_binding(req['scope'])
+        requester = binding['requester'] if 'requester' in binding.keys() else None
+        self.db.execute('INSERT INTO resource_checkpoints VALUES (?,?,?,?,?,?,?,?,?,?)',
+                        (uuid.uuid4().hex, resource_kind, resource_id, binding['task_id'], req['scope'],
+                         requester, req['channel'], req['network'],
+                         time.time() if now is None else now, state))
+
+    def load_job(self, req, job_id, error='job not found in this request'):
+        job = self.db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
+        if not job or not self.resource_scope_authorized(req, job['scope'], req['channel'], req['network']):
+            raise ValueError(error)
+        return job
+
+    def task_job_rows(self, task_id):
+        return self.db.execute('SELECT j.id,j.state,j.created,r.destination FROM jobs j '
+                               'LEFT JOIN task_scopes s ON s.scope=j.scope LEFT JOIN repo_jobs r ON r.id=j.id '
+                               'WHERE COALESCE(s.task_id,j.scope)=? ORDER BY j.created,j.id', (task_id,)).fetchall()
+
+    def task_attempt_count(self, task_id):
+        row = self.db.execute('SELECT attempts FROM task_budgets WHERE task_id=?', (task_id,)).fetchone()
+        if row:
+            return row['attempts']
+        # Migration-safe baseline for a task created before durable accounting.
+        attempts = len(self.task_job_rows(task_id))
+        self.db.execute('INSERT OR IGNORE INTO task_budgets VALUES (?,?,?)', (task_id, attempts, time.time()))
+        return attempts
+
+    def consume_task_attempt(self, task_id, now):
+        self.db.execute('INSERT INTO task_budgets VALUES (?,?,?) '
+                        'ON CONFLICT(task_id) DO UPDATE SET attempts=attempts+1,updated=excluded.updated',
+                        (task_id, 1, now))
+
+    def task_publication_count(self, task_id):
+        row = self.db.execute('SELECT consumed FROM task_publications WHERE task_id=?', (task_id,)).fetchone()
+        if row:
+            return row['consumed']
+        consumed = self.db.execute('SELECT COUNT(*) FROM jobs j LEFT JOIN task_scopes s ON s.scope=j.scope '
+                                   "WHERE COALESCE(s.task_id,j.scope)=? AND j.state IN ('published','publishing','uncertain')",
+                                   (task_id,)).fetchone()[0]
+        self.db.execute('INSERT OR IGNORE INTO task_publications VALUES (?,?,?)', (task_id, consumed, time.time()))
+        return consumed
+
+    def consume_task_publication(self, task_id, now):
+        self.db.execute('INSERT INTO task_publications VALUES (?,?,?) '
+                        'ON CONFLICT(task_id) DO UPDATE SET consumed=1,updated=excluded.updated',
+                        (task_id, 1, now))
+
+    def checkpoint_summary(self, row):
+        jobs = self.task_job_rows(row['task_id'])
+        latest_repository_job = None
+        for job in reversed(jobs):
+            if job['destination']:
+                destination = json.loads(job['destination'])
+                if not destination.get('diagnostic_only'):
+                    latest_repository_job = {'id': job['id'], 'state': job['state']}
+                    break
+        return {'checkpoint_id': row['id'], 'task_id': row['task_id'], 'parent_checkpoint_id': row['parent'],
+                'phase': row['phase'], 'reason': row['reason'],
+                'jobs': [{'id': j['id'], 'state': j['state']} for j in jobs],
+                'latest_repository_job': latest_repository_job,
+                'attempts_remaining': max(0, MAX_ATTEMPTS - self.task_attempt_count(row['task_id']))}
+
     def handle(self, req, _diagnostic=False):
         try:
             return self._handle(req, _diagnostic=_diagnostic)
@@ -298,11 +449,14 @@ class Broker:
         fields = {'run': {'files','argv','title'}, 'publish': {'id'},
                   'repo_read': {'branch','project'},
                   'repo_run': {'snapshot_id','changes','delete','argv','title'},
-                  'repo_publish': {'id'}, 'repo_inspect': {'id'},
+                  'repo_publish': {'id'}, 'repo_inspect': {'id'}, 'job_inspect': {'id'},
                   'repo_repair': {'id','changes','delete','argv','title'},
                   'repo_diagnose': {'id','argv','title'}}
         fields['reference'] = {'key'}
         fields['task_status'] = {'phase', 'reason'}
+        fields['task_checkpoint'] = {'requester', 'phase', 'reason'}
+        fields['checkpoint_status'] = {'checkpoint_id', 'requester'}
+        fields['task_resume'] = {'checkpoint_id', 'requester'}
         fields['proposal_create'] = {'proposal_action', 'params', 'requester'}
         fields['proposal_confirm'] = {'requester', 'confirmed_at', 'publish_capability', 'publish_grant'}
         allowed |= fields.get(action, set())
@@ -336,6 +490,56 @@ class Broker:
             return self.create_proposal(req)
         if action == 'proposal_confirm':
             return self.confirm_proposal(req)
+        if action in ('task_checkpoint', 'checkpoint_status', 'task_resume'):
+            requester = req['requester']
+            if not isinstance(requester, str) or not REQUESTER_IDENTITY.fullmatch(requester):
+                raise ValueError('invalid requester identity')
+            if action != 'task_checkpoint':
+                checkpoint_id = req['checkpoint_id']
+                if not isinstance(checkpoint_id, str) or not re.fullmatch(r'[a-f0-9]{32}', checkpoint_id):
+                    raise ValueError('invalid checkpoint id')
+                checkpoint = self.db.execute('SELECT * FROM task_checkpoints WHERE id=?', (checkpoint_id,)).fetchone()
+                if (not checkpoint or checkpoint['requester'] != requester or checkpoint['channel'] != req['channel']
+                        or checkpoint['network'] != req['network']):
+                    raise ValueError('checkpoint not found for this requester')
+                if action == 'checkpoint_status':
+                    return self.checkpoint_summary(checkpoint)
+                # A resume always derives authority from this new envelope. Old
+                # grants are not accepted, and an ambiguous public write is an
+                # absorbing terminal state until an operator reconciles it.
+                if req['scope'] == checkpoint['scope']:
+                    raise ValueError('resume requires a fresh task scope')
+                if any(job['state'] in ('publishing', 'uncertain') for job in self.task_job_rows(checkpoint['task_id'])):
+                    raise ValueError('publication outcome requires operator reconciliation')
+                existing = self.db.execute('SELECT * FROM task_scopes WHERE scope=?', (req['scope'],)).fetchone()
+                if existing:
+                    raise ValueError('fresh task scope is already bound')
+                now = time.time()
+                self.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
+                                (req['scope'], checkpoint['task_id'], requester, req['channel'], req['network'], now))
+                self.db.commit()
+                return self.checkpoint_summary(checkpoint) | {'resumed_scope': req['scope']}
+            if (req['phase'] not in ('started', 'stopped', 'reported') or req['reason'] not in
+                    ('admitted', 'deadline', 'iteration_limit', 'runtime_error', 'no_report',
+                     'final_report', 'execution_limit')):
+                raise ValueError('invalid task status')
+            binding = self.task_binding(scope)
+            if 'requester' in binding.keys() and (binding['requester'] != requester or binding['channel'] != req['channel']
+                                                   or binding['network'] != req['network']):
+                raise ValueError('task identity mismatch')
+            now = time.time()
+            self.db.execute('INSERT OR IGNORE INTO task_scopes VALUES (?,?,?,?,?,?)',
+                            (scope, binding['task_id'], requester, req['channel'], req['network'], now))
+            parent = self.db.execute('SELECT id FROM task_checkpoints WHERE task_id=? ORDER BY created DESC,id DESC LIMIT 1',
+                                     (binding['task_id'],)).fetchone()
+            checkpoint = uuid.uuid4().hex
+            self.db.execute('INSERT INTO task_checkpoints VALUES (?,?,?,?,?,?,?,?,?,?)',
+                            (checkpoint, binding['task_id'], parent['id'] if parent else None, scope, requester,
+                             req['channel'], req['network'], now, req['phase'], req['reason']))
+            self.prune_audit()
+            self.db.commit()
+            row = self.db.execute('SELECT * FROM task_checkpoints WHERE id=?', (checkpoint,)).fetchone()
+            return self.checkpoint_summary(row)
         if action == 'task_status':
             if (req['phase'] not in ('started', 'stopped', 'reported') or req['reason'] not in
                     ('admitted', 'deadline', 'iteration_limit', 'runtime_error', 'no_report',
@@ -352,15 +556,21 @@ class Broker:
             self.prune_audit()
             self.db.commit()
             # No audit/read tool is exposed to the model. Return only actual job metadata.
-            return {'jobs': [dict(row) for row in self.db.execute(
-                'SELECT id,state FROM jobs WHERE scope=? ORDER BY created,id', (scope,))]}
+            return {'jobs': [{'id': row['id'], 'state': row['state']} for row in
+                             self.task_job_rows(self.task_binding(scope)['task_id'])]}
         if action == 'reference':
             return self.references.read(req['key'])
+        if action == 'job_inspect':
+            job_id = req['id']
+            if not isinstance(job_id, str) or not re.fullmatch(r'[a-f0-9]{32}', job_id):
+                raise ValueError('invalid job id')
+            job = self.load_job(req, job_id, 'saved job not found in this request')
+            return self.result(job) | {'files': json.loads(job['files'])}
         if action in ('repo_inspect', 'repo_repair', 'repo_diagnose'):
             job_id = req['id']
             if not isinstance(job_id, str) or not re.fullmatch(r'[a-f0-9]{32}', job_id):
                 raise ValueError('invalid job id')
-            job = self.db.execute('SELECT * FROM jobs WHERE id=? AND scope=?', (job_id, scope)).fetchone()
+            job = self.load_job(req, job_id, 'repository job not found in this request')
             dest = self.db.execute('SELECT destination FROM repo_jobs WHERE id=?', (job_id,)).fetchone()
             if not job or not dest:
                 raise ValueError('repository job not found in this request')
@@ -425,20 +635,23 @@ class Broker:
             old = self.db.execute('SELECT * FROM jobs WHERE scope=? AND digest=?', (scope, digest)).fetchone()
             if old:
                 return self.result(old)
-            if (_diagnostic and self.verification is not None and self.db.execute(
-                    'SELECT COUNT(*) FROM jobs WHERE scope=?', (scope,)).fetchone()[0] >= MAX_ATTEMPTS - 1):
+            task_id = self.task_binding(scope)['task_id']
+            if (_diagnostic and self.verification is not None and self.task_attempt_count(task_id) >= MAX_ATTEMPTS - 1):
                 raise ValueError('last execution reserved for trusted project verification')
             now = time.time()
             # Retain a bounded journal; ambiguous submissions remain for manual reconciliation.
-            self.db.execute("DELETE FROM jobs WHERE created<? AND state NOT IN ('publishing','uncertain')", (now - 7*86400,))
+            # Retain checkpointed bundles as well as uncertain publications.
+            self.prune_jobs(now)
             count = self.db.execute('SELECT COUNT(*) FROM jobs WHERE created>?', (now - 3600,)).fetchone()[0]
             if count >= 30:
                 raise ValueError('global limit: 30 sandbox runs per hour')
-            if self.db.execute('SELECT COUNT(*) FROM jobs WHERE scope=?', (scope,)).fetchone()[0] >= MAX_ATTEMPTS:
+            if self.task_attempt_count(task_id) >= MAX_ATTEMPTS:
                 raise ValueError('limit: 5 sandbox attempts per IRC request')
             job_id = uuid.uuid4().hex
             self.db.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?)',
                             (job_id, scope, digest, now, json.dumps(files), title, '{}', 'running', None))
+            self.consume_task_attempt(task_id, now)
+            self.resource_checkpoint('job', job_id, req, 'running', now)
             if destination:
                 self.db.execute('INSERT INTO repo_jobs VALUES (?,?)', (job_id, json.dumps(destination)))
             self.db.execute('DELETE FROM repo_jobs WHERE id NOT IN (SELECT id FROM jobs)')
@@ -464,17 +677,19 @@ class Broker:
             result['output_truncated'] = len(output) > 8192
             result['output'] = output if len(output) <= 8192 else output[:4096] + '\n[output excerpted]\n' + output[-4096:]
             self.db.execute('UPDATE jobs SET result=?,state=? WHERE id=?', (json.dumps(result), state, job_id))
+            self.resource_checkpoint('job', job_id, req, state)
             self.db.commit()
             return self.result(self.db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())
         job_id = req['id']
         if not isinstance(job_id, str) or not re.fullmatch(r'[a-f0-9]{32}', job_id):
             raise ValueError('invalid job id')
-        job = self.db.execute('SELECT * FROM jobs WHERE id=? AND scope=?', (job_id, scope)).fetchone()
-        if not job:
-            raise ValueError('job not found in this request')
+        job = self.load_job(req, job_id)
         repo_job = self.db.execute('SELECT destination FROM repo_jobs WHERE id=?', (job_id,)).fetchone()
         if bool(repo_job) != (action == 'repo_publish'):
             raise ValueError('job publication destination does not match tool')
+        if any(row['state'] in ('publishing', 'uncertain') for row in
+               self.task_job_rows(self.task_binding(scope)['task_id'])):
+            raise ValueError('publication outcome requires operator reconciliation')
         if job['state'] == 'published':
             return self.result(job)
         if job['state'] != 'passed' or job['created'] < time.time() - 900:
@@ -483,7 +698,7 @@ class Broker:
             destination = json.loads(repo_job['destination'])
             if destination.get('diagnostic_only'):
                 raise ValueError('diagnostic jobs cannot be published; rerun the complete project suite')
-            return self.publish_repository(job, destination)
+            return self.publish_repository(req, job, destination)
         if not self.token.is_file():
             raise ValueError('Burt gist credential is not installed; ask the operator')
         if self.token.stat().st_mode & 0o077:
@@ -492,9 +707,11 @@ class Broker:
         n = self.db.execute("SELECT COUNT(*) FROM jobs WHERE created>? AND state IN ('published','publishing','uncertain')", (time.time()-86400,)).fetchone()[0]
         if n >= 10:
             raise ValueError('global limit: 10 gist submissions per day')
-        if self.db.execute("SELECT COUNT(*) FROM jobs WHERE scope=? AND state IN ('published','publishing','uncertain')", (scope,)).fetchone()[0]:
+        if self.task_publication_count(self.task_binding(scope)['task_id']):
             raise ValueError('limit: one gist submission per IRC request')
+        self.consume_task_publication(self.task_binding(scope)['task_id'], time.time())
         self.db.execute("UPDATE jobs SET state='publishing' WHERE id=?", (job_id,))
+        self.resource_checkpoint('publication', job_id, req, 'publishing')
         self.db.commit()
         payload = {'description': job['title'], 'public': True,
                    'files': {n: {'content': c} for n, c in json.loads(job['files']).items()}}
@@ -503,13 +720,15 @@ class Broker:
         except Exception:
             # A lost response may mean GitHub created the gist. Never blindly retry.
             self.db.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (job_id,))
+            self.resource_checkpoint('publication', job_id, req, 'uncertain')
             self.db.commit()
             raise ValueError('gist submission failed or response was lost; operator reconciliation required; do not retry') from None
         self.db.execute("UPDATE jobs SET state='published',url=? WHERE id=?", (url, job_id))
+        self.resource_checkpoint('publication', job_id, req, 'published')
         self.db.commit()
         return self.result(self.db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())
 
-    def publish_repository(self, job, destination):
+    def publish_repository(self, req, job, destination):
         # Read/preflight before marking submitted; no writes on stale bases.
         snapshot = self.repository.snapshot(destination['branch'], destination['project'])
         if self.verification is not None:
@@ -524,17 +743,21 @@ class Broker:
         n = self.db.execute("SELECT COUNT(*) FROM jobs WHERE created>? AND state IN ('published','publishing','uncertain')", (time.time()-86400,)).fetchone()[0]
         if n >= 10:
             raise ValueError('global limit: 10 submissions per day')
-        if self.db.execute("SELECT COUNT(*) FROM jobs WHERE scope=? AND state IN ('published','publishing','uncertain')", (job['scope'],)).fetchone()[0]:
+        if self.task_publication_count(self.task_binding(job['scope'])['task_id']):
             raise ValueError('limit: one submission per IRC request')
+        self.consume_task_publication(self.task_binding(job['scope'])['task_id'], time.time())
         self.db.execute("UPDATE jobs SET state='publishing' WHERE id=?", (job['id'],))
+        self.resource_checkpoint('publication', job['id'], req, 'publishing')
         self.db.commit()
         try:
             url = self.repository.publish(snapshot, json.loads(job['files']), job['title'])
         except Exception:
             self.db.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (job['id'],))
+            self.resource_checkpoint('publication', job['id'], req, 'uncertain')
             self.db.commit()
             raise ValueError('repository submission failed or response lost; operator reconciliation required; do not retry') from None
         self.db.execute("UPDATE jobs SET state='published',url=? WHERE id=?", (url, job['id']))
+        self.resource_checkpoint('publication', job['id'], req, 'published')
         self.db.commit()
         return self.result(self.db.execute('SELECT * FROM jobs WHERE id=?', (job['id'],)).fetchone())
 
@@ -574,8 +797,7 @@ class Broker:
             job_id = params['id']
             if not isinstance(job_id, str) or not re.fullmatch(r'[a-f0-9]{32}', job_id):
                 raise ValueError('invalid job id')
-            job = self.db.execute('SELECT id,state FROM jobs WHERE id=? AND scope=?',
-                                  (job_id, req['scope'])).fetchone()
+            job = self.load_job(req, job_id, 'proposal action is not available for this request')
             repo_job = self.db.execute('SELECT id FROM repo_jobs WHERE id=?', (job_id,)).fetchone()
             if not job or job['state'] != 'passed' or bool(repo_job) != (action == 'repo_publish'):
                 raise ValueError('proposal action is not available for this request')
@@ -595,6 +817,7 @@ class Broker:
         self.db.execute('INSERT INTO proposals VALUES (?,?,?,?,?,?,?,?,?,?)',
                         (proposal_id, req['scope'], requester, req['channel'], req['network'],
                          action, canonical, now, now + PROPOSAL_TTL, 'proposed'))
+        self.resource_checkpoint('proposal', proposal_id, req, 'proposed', now)
         self.prune_audit()
         self.db.commit()
         return {'proposal_id': proposal_id, 'state': 'proposed', 'action': action,
@@ -633,6 +856,8 @@ class Broker:
             raise ValueError('invalid action or fields')
         changed = self.db.execute('UPDATE proposals SET state="consumed" WHERE id=? AND state="proposed"',
                                   (proposal['id'],)).rowcount
+        if changed == 1:
+            self.resource_checkpoint('proposal', proposal['id'], req, 'consumed')
         if changed != 1:
             self.db.commit()
             raise ValueError('proposal confirmation is missing or ambiguous')
@@ -648,8 +873,8 @@ class Broker:
     def result(self, job):
         return {'id': job['id'], 'state': job['state'], 'result': json.loads(job['result']),
                 'url': job['url'], 'files': list(json.loads(job['files'])),
-                'attempts_remaining': max(0, MAX_ATTEMPTS - self.db.execute(
-                    'SELECT COUNT(*) FROM jobs WHERE scope=?', (job['scope'],)).fetchone()[0])}
+                'attempts_remaining': max(0, MAX_ATTEMPTS - self.task_attempt_count(
+                    self.task_binding(job['scope'])['task_id']))}
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):

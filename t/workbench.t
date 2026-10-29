@@ -22,7 +22,7 @@ is($scope,Bot::Runtime::Workbench::request_scope($bot,'publish_gist'),'run and p
 like($scope,qr/^[a-f0-9]{64}$/,'scope is bounded digest');
 my $tool=bless {},'WorkbenchTool';
 my %defs=map {$_->{name}=>$_} @{Bot::Runtime::Workbench::tool_specs($bot)};
-is(scalar keys %defs,11,'eleven narrow tools including brokered documentation and proposals');
+is(scalar keys %defs,15,'fifteen narrow tools including standalone checkpoint recovery');
 {
   no warnings 'redefine';
   local *Bot::Runtime::Workbench::broker_call=sub { '{"reference":"python-csv","text":"documentation","untrusted":true}' };
@@ -35,6 +35,7 @@ like($defs{publish_gist}{code}->($tool,{id=>'x',channel=>'#ai'}),qr/Invalid tool
 # named capability; generic coding discussion is not an authority signal.
 for my $case (
   ['read_status','burt_bot: inspect the python-csv reference'],
+  ['read_status','burt_bot: inspect job '.('a'x32)],
   ['edit_test','burt_bot: write and test this Perl program'],
   ['publish_gist','burt_bot: publish this as a gist'],
   ['publish_repo','burt_bot: push this project to the repository'],
@@ -183,6 +184,15 @@ for my $kind ('reminder','activity_followup','conversation') {
  Bot::Runtime::Workbench::admit_task($bot);
  ok(!$pending->{coding_task},"noncoding $kind gets no longer lifetime");
 }
+$bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
+  {nick=>'mateu',source_kind=>'conversation',msg=>'burt_bot: resume checkpoint and test this coding project'}]};
+Bot::Runtime::Workbench::admit_task($bot);
+ok(!$bot->{pending}{coding_task},'explicit checkpoint resume stays unbound for the resume tool');
+$bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
+  {nick=>'mateu',source_kind=>'conversation',msg=>'burt_bot: write and test a resume parsing script'}]};
+Bot::Runtime::Workbench::admit_task($bot);
+ok($bot->{pending}{coding_task},'incidental resume wording still admits a coding task');
+delete $bot->{pending}{coding_task};
 # Proposal confirmations are a fresh trusted runtime envelope, not model/retrieval text.
 $bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
   {nick=>'MaTeu[]',source_kind=>'conversation',queued_at=>time,msg=>'burt_bot: yes'}]};
@@ -227,6 +237,20 @@ my $forwarded;
 is($forwarded->{requester},'mateu','proposal requester is runtime-derived');
 ok(!exists($forwarded->{params}{requester}),'model parameters cannot set requester identity');
 $bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
+  {nick=>'alice',source_kind=>'conversation',msg=>'burt_bot: write and test a Perl script'},
+  {nick=>'bob',source_kind=>'conversation',msg=>'burt_bot: hello'}]};
+Bot::Runtime::Workbench::admit_task($bot);
+ok(!$bot->{pending}{coding_task},'ambiguous requesters do not admit a coding task');
+{
+  no warnings 'redefine';
+  my $called=0;
+  local *Bot::Runtime::Workbench::broker_call=sub {$called++; return '{}'};
+  like($defs{run_code}{code}->($tool,{files=>{'main.pl'=>'print 1'},argv=>['/usr/bin/perl','/work/main.pl'],title=>'test'}),
+    qr/Error: No admitted coding task for run/,'execution rejects an ambiguous unadmitted request');
+  is($called,0,'unadmitted execution never reaches the broker');
+}
+
+$bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
   {nick=>'mateu',source_kind=>'conversation',queued_at=>time,msg=>'burt_bot: yes'}]};
 {
   no warnings 'redefine';
@@ -237,6 +261,57 @@ $bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
 is($forwarded->{requester},'mateu','confirmation requester is runtime-derived');
 is_deeply([sort keys %$forwarded],[sort qw(action capability channel confirmed_at grant network requester scope)],
   'confirmation tool accepts no model-selected action or parameters');
+# Recovery tools derive requester and fresh authorization from the current
+# envelope; a checkpoint id is the only model-supplied selector.
+$bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
+  {nick=>'mateu',source_kind=>'conversation',msg=>'burt_bot: inspect checkpoint '.('a'x32)}]};
+{
+  no warnings 'redefine';
+  local *Bot::Runtime::Workbench::broker_call=sub {$forwarded=$_[0]; return '{"checkpoint_id":"'.('a'x32).'","jobs":[],"attempts_remaining":4}'};
+  like($defs{coding_checkpoint_status}{code}->($tool,{checkpoint_id=>'a'x32}),qr/checkpoint_id/,
+    'checkpoint status is broker-derived');
+}
+is($forwarded->{requester},'mateu','checkpoint status requester is runtime-derived');
+is_deeply([sort keys %$forwarded],[sort qw(action capability channel checkpoint_id grant network requester scope)],
+  'status cannot supply channel, requester, scope, or grants');
+$bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
+  {nick=>'mateu',source_kind=>'conversation',msg=>'burt_bot: resume and test this coding project'}]};
+{
+  my $calls=0;
+  my $resume_scope='';
+  no warnings 'redefine';
+  # The fresh runtime scope is opaque, so echo it from the request in the mock.
+  local *Bot::Runtime::Workbench::broker_call=sub {
+    $forwarded=$_[0];
+    $resume_scope=$forwarded->{scope} if ++$calls==1;
+    return $calls==1 ? JSON::PP::encode_json({resumed_scope=>$resume_scope,jobs=>[],
+      latest_repository_job=>{id=>'d'x32,state=>'running'},attempts_remaining=>4})
+      : JSON::PP::encode_json({checkpoint_id=>'c'x32,jobs=>[],attempts_remaining=>4});
+  };
+  like($defs{resume_coding_task}{code}->($tool,{checkpoint_id=>'a'x32}),qr/resumed_scope/,
+    'resume accepts one exact checkpoint id');
+}
+is($forwarded->{action},'task_checkpoint','resume creates a new immutable lineage receipt');
+is($forwarded->{scope},$bot->{pending}{coding_scope},'post-resume checkpoint retains the broker-bound scope');
+is($bot->{pending}{coding_requester},'mateu','resume preserves broker-bound requester identity');
+is($bot->{pending}{coding_last_repo_job},'d'x32,'resume restores the latest complete repository job');
+is($bot->{pending}{coding_last_repo_state},'running','resume accepts a broker-interrupted repository job');
+is($bot->{pending}{coding_attempts_remaining},4,'resume restores the broker-derived task budget');
+cmp_ok($bot->{pending}{expires_at},'>=',time+1799,'resume grants a fresh bounded coding lifetime');
+$bot->{pending}={channel=>'#ai',expires_at=>time-1,messages=>[
+  {nick=>'mateu',source_kind=>'conversation',msg=>'burt_bot: resume and test this coding project'}]};
+like($defs{resume_coding_task}{code}->($tool,{checkpoint_id=>'a'x32}),qr/Error: No active #ai or #mateu-test request/,
+  'expired resume request cannot extend its deadline');
+$bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
+  {nick=>'mateu',source_kind=>'conversation',msg=>'burt_bot: resume checkpoint and test this coding project'}]};
+my $resume_deadline=$bot->{pending}{expires_at};
+{
+  no warnings 'redefine';
+  local *Bot::Runtime::Workbench::broker_call=sub { die "checkpoint rejected\n" };
+  like($defs{resume_coding_task}{code}->($tool,{checkpoint_id=>'a'x32}),qr/Error: checkpoint rejected/,
+    'failed resume reports rejection');
+}
+is($bot->{pending}{expires_at},$resume_deadline,'failed resume restores its original deadline');
 $bot->{bot}='astrid';
 is_deeply(Bot::Runtime::Workbench::tool_specs($bot),[],'other bots unchanged');
 $bot->{bot}='burt';
