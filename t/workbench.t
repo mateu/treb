@@ -22,7 +22,7 @@ is($scope,Bot::Runtime::Workbench::request_scope($bot,'publish_gist'),'run and p
 like($scope,qr/^[a-f0-9]{64}$/,'scope is bounded digest');
 my $tool=bless {},'WorkbenchTool';
 my %defs=map {$_->{name}=>$_} @{Bot::Runtime::Workbench::tool_specs($bot)};
-is(scalar keys %defs,9,'nine narrow tools including brokered documentation');
+is(scalar keys %defs,11,'eleven narrow tools including brokered documentation and proposals');
 {
   no warnings 'redefine';
   local *Bot::Runtime::Workbench::broker_call=sub { '{"reference":"python-csv","text":"documentation","untrusted":true}' };
@@ -160,6 +160,60 @@ for my $kind ('reminder','activity_followup','conversation') {
  Bot::Runtime::Workbench::admit_task($bot);
  ok(!$pending->{coding_task},"noncoding $kind gets no longer lifetime");
 }
+# Proposal confirmations are a fresh trusted runtime envelope, not model/retrieval text.
+$bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
+  {nick=>'MaTeu[]',source_kind=>'conversation',queued_at=>time,msg=>'burt_bot: yes'}]};
+my $confirmation=Bot::Runtime::Workbench::confirmation_envelope($bot);
+is($confirmation->{action},'proposal_confirm','confirmation uses its narrow broker action');
+is($confirmation->{requester},'mateu{}','confirmation requester uses IRC casemapping');
+is($confirmation->{capability},'read_status','confirmation is scoped to a fresh bounded envelope');
+ok($confirmation->{confirmed_at},'confirmation timestamp comes from the runtime message');
+push @{$bot->{pending}{messages}},{nick=>'other',source_kind=>'conversation',msg=>'burt_bot: publish this gist'};
+$confirmation=Bot::Runtime::Workbench::confirmation_envelope($bot);
+ok(!exists($confirmation->{publish_grant}),'another requester cannot supply publication authority');
+$bot->{pending}{messages}[0]{msg}='burt_bot: yes, publish this gist';
+$confirmation=Bot::Runtime::Workbench::confirmation_envelope($bot);
+is($confirmation->{publish_capability},'publish_gist','confirming requester supplies explicit gist authority');
+$bot->{pending}{expires_at}=time-1;
+eval { Bot::Runtime::Workbench::confirmation_envelope($bot) };
+like($@,qr/No active #ai/,'expired envelope cannot mint confirmation grant');
+$bot->{pending}{expires_at}=time+100;
+$bot->{pending}{messages}[0]{msg}='burt_bot: yes';
+pop @{$bot->{pending}{messages}};
+$bot->{pending}{messages}[0]{source_kind}='activity_followup';
+eval {Bot::Runtime::Workbench::confirmation_envelope($bot)};
+like($@,qr/fresh explicit confirmation/,'retrieved/history text cannot confirm a proposal');
+$bot->{pending}{messages}[0]{source_kind}='conversation';
+$bot->{pending}{messages}[0]{msg}='yes';
+eval {Bot::Runtime::Workbench::confirmation_envelope($bot)};
+like($@,qr/fresh explicit confirmation/,'ambient yes cannot confirm a proposal');
+$bot->{pending}{messages}[0]{msg}='burt_bot: yes';
+push @{$bot->{pending}{messages}},{nick=>'other',source_kind=>'conversation',msg=>'burt_bot: yes'};
+eval {Bot::Runtime::Workbench::confirmation_envelope($bot)};
+like($@,qr/fresh explicit confirmation/,'ambiguous confirmation messages cannot authorize action');
+# Tool callbacks inject requester/scope from the runtime envelope; model args contain neither.
+$bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
+  {nick=>'mateu',source_kind=>'conversation',msg=>'burt_bot: inspect the python-json reference'}]};
+my $forwarded;
+{
+  no warnings 'redefine';
+  local *Bot::Runtime::Workbench::broker_call=sub {$forwarded=$_[0]; return '{"proposal_id":"'.('a'x32).'","state":"proposed"}'};
+  like($defs{propose_workbench_action}{code}->($tool,{action=>'reference',params=>{key=>'python-json'}}),
+    qr/proposed/,'proposal tool returns broker proposal');
+}
+is($forwarded->{requester},'mateu','proposal requester is runtime-derived');
+ok(!exists($forwarded->{params}{requester}),'model parameters cannot set requester identity');
+$bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
+  {nick=>'mateu',source_kind=>'conversation',queued_at=>time,msg=>'burt_bot: yes'}]};
+{
+  no warnings 'redefine';
+  local *Bot::Runtime::Workbench::broker_call=sub {$forwarded=$_[0]; return '{"confirmed_action":"reference","reference":"python-json"}'};
+  like($defs{confirm_workbench_proposal}{code}->($tool,{}),qr/python-json/,
+    'confirmation tool forwards only the fresh runtime envelope');
+}
+is($forwarded->{requester},'mateu','confirmation requester is runtime-derived');
+is_deeply([sort keys %$forwarded],[sort qw(action capability channel confirmed_at grant network requester scope)],
+  'confirmation tool accepts no model-selected action or parameters');
 $bot->{bot}='astrid';
 is_deeply(Bot::Runtime::Workbench::tool_specs($bot),[],'other bots unchanged');
 $bot->{bot}='burt';

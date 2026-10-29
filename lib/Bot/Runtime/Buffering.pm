@@ -4,6 +4,7 @@ use strict;
 use warnings;
 
 use Exporter 'import';
+use Time::HiRes ();
 use Bot::Runtime::Context ();
 use Bot::Runtime::Reminders ();
 use Bot::Runtime::Limits qw(runtime_limit now);
@@ -13,6 +14,10 @@ our @EXPORT_OK = qw(
   process_buffer_event
   schedule_pending_buffers
 );
+
+# Keep trusted IRC receipt time aligned with fractional broker timestamps.
+# TTL bookkeeping deliberately remains on Limits::now.
+sub message_clock { Time::HiRes::time() }
 
 # Expire old context before admitting or dispatching messages. Journal evidence
 # lives separately; dropping work here never deletes the conversation journal.
@@ -56,7 +61,7 @@ sub buffer_message {
     channel => $channel,
     nick    => $nick,
     msg     => $msg,
-    queued_at => now(),
+    queued_at => message_clock(),
   };
 
   if (my $id = delete $self->_buffer_timers->{$channel}) {

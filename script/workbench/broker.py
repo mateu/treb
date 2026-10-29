@@ -3,6 +3,7 @@
 import hashlib
 import hmac
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -16,7 +17,7 @@ import uuid
 from runner import run, validate, MAX_JSON_BYTES, MAX_INPUT_BYTES, MAX_GIST_INPUT_BYTES, InputSizeError
 from repository import Repository, validate_destination, validate_files
 from verification import Verification
-from references import References
+from references import References, CATALOG
 
 BASE = Path.home() / '.local/share/burt-workbench'
 TOKEN = Path.home() / '.config/burt-publisher/gist.token'
@@ -26,14 +27,26 @@ MAX_ATTEMPTS = 5
 # Operator-only audit: fixed strings, never arbitrary exception/source text.
 AUDIT_LIMIT = 512
 AUDIT_TTL = 7 * 86400
+PROPOSAL_TTL = 300
 ACTIONS = frozenset(('run', 'publish', 'repo_read', 'repo_run', 'repo_publish',
-                     'repo_inspect', 'repo_repair', 'repo_diagnose', 'reference', 'task_status'))
+                     'repo_inspect', 'repo_repair', 'repo_diagnose', 'reference', 'task_status',
+                     'proposal_create', 'proposal_confirm'))
 ACTION_CAPABILITY = {
     'reference': 'read_status', 'repo_read': 'read_status', 'repo_inspect': 'read_status',
     'run': 'edit_test', 'repo_run': 'edit_test', 'repo_repair': 'edit_test',
     'repo_diagnose': 'edit_test', 'task_status': 'edit_test',
     'publish': 'publish_gist', 'repo_publish': 'publish_repo',
+    'proposal_confirm': 'read_status',
 }
+PROPOSAL_FIELDS = {
+    'reference': frozenset(('key',)),
+    'repo_read': frozenset(('branch', 'project')),
+    'publish': frozenset(('id',)),
+    'repo_publish': frozenset(('id',)),
+}
+# `irc_fold` on the Perl side emits the rfc1459 canonical alphabet. Do not
+# require an alphanumeric first character: IRC permits a leading special.
+REQUESTER_IDENTITY = re.compile(r'[a-z0-9_{}|~][a-z0-9_{}|~\-]{0,63}')
 SAFE_REASONS = frozenset({
     'Burt gist credential is not installed; ask the operator',
     'branch changed; read project and retest against the new base',
@@ -125,6 +138,11 @@ class Broker:
         self.db.execute('''CREATE TABLE IF NOT EXISTS task_status
             (scope TEXT PRIMARY KEY, channel TEXT, network TEXT, created REAL,
              updated REAL, phase TEXT, reason TEXT)''')
+        self.db.execute('''CREATE TABLE IF NOT EXISTS proposals
+            (id TEXT PRIMARY KEY, scope TEXT NOT NULL, requester TEXT NOT NULL,
+             channel TEXT NOT NULL, network TEXT NOT NULL, action TEXT NOT NULL,
+             params TEXT NOT NULL, created REAL NOT NULL, expires REAL NOT NULL,
+             state TEXT NOT NULL)''')
         (self.base / 'jobs.sqlite').chmod(0o600)
         self.prune_audit()
         self.db.commit()
@@ -141,6 +159,10 @@ class Broker:
         self.db.execute('DELETE FROM task_status WHERE updated<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM task_status WHERE scope NOT IN '
                         '(SELECT scope FROM task_status ORDER BY updated DESC LIMIT ?)', (AUDIT_LIMIT,))
+        self.db.execute('UPDATE proposals SET state="expired" WHERE state="proposed" AND expires<=?', (now,))
+        self.db.execute('DELETE FROM proposals WHERE created<?', (now - AUDIT_TTL,))
+        self.db.execute('DELETE FROM proposals WHERE id NOT IN '
+                        '(SELECT id FROM proposals ORDER BY created DESC LIMIT ?)', (AUDIT_LIMIT,))
 
     def record_rejection(self, req, exc, raw=None):
         # Scope/channel/action come only from the trusted runtime IPC envelope.
@@ -198,8 +220,14 @@ class Broker:
                   'repo_diagnose': {'id','argv','title'}}
         fields['reference'] = {'key'}
         fields['task_status'] = {'phase', 'reason'}
+        fields['proposal_create'] = {'proposal_action', 'params', 'requester'}
+        fields['proposal_confirm'] = {'requester', 'confirmed_at', 'publish_capability', 'publish_grant'}
         allowed |= fields.get(action, set())
-        if set(req) != allowed or action not in fields:
+        if action == 'proposal_confirm':
+            required = {'action', 'scope', 'capability', 'grant', 'channel', 'network', 'requester', 'confirmed_at'}
+            if not required <= set(req) or set(req) - allowed:
+                raise ValueError('invalid action or fields')
+        elif set(req) != allowed or action not in fields:
             raise ValueError('invalid action or fields')
         if req['channel'] not in ('#ai', '#mateu-test') or req['network'] != 'irc.perl.org':
             raise ValueError('workbench is restricted to irc.perl.org #ai or #mateu-test')
@@ -207,12 +235,20 @@ class Broker:
         if not isinstance(scope, str) or not re.fullmatch(r'[a-f0-9]{64}', scope):
             raise ValueError('invalid turn scope')
         capability = req['capability']
-        expected_capability = ACTION_CAPABILITY[action]
+        expected_capability = (ACTION_CAPABILITY.get(req.get('proposal_action'))
+                               if action == 'proposal_create' else ACTION_CAPABILITY.get(action))
+        if expected_capability is None:
+            raise ValueError('invalid action or fields')
+        grant_action = req['proposal_action'] if action == 'proposal_create' else action
         expected_grant = self.capability_envelope(
-            action, scope, req['channel'], req['network'])['grant']
+            grant_action, scope, req['channel'], req['network'])['grant']
         if (capability != expected_capability or not isinstance(req['grant'], str)
                 or not hmac.compare_digest(req['grant'], expected_grant)):
             raise ValueError('invalid capability grant')
+        if action == 'proposal_create':
+            return self.create_proposal(req)
+        if action == 'proposal_confirm':
+            return self.confirm_proposal(req)
         if action == 'task_status':
             if (req['phase'] not in ('started', 'stopped', 'reported') or req['reason'] not in
                     ('admitted', 'deadline', 'iteration_limit', 'runtime_error', 'no_report',
@@ -439,6 +475,94 @@ class Broker:
         if data.get('owner', {}).get('login') != 'burt-agent' or not re.fullmatch(r'https://gist.github.com/burt-agent/[a-f0-9]+', url):
             raise ValueError('unexpected gist owner or URL')
         return url
+
+    def create_proposal(self, req):
+        action, params, requester = req['proposal_action'], req['params'], req['requester']
+        if action not in PROPOSAL_FIELDS or not isinstance(params, dict):
+            raise ValueError('invalid action or fields')
+        if set(params) != PROPOSAL_FIELDS[action]:
+            raise ValueError('invalid action or fields')
+        if not isinstance(requester, str) or not REQUESTER_IDENTITY.fullmatch(requester):
+            raise ValueError('invalid requester identity')
+        if action == 'reference':
+            if not isinstance(params['key'], str) or params['key'] not in CATALOG:
+                raise ValueError('unknown reference; available: ' + ', '.join(CATALOG))
+        elif action == 'repo_read':
+            validate_destination(params['branch'], params['project'])
+        else:
+            job_id = params['id']
+            if not isinstance(job_id, str) or not re.fullmatch(r'[a-f0-9]{32}', job_id):
+                raise ValueError('invalid job id')
+            job = self.db.execute('SELECT id,state FROM jobs WHERE id=? AND scope=?',
+                                  (job_id, req['scope'])).fetchone()
+            repo_job = self.db.execute('SELECT id FROM repo_jobs WHERE id=?', (job_id,)).fetchone()
+            if not job or job['state'] != 'passed' or bool(repo_job) != (action == 'repo_publish'):
+                raise ValueError('proposal action is not available for this request')
+        canonical = json.dumps(params, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
+        if len(canonical.encode()) > MAX_REQUEST:
+            raise ValueError('encoded project response exceeds transport bound')
+        now = time.time()
+        existing = self.db.execute(
+            'SELECT id,expires FROM proposals WHERE scope=? AND requester=? AND channel=? AND network=? '
+            'AND action=? AND params=? AND state="proposed" AND expires>? ORDER BY created,id',
+            (req['scope'], requester, req['channel'], req['network'], action, canonical, now)).fetchall()
+        if len(existing) == 1:
+            self.db.commit()
+            return {'proposal_id': existing[0]['id'], 'state': 'proposed', 'action': action,
+                    'expires_at': existing[0]['expires']}
+        proposal_id = uuid.uuid4().hex
+        self.db.execute('INSERT INTO proposals VALUES (?,?,?,?,?,?,?,?,?,?)',
+                        (proposal_id, req['scope'], requester, req['channel'], req['network'],
+                         action, canonical, now, now + PROPOSAL_TTL, 'proposed'))
+        self.prune_audit()
+        self.db.commit()
+        return {'proposal_id': proposal_id, 'state': 'proposed', 'action': action,
+                'expires_at': now + PROPOSAL_TTL}
+
+    def confirm_proposal(self, req):
+        requester = req['requester']
+        if not isinstance(requester, str) or not REQUESTER_IDENTITY.fullmatch(requester):
+            raise ValueError('invalid requester identity')
+        confirmed_at = req['confirmed_at']
+        if (isinstance(confirmed_at, bool) or not isinstance(confirmed_at, (int, float))
+                or not math.isfinite(confirmed_at)):
+            raise ValueError('invalid confirmation timestamp')
+        self.prune_audit()
+        now = time.time()
+        rows = self.db.execute('SELECT * FROM proposals WHERE requester=? AND channel=? AND network=? '
+                               'AND state="proposed" AND expires>? AND created<? ORDER BY created,id',
+                               (requester, req['channel'], req['network'], now, confirmed_at)).fetchall()
+        if len(rows) != 1:
+            self.db.commit()
+            raise ValueError('proposal confirmation is missing or ambiguous')
+        proposal = rows[0]
+        if proposal['scope'] == req['scope']:
+            self.db.commit()
+            raise ValueError('proposal confirmation requires a later fresh request')
+        action = proposal['action']
+        if action in ('publish', 'repo_publish'):
+            capability = ACTION_CAPABILITY[action]
+            expected = self.capability_envelope(action, req['scope'], req['channel'], req['network'])['grant']
+            if (req.get('publish_capability') != capability or not isinstance(req.get('publish_grant'), str)
+                    or not hmac.compare_digest(req['publish_grant'], expected)):
+                self.db.commit()
+                raise ValueError('confirmation requires fresh explicit publication authority')
+        elif 'publish_capability' in req or 'publish_grant' in req:
+            self.db.commit()
+            raise ValueError('invalid action or fields')
+        changed = self.db.execute('UPDATE proposals SET state="consumed" WHERE id=? AND state="proposed"',
+                                  (proposal['id'],)).rowcount
+        if changed != 1:
+            self.db.commit()
+            raise ValueError('proposal confirmation is missing or ambiguous')
+        self.db.commit()
+        params = json.loads(proposal['params'])
+        internal = (self.capability_envelope(action, proposal['scope'], proposal['channel'], proposal['network'])
+                    | params | {'action': action})
+        result = self._handle(internal)
+        result['proposal_id'] = proposal['id']
+        result['confirmed_action'] = action
+        return result
 
     def result(self, job):
         return {'id': job['id'], 'state': job['state'], 'result': json.loads(job['result']),

@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from broker import Broker
 
@@ -139,6 +140,82 @@ class BrokerTests(unittest.TestCase):
         result = second.handle({k:self.req[k] for k in ('scope','channel','network')}
                                | {'capability':'publish_gist','grant':'651dd50e7ef8d6ee04e34ce5b6844653529b739e54d693e8d1f6e8ff9abeef87','action':'publish','id':r['id']})
         self.assertEqual(result['url'], 'https://gist.github.com/burt-agent/abcdef')
+
+    def proposal(self, action, params, requester='mateu', **changes):
+        return self.b.handle(self.b.capability_envelope(action, self.req['scope'], self.req['channel'], self.req['network'])
+                             | dict(action='proposal_create', proposal_action=action, params=params,
+                                    requester=requester) | changes)
+
+    def confirm(self, requester='mateu', scope='b'*64, **changes):
+        return self.b.handle(self.b.capability_envelope('proposal_confirm', scope,
+                             self.req['channel'], self.req['network'])
+                             | dict(action='proposal_confirm', requester=requester, confirmed_at=time.time()) | changes)
+
+    def test_durable_proposal_requires_unique_same_scope_confirmation(self):
+        self.b.references.read = lambda key: {'reference':key, 'untrusted':True}
+        proposal = self.proposal('reference', {'key':'python-json'})
+        self.assertEqual(proposal['state'], 'proposed')
+        with self.assertRaisesRegex(ValueError, 'missing or ambiguous'):
+            self.confirm(requester='other')
+        with self.assertRaisesRegex(ValueError, 'later fresh'):
+            self.confirm(scope=self.req['scope'])
+        created = self.b.db.execute('SELECT created FROM proposals WHERE id=?',
+                                    (proposal['proposal_id'],)).fetchone()[0]
+        with self.assertRaisesRegex(ValueError, 'missing or ambiguous'):
+            self.confirm(confirmed_at=created)
+        result = self.confirm()
+        self.assertEqual((result['confirmed_action'], result['reference']), ('reference', 'python-json'))
+        self.assertEqual(self.b.db.execute('SELECT state FROM proposals WHERE id=?',
+                         (proposal['proposal_id'],)).fetchone()[0], 'consumed')
+        with self.assertRaisesRegex(ValueError, 'missing or ambiguous'):
+            self.confirm()
+
+    def test_repeated_identical_proposal_reuses_pending_row(self):
+        self.b.references.read = lambda key: {'reference':key, 'untrusted':True}
+        first = self.proposal('reference', {'key':'python-json'})
+        second = self.proposal('reference', {'key':'python-json'})
+        self.assertEqual(second, first)
+        self.assertEqual(self.b.db.execute('SELECT COUNT(*) FROM proposals').fetchone()[0], 1)
+        self.assertEqual(self.confirm()['reference'], 'python-json')
+        different = self.proposal('reference', {'key':'python-csv'})
+        self.assertNotEqual(different['proposal_id'], first['proposal_id'])
+        self.assertEqual(self.b.db.execute('SELECT COUNT(*) FROM proposals').fetchone()[0], 2)
+
+    def test_proposal_accepts_casemapped_irc_requester_identities(self):
+        for requester in ('mateu~', '_mateu', '{mateu'):
+            proposal = self.proposal('reference', {'key':'python-json'}, requester=requester)
+            self.assertEqual(proposal['state'], 'proposed')
+
+    def test_confirmation_rejects_ambiguity_expiry_and_altered_parameters(self):
+        one = self.proposal('reference', {'key':'python-json'})
+        two = self.proposal('reference', {'key':'python-csv'})
+        with self.assertRaisesRegex(ValueError, 'missing or ambiguous'):
+            self.confirm()
+        self.b.db.execute('UPDATE proposals SET expires=0 WHERE id=?', (one['proposal_id'],))
+        self.b.db.execute('UPDATE proposals SET state="consumed" WHERE id=?', (two['proposal_id'],))
+        self.b.db.commit()
+        with self.assertRaisesRegex(ValueError, 'missing or ambiguous'):
+            self.confirm()
+        with self.assertRaisesRegex(ValueError, 'action or fields'):
+            self.proposal('reference', {'key':'python-json', 'id':'0'*32})
+
+    def test_publication_confirmation_needs_fresh_destination_grant_and_survives_restart(self):
+        job = self.b.handle(self.req)
+        proposal = self.proposal('publish', {'id':job['id']})
+        with self.assertRaisesRegex(ValueError, 'fresh explicit publication authority'):
+            self.confirm()
+        second = Broker(self.tmp.name, self.token)
+        self.addCleanup(second.db.close)
+        second.post_gist = self.post
+        confirmation_scope = 'b'*64
+        envelope = second.capability_envelope('proposal_confirm', confirmation_scope, '#ai', 'irc.perl.org')
+        publish = second.capability_envelope('publish', confirmation_scope, '#ai', 'irc.perl.org')
+        result = second.handle(envelope | dict(action='proposal_confirm', requester='mateu',
+                               confirmed_at=time.time(), publish_capability=publish['capability'], publish_grant=publish['grant']))
+        self.assertEqual((result['confirmed_action'], result['state']), ('publish', 'published'))
+        with self.assertRaisesRegex(ValueError, 'missing or ambiguous'):
+            second.handle(envelope | dict(action='proposal_confirm', requester='mateu',
+                          confirmed_at=time.time(), publish_capability=publish['capability'], publish_grant=publish['grant']))
 
     def test_verbose_failure_keeps_error_head_and_suite_summary_tail(self):
         self.b.execute=lambda job: {'reason':'exited','exit_code':1,

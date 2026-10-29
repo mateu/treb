@@ -13,6 +13,11 @@ use Bot::Runtime::Buffering qw(process_buffer_event);
 }
 
 {
+  package Local::BufferIRC;
+  sub new { bless {}, shift }
+  sub nicks { () }
+  sub is_channel_operator { 0 }
+
   package Local::BufferBot;
 
   sub new {
@@ -27,6 +32,8 @@ use Bot::Runtime::Buffering qw(process_buffer_event);
       raid_calls      => 0,
       setup_calls     => 0,
       scheduled_calls => 0,
+      memory          => $args{memory},
+      irc             => $args{irc} || Local::BufferIRC->new,
       raider          => exists $args{raider} ? $args{raider} : { ready => 1 },
       setup_fail      => $args{setup_fail},
       setup_success   => exists $args{setup_success} ? $args{setup_success} : 1,
@@ -35,6 +42,8 @@ use Bot::Runtime::Buffering qw(process_buffer_event);
 
   sub _buffer_timers { return $_[0]->{_buffer_timers} }
   sub _msg_buffer { return $_[0]->{_msg_buffer} }
+  sub memory { return $_[0]->{memory} }
+  sub irc { return $_[0]->{irc} }
 
   sub _processing {
     my ($self, $value) = @_;
@@ -200,6 +209,7 @@ like($err, qr/requires channel/, 'process_buffer_event validates channel argumen
   my $clock = 1000;
   my @alarms;
   local *Bot::Runtime::Buffering::now = sub { $clock };
+  local *Bot::Runtime::Buffering::message_clock = sub { $clock + 0.25 };
   local *POE::Kernel::alarm_set = sub { push @alarms, [ @_[1..$#_] ]; scalar @alarms };
   local *POE::Kernel::alarm_remove = sub { 1 };
   local $ENV{BOT_QUEUE_MAX_CHANNEL} = 2;
@@ -213,19 +223,21 @@ like($err, qr/requires channel/, 'process_buffer_event validates channel argumen
   $enqueue->('#a', 'first');
   $clock++;
   $enqueue->('#a', 'second');
-  is($alarms[-1][1], 1005, 'arrivals cannot postpone first queued message indefinitely');
+  is($bot->_msg_buffer->{'#a'}[0]{queued_at}, 1000.25,
+    'trusted receipt timestamp preserves subsecond precision');
+  is($alarms[-1][1], 1005.25, 'arrivals cannot postpone first queued message indefinitely');
   $enqueue->('#a', 'overflow');
   is(scalar @{$bot->_msg_buffer->{'#a'}}, 2, 'per-channel queue is bounded');
   $enqueue->('#b', 'third');
   $enqueue->('#c', 'fourth');
   ok(!exists $bot->_msg_buffer->{'#c'}, 'global bound applies across channels');
-  $clock = 1301;
+  $clock = 1302;
   $enqueue->('#c', 'new');
   ok(!exists $bot->_msg_buffer->{'#a'}, 'expired queue pruned before admission');
   ok(!exists $bot->_buffer_timers->{'#a'}, 'expired channel timer removed');
   $enqueue->('#d', 'x' x 11);
   ok(!exists $bot->_msg_buffer->{'#d'}, 'oversized messages do not enter work queue');
-  $clock = 1601;
+  $clock = 1603;
   process_buffer_event(self=>$bot, channel=>'#c');
   is($bot->{raid_calls}, 0, 'expired messages never call the model');
   ok(!exists $bot->_msg_buffer->{'#c'}, 'expired dispatch removes empty queue key');
@@ -249,16 +261,14 @@ like($err, qr/requires channel/, 'process_buffer_event validates channel argumen
   my $dir = File::Temp::tempdir(CLEANUP=>1);
   my $memory = Bot::MemoryStore->new(db_file=>"$dir/buffer.sqlite");
   no warnings 'redefine';
-  local *Local::BufferBot::memory = sub { $memory };
   local *Local::BufferBot::_bot_name_slug = sub { 'burt' };
-  local *Bot::Runtime::Context::build_context_and_input = sub { +{input=>'reminder context'} };
   my %scope = (bot=>'burt',channel=>'#ai');
   for my $cancelled (0,1) {
     my $r = $memory->create_reminder(%scope,reason=>'wake',delay_seconds=>10);
     $memory->_dbh->do('UPDATE reminders SET due_at=? WHERE id=?',undef,time()-1,$r->{id});
     $memory->claim_due_reminders(%scope);
     $memory->cancel_reminder(%scope,id=>$r->{id}) if $cancelled;
-    my $b = Local::BufferBot->new;
+    my $b = Local::BufferBot->new(memory=>$memory);
     $b->_msg_buffer->{'#ai'} = [{nick=>'system',msg=>'alarm',reminder_id=>$r->{id},source_kind=>'reminder'}];
     process_buffer_event(self=>$b,channel=>'#ai');
     is($b->{raid_calls},$cancelled ? 0 : 1,$cancelled ? 'cancelled wake never invokes model' : 'active wake reaches model');
