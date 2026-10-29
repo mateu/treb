@@ -170,6 +170,16 @@ class BrokerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'missing or ambiguous'):
             self.confirm()
 
+    def test_repeated_identical_proposal_reuses_pending_row(self):
+        first = self.proposal('reference', {'key':'python-json'})
+        second = self.proposal('reference', {'key':'python-json'})
+        self.assertEqual(second, first)
+        self.assertEqual(self.b.db.execute('SELECT COUNT(*) FROM proposals').fetchone()[0], 1)
+        self.assertEqual(self.confirm()['reference'], 'python-json')
+        different = self.proposal('reference', {'key':'python-csv'})
+        self.assertNotEqual(different['proposal_id'], first['proposal_id'])
+        self.assertEqual(self.b.db.execute('SELECT COUNT(*) FROM proposals').fetchone()[0], 2)
+
     def test_proposal_accepts_casemapped_irc_requester_identities(self):
         for requester in ('mateu~', '_mateu', '{mateu'):
             proposal = self.proposal('reference', {'key':'python-json'}, requester=requester)

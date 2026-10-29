@@ -502,6 +502,14 @@ class Broker:
         if len(canonical.encode()) > MAX_REQUEST:
             raise ValueError('encoded project response exceeds transport bound')
         now = time.time()
+        existing = self.db.execute(
+            'SELECT id,expires FROM proposals WHERE scope=? AND requester=? AND channel=? AND network=? '
+            'AND action=? AND params=? AND state="proposed" AND expires>? ORDER BY created,id',
+            (req['scope'], requester, req['channel'], req['network'], action, canonical, now)).fetchall()
+        if len(existing) == 1:
+            self.db.commit()
+            return {'proposal_id': existing[0]['id'], 'state': 'proposed', 'action': action,
+                    'expires_at': existing[0]['expires']}
         proposal_id = uuid.uuid4().hex
         self.db.execute('INSERT INTO proposals VALUES (?,?,?,?,?,?,?,?,?,?)',
                         (proposal_id, req['scope'], requester, req['channel'], req['network'],
