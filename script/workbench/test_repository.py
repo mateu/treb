@@ -222,6 +222,20 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         self.b.db.commit()
         self.assertEqual(self.b.publication_attempt_count(now), 10)
 
+    def test_direct_publish_initializes_missing_legacy_task_budget(self):
+        self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
+                          (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))
+        self.b.db.commit()
+        job = self.b.handle(self.repo_req)
+        # Simulate a passed repository job persisted before phase budgets existed.
+        self.b.db.execute('DELETE FROM task_phase_budgets WHERE task_id=?', (self.req['scope'],))
+        self.b.db.commit()
+        published = self.direct_repo_publish()
+        self.assertEqual((published['id'], published['state']), (job['id'], 'published'))
+        budget = self.b.db.execute('SELECT public_writes FROM task_phase_budgets WHERE task_id=?',
+                                   (self.req['scope'],)).fetchone()
+        self.assertEqual(budget['public_writes'], 1)
+
     def test_direct_publish_retry_keeps_its_initial_job_binding(self):
         self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
                           (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))

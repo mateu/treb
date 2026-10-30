@@ -501,11 +501,14 @@ class Broker:
                         (job_id, time.time() if now is None else now))
 
     def consume_prior_task_publication_authority(self, task_id):
-        row = self.db.execute('SELECT * FROM task_phase_budgets WHERE task_id=?', (task_id,)).fetchone()
+        now = time.time()
+        # A database predating phase budgets can retain a passed job; initialize
+        # its original task before enforcing its migrated publication allowance.
+        row = self.ensure_task_phase_budget(task_id, now)
         if row['public_writes'] >= MAX_PUBLIC_WRITES:
             raise ValueError('limit: one submission per IRC request')
         self.db.execute('UPDATE task_phase_budgets SET public_writes=public_writes+1,updated=? WHERE task_id=?',
-                        (time.time(), task_id))
+                        (now, task_id))
 
     def ensure_task_phase_budget(self, task_id, now, deadline=None):
         row = self.db.execute('SELECT * FROM task_phase_budgets WHERE task_id=?', (task_id,)).fetchone()
