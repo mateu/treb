@@ -292,6 +292,7 @@ ok(!exists($confirmation->{publish_grant}),'confirmation never supplies standalo
 $bot->{pending}{messages}[0]{msg}='burt_bot: yes, publish this gist';
 $confirmation=Bot::Runtime::Workbench::confirmation_envelope($bot);
 ok(!exists($confirmation->{publish_capability}),'destination remains bound by the durable proposal');
+ok($confirmation->{publication_confirmation},'an explicit publication verb retains publication intent');
 $bot->{pending}{expires_at}=time-1;
 eval { Bot::Runtime::Workbench::confirmation_envelope($bot) };
 like($@,qr/No active #ai/,'expired envelope cannot mint confirmation grant');
@@ -314,6 +315,7 @@ $bot->{pending}{messages}=[
 ];
 $confirmation=Bot::Runtime::Workbench::confirmation_envelope($bot);
 like($confirmation->{scope},qr/^[a-f0-9]{64}$/,'unaddressed please push follows a bot offer without treating the offer as authority');
+ok($confirmation->{publication_confirmation},'please push carries explicit publication intent');
 $bot->{pending}{messages}[1]{source_kind}='activity_followup';
 eval {Bot::Runtime::Workbench::confirmation_envelope($bot)};
 like($@,qr/fresh explicit confirmation/,'retrieved text cannot mint approval');
@@ -357,7 +359,7 @@ $bot->{pending}={channel=>'#ai',expires_at=>time+100,messages=>[
     'confirmation tool forwards only the fresh runtime envelope');
 }
 is($forwarded->{requester},'mateu','confirmation requester is runtime-derived');
-is_deeply([sort keys %$forwarded],[sort qw(action capability channel confirmed_at grant network requester scope)],
+is_deeply([sort keys %$forwarded],[sort qw(action capability channel confirmed_at grant network publication_confirmation requester scope)],
   'confirmation tool accepts no model-selected action or parameters');
 # Recovery tools derive requester and fresh authorization from the current
 # envelope; a checkpoint id is the only model-supplied selector.

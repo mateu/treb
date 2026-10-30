@@ -550,7 +550,7 @@ class Broker:
         fields['task_resume'] = {'checkpoint_id', 'requester'}
         optional_fields['task_resume'] = {'deadline'}
         fields['proposal_create'] = {'proposal_action', 'params', 'requester'}
-        fields['proposal_confirm'] = {'requester', 'confirmed_at'}
+        fields['proposal_confirm'] = {'requester', 'confirmed_at', 'publication_confirmation'}
         allowed |= fields.get(action, set()) | optional_fields.get(action, set())
         if action == 'proposal_confirm':
             required = {'action', 'scope', 'capability', 'grant', 'channel', 'network', 'requester', 'confirmed_at'}
@@ -985,8 +985,11 @@ class Broker:
         # For publication the durable proposal, created only after the broker
         # verified a real passed job, is the authority anchor. Its immutable
         # params bind this later natural-language approval to that exact job
-        # and fixed destination; the confirmer does not mint broad publish
-        # authority or repeat opaque identifiers.
+        # and fixed destination. The fresh reply must still explicitly express
+        # publication intent: “read it” can approve a read, never a public write.
+        if action in ('publish', 'repo_publish') and req.get('publication_confirmation') is not True:
+            self.db.commit()
+            raise ValueError('confirmation requires explicit publication intent')
         changed = self.db.execute('UPDATE proposals SET state="consumed" WHERE id=? AND state="proposed"',
                                   (proposal['id'],)).rowcount
         if changed == 1:

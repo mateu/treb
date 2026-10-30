@@ -183,7 +183,8 @@ sub confirmation_envelope {
   my $grant=sha256_hex(JSON::PP->new->canonical->utf8->encode(
     [$scope,$channel,'irc.perl.org','read_status']));
   my %envelope=(action=>'proposal_confirm',scope=>$scope,capability=>'read_status',grant=>$grant,
-    channel=>$channel,network=>'irc.perl.org',requester=>$requester,confirmed_at=>0+$messages[0]{queued_at});
+    channel=>$channel,network=>'irc.perl.org',requester=>$requester,confirmed_at=>0+$messages[0]{queued_at},
+    publication_confirmation=>publication_confirmation_text($messages[0]{msg}//'') ? JSON::PP::true : JSON::PP::false);
   return \%envelope;
 }
 
@@ -195,6 +196,12 @@ sub confirmation_text {
   return 1 if $text =~ /\A\s*$nick\s*[:,]?\s*(?:yes|read\s+it)(?:\s*[,;:]?\s*(?:publish|post|push|commit)\b.*)?[.!]?\s*\z/i;
   return 1 if $text =~ /\A\s*(?:please\s+)?(?:publish|post|push|commit)(?:\s+(?:it|this|that))?[.!]?\s*\z/i;
   return 0;
+}
+
+sub publication_confirmation_text {
+  my ($text)=@_;
+  # Read approval can confirm a read proposal, but never a public write.
+  return $text =~ /\b(?:publish|post|push|commit)\b/i ? 1 : 0;
 }
 
 sub capability_grant {

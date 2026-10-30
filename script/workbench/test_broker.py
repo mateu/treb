@@ -318,7 +318,8 @@ class BrokerTests(unittest.TestCase):
     def confirm(self, requester='mateu', scope='b'*64, **changes):
         return self.b.handle(self.b.capability_envelope('proposal_confirm', scope,
                              self.req['channel'], self.req['network'])
-                             | dict(action='proposal_confirm', requester=requester, confirmed_at=time.time()) | changes)
+                             | dict(action='proposal_confirm', requester=requester, confirmed_at=time.time(),
+                                    publication_confirmation=False) | changes)
 
     def test_durable_proposal_requires_unique_same_scope_confirmation(self):
         self.b.references.read = lambda key: {'reference':key, 'untrusted':True}
@@ -389,11 +390,15 @@ class BrokerTests(unittest.TestCase):
         final = second.capability_envelope('task_status', self.req['scope'], '#ai', 'irc.perl.org') | {
             'action': 'task_status', 'phase': 'reported', 'reason': 'final_report'}
         second.handle(final)
+        with self.assertRaisesRegex(ValueError, 'explicit publication intent'):
+            second.handle(envelope | dict(action='proposal_confirm', requester='mateu',
+                          confirmed_at=time.time(), publication_confirmation=False))
         result = second.handle(envelope | dict(action='proposal_confirm', requester='mateu',
-                               confirmed_at=time.time()))
+                               confirmed_at=time.time(), publication_confirmation=True))
         self.assertEqual((result['confirmed_action'], result['state']), ('publish', 'published'))
         with self.assertRaisesRegex(ValueError, 'missing or ambiguous'):
-            second.handle(envelope | dict(action='proposal_confirm', requester='mateu', confirmed_at=time.time()))
+            second.handle(envelope | dict(action='proposal_confirm', requester='mateu',
+                          confirmed_at=time.time(), publication_confirmation=True))
         self.assertEqual(self.b.db.execute('SELECT params FROM proposals WHERE id=?',
                          (proposal['proposal_id'],)).fetchone()[0], json.dumps({'id': job['id']}, separators=(',', ':')))
 
@@ -407,7 +412,8 @@ class BrokerTests(unittest.TestCase):
         confirmation_scope = 'b' * 64
         envelope = self.b.capability_envelope('proposal_confirm', confirmation_scope, '#ai', 'irc.perl.org')
         with self.assertRaisesRegex(ValueError, 'operator reconciliation required'):
-            self.b.handle(envelope | dict(action='proposal_confirm', requester='mateu', confirmed_at=time.time()))
+            self.b.handle(envelope | dict(action='proposal_confirm', requester='mateu',
+                          confirmed_at=time.time(), publication_confirmation=True))
         self.assertEqual(self.b.db.execute('SELECT state FROM jobs WHERE id=?', (job['id'],)).fetchone()[0], 'uncertain')
         self.assertEqual(self.b.db.execute('SELECT terminal_reason FROM task_phase_budgets').fetchone()[0],
                          'publication_uncertain')
