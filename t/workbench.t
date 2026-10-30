@@ -23,6 +23,16 @@ like($scope,qr/^[a-f0-9]{64}$/,'scope is bounded digest');
 my $tool=bless {},'WorkbenchTool';
 my %defs=map {$_->{name}=>$_} @{Bot::Runtime::Workbench::tool_specs($bot)};
 is(scalar keys %defs,15,'fifteen narrow tools including standalone checkpoint recovery');
+like($defs{run_repo_project}{description},qr/THIRTEEN total sandbox attempts/,
+  'production tools advertise the thirteen-attempt budget');
+{
+  local $ENV{BURT_SANDBOX_ATTEMPTS}=5;
+  my %trial_defs=map {$_->{name}=>$_} @{Bot::Runtime::Workbench::tool_specs($bot)};
+  like($trial_defs{run_code}{description},qr/At most FIVE sandbox runs TOTAL/,
+    'frozen trials advertise the five-attempt budget');
+  like($trial_defs{diagnose_repo_job}{description},qr/one of the FIVE shared executions/,
+    'frozen diagnostics advertise the five-attempt budget');
+}
 {
   no warnings 'redefine';
   local *Bot::Runtime::Workbench::broker_call=sub { '{"reference":"python-csv","text":"documentation","untrusted":true}' };
