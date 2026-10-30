@@ -77,9 +77,10 @@ sub bounded_code_read_request {
   my $body=$text;
   return 0 unless $body =~ s/\A\s*$nick\s*[:,]?\s*//i;
   return 0 unless $body =~ /\A(?:please\s+)?(?:read|inspect|open|review|check)\b/i;
-  # Lists of reads remain reads. Only an execution/publication verb upgrades
-  # the request; punctuation or a second inspection action does not.
-  return 0 if $body =~ /\b(?:write|implement|build|update|edit|fix|test|run|repair|publish|push|commit)\b/i;
+  # Lists of reads remain reads. Look for an execution/publication action only
+  # at the start of a later clause, so resource names such as perl-test-more
+  # cannot turn an otherwise read-only request into an execution request.
+  return 0 if $body =~ /(?:[,;]|\b(?:and|then)\b)\s*(?:please\s+)?(?:write|implement|build|update|edit|fix|test|run|repair|publish|push|commit)\b/i;
   return 1;
 }
 
@@ -101,10 +102,13 @@ sub natural_code_task_request {
   # cannot accidentally broaden an otherwise negative request.
   return 0 if _non_task_text($text,$nick) || !_code_context($text);
   return 0 if bounded_code_read_request($text,$nick);
+  my $body=$text;
+  $body =~ s/\A\s*$nick\s*[:,]?\s*//i;
   # An isolated destination-specific publication request is not also a coding
   # task. A compound task still has its ordinary offline authority, while the
-  # publication half remains separately explicit below.
-  return 0 if isolated_publication_request($text) && $text !~ /[,;]|\b(?:and|then)\b/i;
+  # publication half remains separately explicit below. Addressing punctuation
+  # is not itself a compound action.
+  return 0 if isolated_publication_request($body) && $body !~ /[,;]|\b(?:and|then)\b/i;
 
   # A fresh direct human statement about code is a task unless it is one of
   # the explicit non-task/read forms above. This makes requests, imperative
