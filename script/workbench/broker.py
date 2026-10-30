@@ -911,6 +911,12 @@ class Broker:
             digest = hashlib.sha256(json.dumps([files, argv, title, destination], sort_keys=True).encode()).hexdigest()
             old = self.db.execute('SELECT * FROM jobs WHERE scope=? AND digest=?', (scope, digest)).fetchone()
             if old:
+                # Replaying a material passed request is an explicit retest
+                # selection, not stale history: restore its durable candidate
+                # position so direct publication cannot select later files.
+                if action == 'repo_run' and old['state'] == 'passed' and destination is not None:
+                    self.remember_repository_candidate(req, old['id'], destination)
+                    self.db.commit()
                 return self.result(old)
             task_id = self.task_binding(scope)['task_id']
             # The final shared execution belongs to a trusted complete repository

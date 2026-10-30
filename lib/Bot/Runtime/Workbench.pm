@@ -418,6 +418,11 @@ sub report_result {
   }
   $pending->{coding_last_repo_job}=$id if $id && $action =~ /\Arepo_(?:run|repair)\z/;
   $pending->{coding_last_repo_state}=$state if $id && $action =~ /\Arepo_(?:run|repair)\z/;
+  # A final report can describe either a repository bundle or a standalone
+  # script execution.  The latest execution state prevents an older pass from
+  # authorizing claims after a later failure in either lane.
+  $pending->{coding_last_execution_job}=$id if $id && $action =~ /\A(?:run|repo_(?:run|repair))\z/;
+  $pending->{coding_last_execution_state}=$state if $id && $action =~ /\A(?:run|repo_(?:run|repair))\z/;
   $pending->{coding_last_publication_job}=$id if $id && $state eq 'published';
   if (defined($remaining) && "$remaining" eq '0' && $state eq 'failed' && $action =~ /(?:run|repair)/) {
     $pending->{coding_stop_reason}='sandbox attempt budget exhausted after a failed test';
@@ -446,10 +451,11 @@ sub verified_final_report {
     last;
   }
   $claims_publication=1 if $answer =~ m{https://github\.com/burt-agent/workspace/commit/[a-f0-9]{40}}i;
-  my $last_repo_job=$pending->{coding_last_repo_job}//'';
-  my $pass_receipt=$last_repo_job =~ /\A[a-f0-9]{32}\z/
-    && ($pending->{coding_last_repo_state}//'') eq 'passed'
-    && $receipts->{passed}{$last_repo_job};
+  my $last_execution_job=$pending->{coding_last_execution_job}//$pending->{coding_last_repo_job}//'';
+  my $last_execution_state=$pending->{coding_last_execution_state}//$pending->{coding_last_repo_state}//'';
+  my $pass_receipt=$last_execution_job =~ /\A[a-f0-9]{32}\z/
+    && $last_execution_state eq 'passed'
+    && $receipts->{passed}{$last_execution_job};
   my $last_publication_job=$pending->{coding_last_publication_job}//'';
   my $publication_receipt=$last_publication_job =~ /\A[a-f0-9]{32}\z/
     ? $receipts->{published}{$last_publication_job} : undef;

@@ -295,6 +295,19 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         published = self.direct_repo_publish()
         self.assertEqual((published['id'], published['state']), (job['id'], 'published'))
 
+    def test_cached_material_retest_refreshes_repository_candidate(self):
+        self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
+                          (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))
+        self.b.db.commit()
+        first_req = self.repo_req | {'changes': {'lib/main.py':'print("A")'}}
+        first = self.b.handle(first_req)
+        second = self.b.handle(self.repo_req | {'changes': {'lib/main.py':'print("B")'}})
+        replayed = self.b.handle(first_req)
+        self.assertEqual(replayed['id'], first['id'])
+        candidate = self.b.db.execute('SELECT job_id FROM repository_candidates').fetchone()
+        self.assertEqual(candidate['job_id'], first['id'])
+        self.assertNotEqual(candidate['job_id'], second['id'])
+
     def test_direct_publish_rejects_multiple_project_candidates(self):
         self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
                           (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))
