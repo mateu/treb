@@ -26,8 +26,13 @@ sub setup_raider {
     $max_context_tokens = 0 + $budget;
   }
 
-  my $max_iterations = 13;
-  $max_iterations = 26 if $self->can('_bot_name_slug') && $self->_bot_name_slug eq 'burt';
+  # Controlled experiments may pin their historical 13-iteration budget even
+  # though production Burt uses 26. No other override is admitted here.
+  my $max_iterations = defined $args{max_iterations} ? $args{max_iterations} : 13;
+  die 'max_iterations must be 13 or 26'
+    unless $max_iterations =~ /\A(?:13|26)\z/;
+  $max_iterations = 26 if !defined($args{max_iterations})
+    && $self->can('_bot_name_slug') && $self->_bot_name_slug eq 'burt';
 
   my $mcp_server = $self->_build_mcp_server;
   my $loop_class = 'IO::Async::Loop::POE';

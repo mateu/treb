@@ -286,7 +286,7 @@ sub report_result {
     $notice.="; exit $exit" if defined($exit) && "$exit" =~ /\A-?\d{1,3}\z/;
   }
   my $remaining=$r->{attempts_remaining};
-  if (defined($remaining) && !ref($remaining) && "$remaining" =~ /\A[0-5]\z/) {
+  if (defined($remaining) && !ref($remaining) && "$remaining" =~ /\A(?:[0-9]|1[0-3])\z/) {
     $pending->{coding_attempts_remaining}=0+$remaining;
     $notice.="; $remaining sandbox attempts left";
   }

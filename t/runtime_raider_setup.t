@@ -223,6 +223,10 @@ subtest 'operator Burt budget is opt-in and does not affect other profiles' => s
     like($bot->{infos}[-1], qr/32768 tokens; max iterations: 26/, 'effective Burt budget is observable');
     is(setup_raider(%args, max_context_tokens => 4096)->{max_context_tokens}, 4096,
        'explicit caller budget takes precedence');
+    is(setup_raider(%args, max_iterations => 13)->{max_iterations}, 13,
+       'explicit frozen experiment iteration budget takes precedence');
+    eval { setup_raider(%args, max_iterations => 14) };
+    like($@, qr/max_iterations must be 13 or 26/, 'unsupported iteration override rejected');
     $bot->{bot_slug} = 'bert';
     my $other = setup_raider(%args);
     is($other->{max_context_tokens}, 8192, 'other bots ignore Burt setting');

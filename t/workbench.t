@@ -162,6 +162,10 @@ delete $bot->{pending}{coding_stop_reason};
 Bot::Runtime::Workbench::report_result($bot,'repo_publish',JSON::PP::encode_json({
  id=>'a'x32,state=>'published',url=>'https://github.com/burt-agent/workspace/commit/'.('b'x40)}));
 like($bot->{sent}[-1],qr{https://github.com/burt-agent/workspace/commit/},'actual broker commit URL reported');
+Bot::Runtime::Workbench::report_result($bot,'run',JSON::PP::encode_json({
+ id=>'e'x32,state=>'passed',attempts_remaining=>12,result=>{exit_code=>0}}));
+is($bot->{pending}{coding_attempts_remaining},12,'expanded remaining budget reaches runtime status');
+like($bot->{sent}[-1],qr/12 sandbox attempts left/,'expanded shared budget is reported');
 Bot::Runtime::Workbench::report_result($bot,'repo_repair',JSON::PP::encode_json({
  id=>'c'x32,state=>'failed',attempts_remaining=>0,result=>{exit_code=>1}}));
 like($bot->{sent}[-1],qr/0 sandbox attempts left/,'shared budget is visible');

@@ -47,7 +47,7 @@ $bot->{pending}{expires_at}=$config->{deadline};
 my ($raider,$plugin,$result,$error);
 my $compactions=0;
 eval {
-  $raider=Bot::Runtime::RaiderSetup::setup_raider(self=>$bot,owner=>'operator',max_line=>400,script_file=>'/app/burt.pl',max_context_tokens=>$config->{context_tokens});
+  $raider=Bot::Runtime::RaiderSetup::setup_raider(self=>$bot,owner=>'operator',max_line=>400,script_file=>'/app/burt.pl',max_context_tokens=>$config->{context_tokens},max_iterations=>$config->{max_iterations});
   die "effective iteration limit differs from frozen config\n" unless $raider->max_iterations==$config->{max_iterations};
   my $engine=$raider->engine;
   my $url=$engine->can('url') ? URI->new($engine->url) : undef;
