@@ -476,6 +476,10 @@ is(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'Tests pa
   'Tests passed and I pushed it.','matching broker receipts permit factual final report');
 is(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'Tests passed; the changes have not been published.'),
   'Tests passed; the changes have not been published.','a truthful denial of publication is not suppressed');
+$bot->{pending}{coding_receipts}{published}={};
+like(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'I pushed the changes. Tests passed.'),
+  qr/report withheld/,'publication claims before test claims still require a receipt');
+$bot->{pending}{coding_receipts}{published}{'a'x32}='';
 $bot->{pending}={coding_task=>1,coding_last_execution_state=>'failed'};
 is(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'No tests passed; the suite failed because the fixture is missing.'),
   'No tests passed; the suite failed because the fixture is missing.','a truthful denial of test success is not suppressed');

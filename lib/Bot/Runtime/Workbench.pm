@@ -449,6 +449,7 @@ sub verified_final_report {
     last;
   }
   my $claims_proposal=$answer =~ /\bproposal\b.*\b(?:created|ready|saved|awaiting)\b/i;
+  pos($answer)=0;
   my $claims_publication=0;
   while ($answer =~ /\b(pushed|published|committed)\b/gi) {
     my $prefix=substr($answer,0,pos($answer)-length($1));
