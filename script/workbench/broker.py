@@ -428,6 +428,12 @@ class Broker:
                                'LEFT JOIN task_scopes s ON s.scope=j.scope LEFT JOIN repo_jobs r ON r.id=j.id '
                                'WHERE COALESCE(s.task_id,j.scope)=? ORDER BY j.created,j.id', (task_id,)).fetchall()
 
+    @staticmethod
+    def repository_candidate_key(destination):
+        # Snapshot IDs and verification metadata are immutable evidence, not the
+        # publication identity. A direct request selects one branch/project.
+        return (destination['branch'], destination['project'])
+
     def direct_repository_publication_job(self, req):
         """Return the job durably bound to this direct IRC publication request."""
         requester = req.get('requester')
@@ -459,7 +465,7 @@ class Broker:
             job = self.db.execute('SELECT * FROM jobs WHERE id=?', (candidate['job_id'],)).fetchone()
             destination = json.loads(self.db.execute('SELECT destination FROM repo_jobs WHERE id=?',
                                                      (job['id'],)).fetchone()['destination'])
-            key = json.dumps(destination, sort_keys=True, separators=(',', ':'))
+            key = self.repository_candidate_key(destination)
             eligible.setdefault(key, (job, destination))
             indexed_destinations.add(key)
         rows = self.db.execute(
@@ -473,7 +479,7 @@ class Broker:
                                                      (row['id'],)).fetchone()['destination'])
             if destination.get('diagnostic_only'):
                 continue
-            key = json.dumps(destination, sort_keys=True, separators=(',', ':'))
+            key = self.repository_candidate_key(destination)
             if destination.get('candidate_material') is True:
                 if key not in indexed_destinations:
                     eligible[key] = (row, destination)
@@ -488,7 +494,7 @@ class Broker:
                 snapshot = self.load_snapshot({**req, 'scope': row['scope']},
                                               destination['snapshot_id'], require_active=False)
                 changes, deleted = self.candidate_delta(snapshot['files'], json.loads(row['files']))
-                if changes or deleted and key not in indexed_destinations:
+                if (changes or deleted) and key not in indexed_destinations:
                     # Rows are oldest-first, so retain the newest tested legacy
                     # bundle for a destination while an indexed candidate keeps
                     # precedence over any recovered legacy history.

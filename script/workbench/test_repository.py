@@ -280,6 +280,19 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         self.assertEqual((published['id'], published['state']), (changed['id'], 'published'))
         self.assertNotEqual(base_only['id'], published['id'])
 
+    def test_direct_publish_deduplicates_same_project_across_snapshots(self):
+        self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
+                          (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))
+        self.b.db.commit()
+        first = self.b.handle(self.repo_req | {'changes': {'lib/main.py':'print("old")'}})
+        snapshot = self.b.handle(self.b.capability_envelope('repo_read', self.req['scope'], '#ai', 'irc.perl.org') | {
+            'action':'repo_read', 'branch':'burt/dictionary', 'project':'dictionary'})
+        second = self.b.handle(self.repo_req | {'snapshot_id':snapshot['snapshot_id'],
+                                                'changes': {'lib/main.py':'print("new")'}})
+        self.assertNotEqual(first['id'], second['id'])
+        published = self.direct_repo_publish()
+        self.assertEqual((published['id'], published['state']), (second['id'], 'published'))
+
     def test_direct_publish_rejects_indexed_and_legacy_candidates(self):
         # A migration-era project without an index remains eligible evidence;
         # an indexed later project must not make publication look unambiguous.
