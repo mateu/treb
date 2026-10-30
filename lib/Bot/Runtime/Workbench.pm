@@ -53,10 +53,16 @@ sub capability_set_from_messages {
 }
 
 sub _non_task_text {
-  my ($text)=@_;
-  return 1 if $text =~ /\b(?:don't|do\s+not)\s+(?!publish\b|post\b|push\b|commit\b)|\b(?:stop|cancel|abort|never|not\s+now)\b/i;
+  my ($text,$nick)=@_;
+  my $body=$text;
+  $body =~ s/\A\s*$nick\s*[:,]?\s*//i if defined $nick;
+  # Only a leading cancellation is a cancellation of the task. A negative
+  # implementation constraint such as “do not clamp” remains part of the
+  # trusted task request and must not erase its offline authority.
+  return 1 if $body =~ /\A\s*(?:please\s+)?(?:don't|do\s+not|stop|cancel|abort|never|not\s+now)\b/i;
+  return 1 if $body =~ /\bI\s+(?:don't|do\s+not)\s+(?:want|need)\b/i;
   return 1 if $text =~ /\b(?:how\s+(?:is|was)|what(?:'s|\s+is)\s+(?:the\s+)?(?:status|progress)|status\s+(?:of|on)|progress\s+(?:on|of))\b/i;
-  return 1 if $text =~ /\A\s*\S+\s*[:,]?\s*(?:the|this|that|my)\b.*\b(?:is|are|was|were)\b/i;
+  return 1 if $body =~ /\A\s*(?:the|this|that|my)\b.*\b(?:is|are|was|were)\b/i;
   return 0;
 }
 
@@ -67,7 +73,7 @@ sub _code_context {
 
 sub bounded_code_read_request {
   my ($text,$nick)=@_;
-  return 0 if _non_task_text($text) || !_code_context($text);
+  return 0 if _non_task_text($text,$nick) || !_code_context($text);
   my $body=$text;
   return 0 unless $body =~ s/\A\s*$nick\s*[:,]?\s*//i;
   return 0 if $body =~ /[,;]|\b(?:and|then)\b/i;
@@ -79,7 +85,7 @@ sub natural_code_task_request {
   # Cancellation, negation, and status questions are conversation, not a new
   # task. Do this before recognizing any code context so quoted task wording
   # cannot accidentally broaden an otherwise negative request.
-  return 0 if _non_task_text($text) || !_code_context($text);
+  return 0 if _non_task_text($text,$nick) || !_code_context($text);
   return 0 if bounded_code_read_request($text,$nick);
   # An isolated destination-specific publication request is not also a coding
   # task. A compound task still has its ordinary offline authority, while the
