@@ -222,6 +222,16 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(self.posts[0]['files'], {n:{'content':c} for n,c in self.req['files'].items()})
         self.assertTrue(self.posts[0]['public'])
 
+    def test_execution_selection_migrates_from_original_column_order(self):
+        self.b.db.execute('DROP TABLE task_execution_selections')
+        self.b.db.execute('CREATE TABLE task_execution_selections '
+                          '(task_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, selected REAL NOT NULL)')
+        self.b.db.execute('ALTER TABLE task_execution_selections ADD COLUMN execution_state TEXT')
+        self.b.remember_task_execution_selection(self.req, 'a' * 32, 'passed', now=123.0)
+        row = self.b.db.execute('SELECT * FROM task_execution_selections').fetchone()
+        self.assertEqual((row['task_id'], row['job_id'], row['execution_state'], row['selected']),
+                         (self.req['scope'], 'a' * 32, 'passed', 123.0))
+
     def test_failed_and_truncated_never_publish(self):
         for result in ({'reason':'exited', 'exit_code':1}, {'reason':'output_limit', 'exit_code':0},
                        {'reason':'supervisor_timeout', 'exit_code':0}):

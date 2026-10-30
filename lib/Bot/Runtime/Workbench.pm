@@ -378,11 +378,13 @@ sub report_result {
   my $id=$r->{id}//'';
   $id='' unless $id =~ /\A[a-f0-9]{32}\z/;
   my $state=exists($r->{error}) ? 'error' : ($r->{state}//'');
+  my $execution_state=$r->{execution_state}//$state;
+  $execution_state='' unless $execution_state =~ /\A(?:passed|failed)\z/;
   my $receipts=$pending->{coding_receipts}//={};
   if (($r->{proposal_id}//'') =~ /\A[a-f0-9]{32}\z/ && ($r->{state}//'') eq 'proposed') {
     $receipts->{proposal}=$r->{proposal_id};
   }
-  if ($id && $state eq 'passed' && $action =~ /\A(?:run|repo_(?:run|repair))\z/) {
+  if ($id && $execution_state eq 'passed' && $action =~ /\A(?:run|repo_(?:run|repair))\z/) {
     $receipts->{passed}{$id}=1;
   }
   if ($id && $state eq 'published') {
@@ -421,8 +423,8 @@ sub report_result {
   # A final report can describe either a repository bundle or a standalone
   # script execution.  The latest execution state prevents an older pass from
   # authorizing claims after a later failure in either lane.
-  $pending->{coding_last_execution_job}=$id if $id && $action =~ /\A(?:run|repo_(?:run|repair))\z/;
-  $pending->{coding_last_execution_state}=$state if $id && $action =~ /\A(?:run|repo_(?:run|repair))\z/;
+  $pending->{coding_last_execution_job}=$id if $id && $execution_state && $action =~ /\A(?:run|repo_(?:run|repair))\z/;
+  $pending->{coding_last_execution_state}=$execution_state if $id && $execution_state && $action =~ /\A(?:run|repo_(?:run|repair))\z/;
   $pending->{coding_last_publication_job}=$id if $id && $state eq 'published';
   if (defined($remaining) && "$remaining" eq '0' && $state eq 'failed' && $action =~ /(?:run|repair)/) {
     $pending->{coding_stop_reason}='sandbox attempt budget exhausted after a failed test';

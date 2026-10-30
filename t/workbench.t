@@ -507,6 +507,12 @@ $bot->{pending}={coding_task=>1};
 Bot::Runtime::Workbench::report_result($bot,'run','{"id":"'.('c'x32).'","state":"passed"}',1);
 is(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'Tests passed.'),
   'Tests passed.','matching standalone execution receipt permits factual final report');
+Bot::Runtime::Workbench::report_result($bot,'run',JSON::PP::encode_json({
+  id=>'c'x32,state=>'published',execution_state=>'passed',
+  url=>'https://github.com/burt-agent/workspace/commit/'.('c'x40)}),1);
+is($bot->{pending}{coding_last_execution_state},'passed','cached published execution preserves its passing verdict');
+is(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'Tests passed and I published the script.'),
+  'Tests passed and I published the script.','cached published execution permits truthful final report');
 $bot->{pending}{coding_receipts}{published}{'a'x32}='https://github.com/burt-agent/workspace/commit/'.('a'x40);
 like(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},
   'I published https://github.com/burt-agent/workspace/commit/'.('b'x40)),

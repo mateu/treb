@@ -444,7 +444,8 @@ class Broker:
         if state not in ('passed', 'failed'):
             raise ValueError('invalid execution selection state')
         task_id = self.task_binding(req['scope'])['task_id']
-        self.db.execute('''INSERT INTO task_execution_selections VALUES (?,?,?,?)
+        self.db.execute('''INSERT INTO task_execution_selections
+                         (task_id,job_id,execution_state,selected) VALUES (?,?,?,?)
                          ON CONFLICT(task_id) DO UPDATE SET job_id=excluded.job_id,
                          execution_state=excluded.execution_state,selected=excluded.selected''',
                         (task_id, job_id, state, time.time() if now is None else now))
@@ -1245,8 +1246,9 @@ class Broker:
         return result
 
     def result(self, job):
-        return {'id': job['id'], 'state': job['state'], 'result': json.loads(job['result']),
-                'url': job['url'], 'files': list(json.loads(job['files'])),
+        verdict = self.execution_verdict(job)
+        return {'id': job['id'], 'state': job['state'], 'execution_state': verdict,
+                'result': json.loads(job['result']), 'url': job['url'], 'files': list(json.loads(job['files'])),
                 'attempts_remaining': max(0, self.max_attempts() - self.task_attempt_count(
                     self.task_binding(job['scope'])['task_id']))}
 
