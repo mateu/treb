@@ -79,6 +79,7 @@ for my $case (
   ['pre-commit task','burt_bot: implement a pre-commit script',1],
   ['status-reporting implementation','burt_bot: write a script to report the status of the project',1],
   ['subsequent sentence execution','burt_bot: inspect the repository. Run the tests.',1],
+  ['declarative problem followed by task','burt_bot: this script is broken; fix the code and run the tests',1],
 ) {
   my ($name,$text,$edit)=@$case;
   my $saved=JSON::PP::decode_json(JSON::PP::encode_json($bot->{pending}));

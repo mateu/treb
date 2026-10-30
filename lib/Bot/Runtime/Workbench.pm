@@ -62,7 +62,8 @@ sub _non_task_text {
   return 1 if $body =~ /\A\s*(?:please\s+)?(?:don't|do\s+not|stop|cancel|abort|never|not\s+now)\b/i;
   return 1 if $body =~ /\bI\s+(?:don't|do\s+not)\s+(?:want|need)\b/i;
   return 1 if $body =~ /\A\s*(?:how\s+(?:is|was)|what(?:'s|\s+is)\s+(?:the\s+)?(?:status|progress)|status\s+(?:of|on)|progress\s+(?:on|of))\b/i;
-  return 1 if $body =~ /\A\s*(?:the|this|that|my)\b.*\b(?:is|are|was|were)\b/i;
+  return 1 if $body =~ /\A\s*(?:the|this|that|my)\b.*\b(?:is|are|was|were)\b/i
+    && $body !~ /(?:[,;.]|\b(?:and|then)\b)\s*(?:please\s+)?(?:write|implement|build|update|edit|fix|test|run|repair)\b/i;
   return 0;
 }
 
