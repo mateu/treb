@@ -457,16 +457,19 @@ class Broker:
             'SELECT c.job_id FROM repository_candidates c JOIN jobs j ON j.id=c.job_id '
             'JOIN repo_jobs r ON r.id=j.id '
             'WHERE c.requester=? AND c.channel=? AND c.network=? '
-            'AND j.state IN ("passed","published") ORDER BY c.branch,c.project',
+            'AND j.state IN ("passed","published","publishing","uncertain") ORDER BY c.branch,c.project',
             (requester, req['channel'], req['network'])).fetchall()
         eligible = {}
         indexed_destinations = set()
+        blocked_destinations = set()
         for candidate in indexed:
             job = self.db.execute('SELECT * FROM jobs WHERE id=?', (candidate['job_id'],)).fetchone()
             destination = json.loads(self.db.execute('SELECT destination FROM repo_jobs WHERE id=?',
                                                      (job['id'],)).fetchone()['destination'])
             key = self.repository_candidate_key(destination)
             indexed_destinations.add(key)
+            if job['state'] in ('publishing', 'uncertain'):
+                blocked_destinations.add(key)
             if job['state'] == 'passed':
                 eligible.setdefault(key, (job, destination))
         rows = self.db.execute(
@@ -504,6 +507,8 @@ class Broker:
                 # Missing legacy evidence is not proof that a base-only run was
                 # a candidate. Leave it unavailable rather than guessing.
                 continue
+        if blocked_destinations:
+            raise ValueError('publication outcome requires operator reconciliation')
         if len(eligible) != 1:
             raise ValueError('direct repository publication needs one unambiguous saved project candidate')
         job, destination = next(iter(eligible.values()))

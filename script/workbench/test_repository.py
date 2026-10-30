@@ -316,6 +316,27 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
             'repo_publish', 'd' * 64, '#ai', 'irc.perl.org') | {'action':'repo_publish', 'requester':'mateu'})
         self.assertEqual(selected['id'], pending['id'])
 
+    def test_direct_publish_does_not_recover_history_when_current_candidate_is_uncertain(self):
+        self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
+                          (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))
+        self.b.db.commit()
+        self.b.handle(self.repo_req | {'changes': {'lib/main.py':'print("old")'}})
+        later_scope = 'c' * 64
+        self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
+                          (later_scope, later_scope, 'mateu', '#ai', 'irc.perl.org', time.time()))
+        self.b.db.commit()
+        snapshot = self.b.handle(self.b.capability_envelope('repo_read', later_scope, '#ai', 'irc.perl.org') | {
+            'action':'repo_read', 'branch':'burt/dictionary', 'project':'dictionary'})
+        newest = self.b.handle(self.b.capability_envelope('repo_run', later_scope, '#ai', 'irc.perl.org') | {
+            'action':'repo_run', 'snapshot_id':snapshot['snapshot_id'], 'changes':{'lib/main.py':'print("new")'},
+            'delete':[], 'argv':['/bin/sh','-c','true'], 'title':'newest candidate'})
+        self.b.db.execute('UPDATE jobs SET state="uncertain" WHERE id=?', (newest['id'],))
+        self.b.db.commit()
+        request = self.b.capability_envelope('repo_publish', 'd' * 64, '#ai', 'irc.perl.org') | {
+            'action':'repo_publish', 'requester':'mateu'}
+        with self.assertRaisesRegex(ValueError, 'operator reconciliation'):
+            self.b.direct_repository_publication_job(request)
+
     def test_direct_publish_rejects_indexed_and_legacy_candidates(self):
         # A migration-era project without an index remains eligible evidence;
         # an indexed later project must not make publication look unambiguous.
