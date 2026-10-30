@@ -378,26 +378,24 @@ class BrokerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'action or fields'):
             self.proposal('reference', {'key':'python-json', 'id':'0'*32})
 
-    def test_publication_confirmation_needs_fresh_destination_grant_and_survives_restart(self):
+    def test_publication_proposal_binds_natural_fresh_confirmation_and_survives_restart(self):
         job = self.b.handle(self.req)
         proposal = self.proposal('publish', {'id':job['id']})
-        with self.assertRaisesRegex(ValueError, 'fresh explicit publication authority'):
-            self.confirm()
         second = Broker(self.tmp.name, self.token)
         self.addCleanup(second.db.close)
         second.post_gist = self.post
         confirmation_scope = 'b'*64
         envelope = second.capability_envelope('proposal_confirm', confirmation_scope, '#ai', 'irc.perl.org')
-        publish = second.capability_envelope('publish', confirmation_scope, '#ai', 'irc.perl.org')
         final = second.capability_envelope('task_status', self.req['scope'], '#ai', 'irc.perl.org') | {
             'action': 'task_status', 'phase': 'reported', 'reason': 'final_report'}
         second.handle(final)
         result = second.handle(envelope | dict(action='proposal_confirm', requester='mateu',
-                               confirmed_at=time.time(), publish_capability=publish['capability'], publish_grant=publish['grant']))
+                               confirmed_at=time.time()))
         self.assertEqual((result['confirmed_action'], result['state']), ('publish', 'published'))
         with self.assertRaisesRegex(ValueError, 'missing or ambiguous'):
-            second.handle(envelope | dict(action='proposal_confirm', requester='mateu',
-                          confirmed_at=time.time(), publish_capability=publish['capability'], publish_grant=publish['grant']))
+            second.handle(envelope | dict(action='proposal_confirm', requester='mateu', confirmed_at=time.time()))
+        self.assertEqual(self.b.db.execute('SELECT params FROM proposals WHERE id=?',
+                         (proposal['proposal_id'],)).fetchone()[0], json.dumps({'id': job['id']}, separators=(',', ':')))
 
     def test_confirmed_publication_records_uncertainty_after_final_report(self):
         job = self.b.handle(self.req)
@@ -408,10 +406,8 @@ class BrokerTests(unittest.TestCase):
         self.b.post_gist = lambda payload: (_ for _ in ()).throw(TimeoutError('lost response'))
         confirmation_scope = 'b' * 64
         envelope = self.b.capability_envelope('proposal_confirm', confirmation_scope, '#ai', 'irc.perl.org')
-        publish = self.b.capability_envelope('publish', confirmation_scope, '#ai', 'irc.perl.org')
         with self.assertRaisesRegex(ValueError, 'operator reconciliation required'):
-            self.b.handle(envelope | dict(action='proposal_confirm', requester='mateu',
-                          confirmed_at=time.time(), publish_capability=publish['capability'], publish_grant=publish['grant']))
+            self.b.handle(envelope | dict(action='proposal_confirm', requester='mateu', confirmed_at=time.time()))
         self.assertEqual(self.b.db.execute('SELECT state FROM jobs WHERE id=?', (job['id'],)).fetchone()[0], 'uncertain')
         self.assertEqual(self.b.db.execute('SELECT terminal_reason FROM task_phase_budgets').fetchone()[0],
                          'publication_uncertain')
