@@ -71,6 +71,7 @@ for my $case (
   ['bounded read','burt_bot: inspect the repository project',0],
   ['comma bounded read','burt_bot, inspect the repository project',0],
   ['polite bounded read','burt_bot: please inspect the repository project',0],
+  ['interrogative bounded read','burt_bot: could you inspect the repository?',0],
   ['compound bounded read','burt_bot: inspect the repository and read the python-csv reference',0],
   ['hyphenated bounded read','burt_bot: inspect the perl-test-more reference',0],
   ['offline task with no publication','burt_bot: repair this dictionary code; do not publish anything',1],
@@ -95,6 +96,13 @@ for my $case (
     eval { Bot::Runtime::Workbench::request_scope($bot,$publication) };
     ok($@,"$name does not grant $publication");
   }
+  $bot->{pending}=$saved;
+}
+{
+  my $saved=JSON::PP::decode_json(JSON::PP::encode_json($bot->{pending}));
+  $bot->{pending}{messages}[0]{msg}='burt_bot: write a script to push this project to the repository';
+  ok(Bot::Runtime::Workbench::request_scope($bot,'edit_test'),'publication-tool implementation retains offline authority');
+  ok(Bot::Runtime::Workbench::request_scope($bot,'publish_repo'),'publication-tool implementation separately grants repository publication');
   $bot->{pending}=$saved;
 }
 {

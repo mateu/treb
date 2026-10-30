@@ -77,7 +77,7 @@ sub bounded_code_read_request {
   return 0 if _non_task_text($text,$nick) || !_code_context($text);
   my $body=$text;
   return 0 unless $body =~ s/\A\s*$nick\s*[:,]?\s*//i;
-  return 0 unless $body =~ /\A(?:please\s+)?(?:read|inspect|open|review|check)\b/i;
+  return 0 unless $body =~ /\A(?:(?:please\s+)?|(?:could|can|would|will)\s+you\s+(?:please\s+)?)?(?:read|inspect|open|review|check)\b/i;
   # Lists of reads remain reads. Look for an execution/publication action only
   # at the start of a later clause, so resource names such as perl-test-more
   # cannot turn an otherwise read-only request into an execution request.
@@ -109,7 +109,9 @@ sub natural_code_task_request {
   # task. A compound task still has its ordinary offline authority, while the
   # publication half remains separately explicit below. Addressing punctuation
   # is not itself a compound action.
-  return 0 if isolated_publication_request($body) && $body !~ /[,;]|\b(?:and|then)\b/i;
+  return 0 if isolated_publication_request($body)
+    && $body !~ /\A(?:please\s+)?(?:write|implement|build|update|edit|fix|test|run|repair)\b/i
+    && $body !~ /[,;]|\b(?:and|then)\b/i;
 
   # A fresh direct human statement about code is a task unless it is one of
   # the explicit non-task/read forms above. This makes requests, imperative
