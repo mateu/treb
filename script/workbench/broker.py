@@ -447,7 +447,7 @@ class Broker:
             'SELECT c.job_id FROM repository_candidates c JOIN jobs j ON j.id=c.job_id '
             'JOIN repo_jobs r ON r.id=j.id '
             'WHERE c.requester=? AND c.channel=? AND c.network=? '
-            'AND j.state IN ("passed","published") ORDER BY c.branch,c.project',
+            'AND j.state="passed" ORDER BY c.branch,c.project',
             (requester, req['channel'], req['network'])).fetchall()
         if len(candidates) == 1:
             job = self.db.execute('SELECT * FROM jobs WHERE id=?', (candidates[0]['job_id'],)).fetchone()

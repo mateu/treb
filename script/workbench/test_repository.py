@@ -308,6 +308,27 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         self.assertEqual(candidate['job_id'], first['id'])
         self.assertNotEqual(candidate['job_id'], second['id'])
 
+    def test_direct_publish_ignores_prior_completed_candidate(self):
+        self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
+                          (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))
+        self.b.db.commit()
+        completed = self.b.handle(self.repo_req)
+        self.assertEqual(self.direct_repo_publish()['id'], completed['id'])
+        other_scope = 'c' * 64
+        self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
+                          (other_scope, other_scope, 'mateu', '#ai', 'irc.perl.org', time.time()))
+        self.b.db.commit()
+        snapshot = self.b.handle(self.b.capability_envelope('repo_read', other_scope, '#ai', 'irc.perl.org') | {
+            'action':'repo_read', 'branch':'burt/other-project', 'project':'other-project'})
+        pending = self.b.handle(self.b.capability_envelope('repo_run', other_scope, '#ai', 'irc.perl.org') | {
+            'action':'repo_run', 'snapshot_id': snapshot['snapshot_id'],
+            'changes': {'lib/other.py':'print(1)'}, 'delete': [], 'argv': ['/bin/sh','-c','true'],
+            'title':'other project candidate'})
+        request = self.b.capability_envelope('repo_publish', 'd' * 64, '#ai', 'irc.perl.org') | {
+            'action':'repo_publish', 'requester':'mateu'}
+        selected = self.b.direct_repository_publication_job(request)
+        self.assertEqual((selected['id'], selected['state']), (pending['id'], 'passed'))
+
     def test_direct_publish_rejects_multiple_project_candidates(self):
         self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
                           (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))
