@@ -71,8 +71,11 @@ for my $case (
   ['bounded read','burt_bot: inspect the repository project',0],
   ['comma bounded read','burt_bot, inspect the repository project',0],
   ['polite bounded read','burt_bot: please inspect the repository project',0],
+  ['compound bounded read','burt_bot: inspect the repository and read the python-csv reference',0],
   ['offline task with no publication','burt_bot: repair this dictionary code; do not publish anything',1],
   ['offline task with negative constraint','burt_bot: update this inventory project (do not clamp negative balances)',1],
+  ['post-processing task','burt_bot: fix the post-processing code',1],
+  ['pre-commit task','burt_bot: implement a pre-commit script',1],
 ) {
   my ($name,$text,$edit)=@$case;
   my $saved=JSON::PP::decode_json(JSON::PP::encode_json($bot->{pending}));

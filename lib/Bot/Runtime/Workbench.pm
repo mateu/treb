@@ -76,8 +76,22 @@ sub bounded_code_read_request {
   return 0 if _non_task_text($text,$nick) || !_code_context($text);
   my $body=$text;
   return 0 unless $body =~ s/\A\s*$nick\s*[:,]?\s*//i;
-  return 0 if $body =~ /[,;]|\b(?:and|then)\b/i;
-  return $body =~ /\A(?:please\s+)?(?:read|inspect|open|review|check)\b/i;
+  return 0 unless $body =~ /\A(?:please\s+)?(?:read|inspect|open|review|check)\b/i;
+  # Lists of reads remain reads. Only an execution/publication verb upgrades
+  # the request; punctuation or a second inspection action does not.
+  return 0 if $body =~ /\b(?:write|implement|build|update|edit|fix|test|run|repair|publish|push|commit)\b/i;
+  return 1;
+}
+
+sub isolated_publication_request {
+  my ($text)=@_;
+  # Code can legitimately refer to post-processing and pre-commit without
+  # requesting a public write, so require an action-and-destination phrase.
+  return 1 if $text =~ /\b(?:publish|post)\b(?:\s+\w+){0,4}\s+\b(?:a\s+)?gist\b/i;
+  return 1 if $text =~ /\bgist\b(?:\s+\w+){0,4}\s+\b(?:publish|post)\b/i;
+  return 1 if $text =~ /\b(?:publish|push|commit)\b(?:\s+\w+){0,5}\s+\b(?:to\s+(?:the\s+)?)?(?:repo|repository)\b/i;
+  return 1 if $text =~ /\b(?:repo|repository)\b(?:\s+\w+){0,5}\s+\b(?:publish|push|commit)\b/i;
+  return 0;
 }
 
 sub natural_code_task_request {
@@ -90,7 +104,7 @@ sub natural_code_task_request {
   # An isolated destination-specific publication request is not also a coding
   # task. A compound task still has its ordinary offline authority, while the
   # publication half remains separately explicit below.
-  return 0 if $text =~ /\b(?:publish|post|push|commit)\b/i && $text !~ /[,;]|\b(?:and|then)\b/i;
+  return 0 if isolated_publication_request($text) && $text !~ /[,;]|\b(?:and|then)\b/i;
 
   # A fresh direct human statement about code is a task unless it is one of
   # the explicit non-task/read forms above. This makes requests, imperative
