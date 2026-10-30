@@ -69,6 +69,8 @@ for my $case (
   ['natural revisit','burt_bot: could you revisit the dictionary project and see what is missing?',1],
   ['indirect offline task','burt_bot: please help with this Perl program',1],
   ['bounded read','burt_bot: inspect the repository project',0],
+  ['inspect push failures','burt_bot: inspect the code for push failures',0],
+  ['explain commit remains non-public coding context','burt_bot: explain how to commit this code',1],
   ['comma bounded read','burt_bot, inspect the repository project',0],
   ['polite bounded read','burt_bot: please inspect the repository project',0],
   ['interrogative bounded read','burt_bot: could you inspect the repository?',0],
@@ -170,14 +172,32 @@ is($read_capability,'edit_test','edit authority can obtain its required reposito
 is($read_scope,Bot::Runtime::Workbench::request_scope($bot,'edit_test'),'repository snapshot stays in the edit request scope');
 eval {Bot::Runtime::Workbench::request_scope($bot,'publish_gist')};
 like($@,qr/gist/,'repo permission does not authorize gist');
-for my $text ('burt_bot: write tests and publish a gist', 'burt_bot: inspect the repo code', 'burt_bot: commit this code') {
+for my $text ('burt_bot: write tests and publish a gist', 'burt_bot: inspect the repo code') {
   $bot->{pending}{messages}[0]{msg}=$text;
   eval {Bot::Runtime::Workbench::request_scope($bot,'publish_repo')};
   like($@,qr/explicitly asking to publish/,'repo publication needs both destination and action');
 }
 $bot->{pending}{messages}[0]{msg}='burt_bot: inspect the repository, update code and push to repo';
 ok(Bot::Runtime::Workbench::request_scope($bot,'publish_repo'),'explicit push admitted');
+$bot->{pending}{messages}[0]{msg}='burt_bot: please push your dictionary coding work';
+ok(Bot::Runtime::Workbench::request_scope($bot,'publish_repo'),'ordinary addressed coding-work push is admitted');
+for my $other (qw(read_status edit_test publish_gist)) {
+  eval {Bot::Runtime::Workbench::request_scope($bot,$other)};
+  ok($@,"ordinary direct push grants no $other authority");
+}
+{
+  my $forwarded;
+  no warnings 'redefine';
+  local *Bot::Runtime::Workbench::broker_call=sub {$forwarded=$_[0]; return '{"id":"'.('d'x32).'","state":"passed"}'};
+  $defs{publish_repo}{code}->($tool,{});
+  is_deeply([sort keys %$forwarded],[sort qw(action capability channel grant network requester scope)],
+    'direct publication producer forwards no model-selected id or destination');
+  is($forwarded->{action},'repo_publish','direct publication producer uses repository action');
+  is($forwarded->{capability},'publish_repo','direct publication producer carries bounded grant');
+  is($forwarded->{requester},'mateu','direct publication producer derives requester from IRC envelope');
+}
 like($defs{publish_repo}{code}->($tool,{id=>'x',branch=>'main'}),qr/Invalid tool fields/,'publication cannot substitute destination');
+$bot->{pending}{messages}[0]{msg}='burt_bot: inspect the repository, update code and push to repo';
 {
   local $ENV{IRC_SERVER}='elsewhere';
   eval {Bot::Runtime::Workbench::request_scope($bot,'edit_test')};

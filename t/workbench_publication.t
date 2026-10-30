@@ -56,7 +56,10 @@ for my $name (qw(publish_gist publish_repo)) {
   local *Bot::Runtime::Workbench::broker_call=sub {
     die "Workbench read failed\n";
   };
-  my $result=$tools{$name}{code}->($tool,{id=>'a'x32});
+  $bot->{pending}{messages}=[{nick=>'mateu',source_kind=>'conversation',
+    msg=>$name eq 'publish_gist' ? 'burt_bot: publish a gist' : 'burt_bot: please push your dictionary coding work'}];
+  my $args=$name eq 'publish_gist' ? {id=>'a'x32} : {};
+  my $result=$tools{$name}{code}->($tool,$args);
   like($result,qr/Error: Workbench read failed/,"$name retains transport failure for model");
   like($bot->{sent}[-1],$warning,"$name transport failure warns channel without model help");
   is($bot->{pending}{coding_last_result},$bot->{sent}[-1],"$name saves transport warning");
