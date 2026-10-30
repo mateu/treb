@@ -54,7 +54,7 @@ sub capability_set_from_messages {
 
 sub _non_task_text {
   my ($text)=@_;
-  return 1 if $text =~ /\b(?:don't|do\s+not|stop|cancel|abort|never|not\s+now)\b/i;
+  return 1 if $text =~ /\b(?:don't|do\s+not)\s+(?!publish\b|post\b|push\b|commit\b)|\b(?:stop|cancel|abort|never|not\s+now)\b/i;
   return 1 if $text =~ /\b(?:how\s+(?:is|was)|what(?:'s|\s+is)\s+(?:the\s+)?(?:status|progress)|status\s+(?:of|on)|progress\s+(?:on|of))\b/i;
   return 1 if $text =~ /\A\s*\S+\s*[:,]?\s*(?:the|this|that|my)\b.*\b(?:is|are|was|were)\b/i;
   return 0;
@@ -68,8 +68,10 @@ sub _code_context {
 sub bounded_code_read_request {
   my ($text,$nick)=@_;
   return 0 if _non_task_text($text) || !_code_context($text);
-  return 0 if $text =~ /[,;]|\b(?:and|then)\b/i;
-  return $text =~ /\A\s*$nick\s*[:,]?\s*(?:read|inspect|open|review|check)\b/i;
+  my $body=$text;
+  return 0 unless $body =~ s/\A\s*$nick\s*[:,]?\s*//i;
+  return 0 if $body =~ /[,;]|\b(?:and|then)\b/i;
+  return $body =~ /\A(?:please\s+)?(?:read|inspect|open|review|check)\b/i;
 }
 
 sub natural_code_task_request {

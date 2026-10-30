@@ -69,6 +69,9 @@ for my $case (
   ['natural revisit','burt_bot: could you revisit the dictionary project and see what is missing?',1],
   ['indirect offline task','burt_bot: please help with this Perl program',1],
   ['bounded read','burt_bot: inspect the repository project',0],
+  ['comma bounded read','burt_bot, inspect the repository project',0],
+  ['polite bounded read','burt_bot: please inspect the repository project',0],
+  ['offline task with no publication','burt_bot: repair this dictionary code; do not publish anything',1],
 ) {
   my ($name,$text,$edit)=@$case;
   my $saved=JSON::PP::decode_json(JSON::PP::encode_json($bot->{pending}));
