@@ -27,6 +27,8 @@ class Verification:
                     or not isinstance(policy['additions'], list)
                     or any(p not in ('tests/', 't/') for p in policy['additions'])
                     or policy.get('source_baseline') not in (None, 'current_verified')
+                    or (policy.get('source_baseline') == 'current_verified'
+                        and key != 'burt/dictionary:dictionary')
                     or not any(a.startswith('/checks/') for a in policy['argv'])):
                 raise ValueError('invalid verification policy')
 

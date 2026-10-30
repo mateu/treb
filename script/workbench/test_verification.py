@@ -93,6 +93,10 @@ class VerificationTests(unittest.TestCase):
         invalid['source_baseline'] = 'anything'
         with self.assertRaisesRegex(ValueError, 'invalid verification policy'):
             Verification({'burt/dictionary:dictionary': invalid})
+        non_dictionary = copy.deepcopy(self.policy)
+        non_dictionary['source_baseline'] = 'current_verified'
+        with self.assertRaisesRegex(ValueError, 'invalid verification policy'):
+            Verification({'burt/other:other': non_dictionary})
 
     def test_policy_identity_invalidates_dedup_and_publication(self):
         self.b.verify_execute = lambda job, checks: {'reason': 'exited', 'exit_code': 0}
@@ -124,6 +128,11 @@ class VerificationTests(unittest.TestCase):
             self.b.handle(req | {'action': 'repo_diagnose', 'id': job['id'], 'argv': ['/bin/sh', '-c', 'true'], 'title': str(i)})
         with self.assertRaisesRegex(ValueError, 'reserved'):
             self.b.handle(req | {'action': 'repo_diagnose', 'id': job['id'], 'argv': ['/bin/sh', '-c', 'true'], 'title': 'last'})
+        standalone = self.b.capability_envelope('run', self.req['scope'], self.req['channel'], self.req['network']) | {
+            'action': 'run', 'files': {'main.py': 'print(1)'},
+            'argv': ['/usr/bin/python3', '/work/main.py'], 'title': 'must not consume verification reserve'}
+        with self.assertRaisesRegex(ValueError, 'reserved'):
+            self.b.handle(standalone)
         result = self.b.handle(self.repo_run(title='final'))
         self.assertEqual(result['attempts_remaining'], 0)
 

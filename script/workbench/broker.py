@@ -763,7 +763,11 @@ class Broker:
             if old:
                 return self.result(old)
             task_id = self.task_binding(scope)['task_id']
-            if (_diagnostic and self.verification is not None and self.task_attempt_count(task_id) >= MAX_ATTEMPTS - 1):
+            # The final shared execution belongs to a trusted complete repository
+            # verification. Diagnostics and standalone code runs cannot consume it.
+            trusted_verification = action == 'repo_run' and policy is not None and not _diagnostic
+            if (self.verification is not None and not trusted_verification
+                    and self.task_attempt_count(task_id) >= MAX_ATTEMPTS - 1):
                 raise ValueError('last execution reserved for trusted project verification')
             now = time.time()
             # Retain a bounded journal; ambiguous submissions remain for manual reconciliation.
