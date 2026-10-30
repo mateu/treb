@@ -597,7 +597,10 @@ sub tool_specs {
                   && ($job->{id}//'') =~ /\A[a-f0-9]{32}\z/
                   && ($job->{state}//'') =~ /\A(?:running|passed|failed|published|publishing|uncertain)\z/;
               }
-              $execution=$r->{jobs}[-1];
+              $execution=$r->{latest_execution_job};
+              die "Invalid task resume" if defined($execution) && !(ref($execution) eq 'HASH'
+                && ($execution->{id}//'') =~ /\A[a-f0-9]{32}\z/
+                && ($execution->{state}//'') =~ /\A(?:running|passed|failed|published|publishing|uncertain)\z/);
               $repo=$r->{latest_repository_job};
               die "Invalid task resume" if defined($repo) && !(ref($repo) eq 'HASH'
                 && ($repo->{id}//'') =~ /\A[a-f0-9]{32}\z/

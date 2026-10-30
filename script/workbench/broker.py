@@ -443,34 +443,37 @@ class Broker:
             if not row:
                 raise ValueError('direct repository publication binding is unavailable')
             return row
-        candidates = self.db.execute(
+        # Indexed candidates are fast-path evidence, but legacy passed work
+        # predates that index. Recover both sets before deciding that a single
+        # candidate is unambiguous; otherwise an indexed project can shadow an
+        # eligible legacy project.
+        indexed = self.db.execute(
             'SELECT c.job_id FROM repository_candidates c JOIN jobs j ON j.id=c.job_id '
             'JOIN repo_jobs r ON r.id=j.id '
             'WHERE c.requester=? AND c.channel=? AND c.network=? '
             'AND j.state="passed" ORDER BY c.branch,c.project',
             (requester, req['channel'], req['network'])).fetchall()
-        if len(candidates) == 1:
-            job = self.db.execute('SELECT * FROM jobs WHERE id=?', (candidates[0]['job_id'],)).fetchone()
-            self.db.execute('INSERT INTO direct_repo_publications VALUES (?,?,?,?,?,?)',
-                            (req['scope'], job['id'], requester, req['channel'], req['network'], time.time()))
-            self.db.commit()
-            return job
-        if candidates:
-            raise ValueError('direct repository publication needs one unambiguous saved project candidate')
+        eligible = {}
+        for candidate in indexed:
+            job = self.db.execute('SELECT * FROM jobs WHERE id=?', (candidate['job_id'],)).fetchone()
+            destination = json.loads(self.db.execute('SELECT destination FROM repo_jobs WHERE id=?',
+                                                     (job['id'],)).fetchone()['destination'])
+            key = json.dumps(destination, sort_keys=True, separators=(',', ':'))
+            eligible.setdefault(key, (job, destination))
         rows = self.db.execute(
             'SELECT j.* FROM jobs j JOIN repo_jobs r ON r.id=j.id '
             'JOIN task_scopes s ON s.scope=j.scope '
             'WHERE j.state="passed" AND s.requester=? '
             'AND s.channel=? AND s.network=? ORDER BY j.created,j.id',
             (requester, req['channel'], req['network'])).fetchall()
-        eligible = []
         for row in rows:
             destination = json.loads(self.db.execute('SELECT destination FROM repo_jobs WHERE id=?',
                                                      (row['id'],)).fetchone()['destination'])
             if destination.get('diagnostic_only'):
                 continue
+            key = json.dumps(destination, sort_keys=True, separators=(',', ':'))
             if destination.get('candidate_material') is True:
-                eligible.append((row, destination))
+                eligible.setdefault(key, (row, destination))
                 continue
             # Migration-safe recovery for jobs written before candidate lineage:
             # compare the immutable tested bundle with its immutable snapshot.
@@ -483,14 +486,14 @@ class Broker:
                                               destination['snapshot_id'], require_active=False)
                 changes, deleted = self.candidate_delta(snapshot['files'], json.loads(row['files']))
                 if changes or deleted:
-                    eligible.append((row, destination))
+                    eligible.setdefault(key, (row, destination))
             except (KeyError, TypeError, ValueError):
                 # Missing legacy evidence is not proof that a base-only run was
                 # a candidate. Leave it unavailable rather than guessing.
                 continue
         if len(eligible) != 1:
             raise ValueError('direct repository publication needs one unambiguous saved project candidate')
-        job, destination = eligible[0]
+        job, destination = next(iter(eligible.values()))
         self.remember_repository_candidate(req, job['id'], destination)
         self.db.execute('INSERT INTO direct_repo_publications VALUES (?,?,?,?,?,?)',
                         (req['scope'], job['id'], requester, req['channel'], req['network'], time.time()))
@@ -657,10 +660,16 @@ class Broker:
                     latest_repository_job = {'id': job['id'], 'state': job['state']}
                     break
         budget = self.task_budget_status(row['task_id'])
+        latest_execution_job = None
+        for job in reversed(jobs):
+            destination = json.loads(job['destination']) if job['destination'] else {}
+            if not destination.get('diagnostic_only'):
+                latest_execution_job = {'id': job['id'], 'state': job['state']}
+                break
         return {'checkpoint_id': row['id'], 'task_id': row['task_id'], 'parent_checkpoint_id': row['parent'],
                 'phase': row['phase'], 'reason': row['reason'],
                 'jobs': [{'id': j['id'], 'state': j['state']} for j in jobs],
-                'latest_repository_job': latest_repository_job,
+                'latest_repository_job': latest_repository_job, 'latest_execution_job': latest_execution_job,
                 'attempts_remaining': budget['remaining_budget']['sandbox_executions'], 'budget': budget}
 
     def handle(self, req, _diagnostic=False):

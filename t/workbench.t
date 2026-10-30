@@ -431,6 +431,7 @@ my @resume_requests;
     $forwarded=$_[0]; push @resume_requests,$forwarded;
     $resume_scope=$forwarded->{scope} if $forwarded->{action} eq 'task_resume';
     return $forwarded->{action} eq 'task_resume' ? JSON::PP::encode_json({resumed_scope=>$resume_scope,jobs=>[],
+      latest_execution_job=>{id=>'d'x32,state=>'passed'},
       latest_repository_job=>{id=>'d'x32,state=>'passed'},attempts_remaining=>4})
       : $forwarded->{action} eq 'task_checkpoint' ? JSON::PP::encode_json({checkpoint_id=>'c'x32,jobs=>[],attempts_remaining=>4})
       : JSON::PP::encode_json({budget=>{}});
@@ -442,6 +443,8 @@ my ($resume_checkpoint)=grep { $_->{action} eq 'task_checkpoint' } reverse @resu
 is($resume_checkpoint->{scope},$bot->{pending}{coding_scope},'post-resume checkpoint retains the broker-bound scope');
 is($resume_requests[-1]{action},'task_progress','resume also records the bounded progress notice');
 is($bot->{pending}{coding_requester},'mateu','resume preserves broker-bound requester identity');
+is($bot->{pending}{coding_last_execution_job},'d'x32,'resume restores the latest non-diagnostic execution job');
+is($bot->{pending}{coding_last_execution_state},'passed','resume restores the latest non-diagnostic execution state');
 is($bot->{pending}{coding_last_repo_job},'d'x32,'resume restores the latest complete repository job');
 is($bot->{pending}{coding_last_repo_state},'passed','resume restores a completed repository job');
 is($bot->{pending}{coding_receipts}{passed}{'d'x32},1,'resume restores the passed job receipt');
