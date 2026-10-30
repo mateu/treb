@@ -22,6 +22,7 @@ like($messages->[-1]{content},qr/Remaining sandbox runs: 2/,'budget survives con
   like($trial_messages->[-1]{content},qr/Runtime coding budget: 5 sandbox runs total/,
     'frozen trial reminder advertises the five-attempt budget');
 }
+$plugin->reminder($messages->[-1]); # restore the production turn's replacement identity
 like($messages->[-1]{content},qr/Latest repository job: a{32}/,'latest job remains inspectable');
 $pending->{coding_attempts_remaining}=1;
 $messages=$plugin->plugin_before_llm_call($messages,2)->get;
