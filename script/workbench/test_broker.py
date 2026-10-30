@@ -339,6 +339,16 @@ class BrokerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'missing or ambiguous'):
             self.confirm()
 
+    def test_repository_read_proposal_accepts_edit_bound_snapshot_scope(self):
+        envelope = self.b.capability_envelope('repo_run', self.req['scope'],
+                                              self.req['channel'], self.req['network'])
+        result = self.b.handle(envelope | {
+            'action': 'proposal_create', 'proposal_action': 'repo_read',
+            'params': {'branch': 'burt/dictionary', 'project': 'dictionary'},
+            'requester': 'mateu',
+        })
+        self.assertEqual(result['state'], 'proposed')
+
     def test_repeated_identical_proposal_reuses_pending_row(self):
         self.b.references.read = lambda key: {'reference':key, 'untrusted':True}
         first = self.proposal('reference', {'key':'python-json'})
