@@ -173,6 +173,10 @@ class Broker:
             (task_id TEXT PRIMARY KEY, attempts INTEGER NOT NULL, updated REAL NOT NULL)''')
         self.db.execute('''CREATE TABLE IF NOT EXISTS task_publications
             (task_id TEXT PRIMARY KEY, consumed INTEGER NOT NULL, updated REAL NOT NULL)''')
+        # Global public-write limits are based on attempted write time, never
+        # on the age of the immutable tested job selected for publication.
+        self.db.execute('''CREATE TABLE IF NOT EXISTS publication_attempts
+            (job_id TEXT PRIMARY KEY, attempted REAL NOT NULL)''')
         # Authoritative lifecycle state. Legacy attempt/publication tables stay
         # migration-safe indexes, but new transitions are admitted here first.
         self.db.execute('''CREATE TABLE IF NOT EXISTS task_phase_budgets
@@ -227,6 +231,7 @@ class Broker:
                         'AND updated<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM task_publications WHERE task_id NOT IN (SELECT DISTINCT task_id FROM task_checkpoints) '
                         'AND updated<?', (now - AUDIT_TTL,))
+        self.db.execute('DELETE FROM publication_attempts WHERE attempted<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM task_phase_budgets WHERE task_id NOT IN (SELECT DISTINCT task_id FROM task_checkpoints) '
                         'AND updated<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM direct_repo_publications WHERE created<?', (now - AUDIT_TTL,))
@@ -431,9 +436,9 @@ class Broker:
         rows = self.db.execute(
             'SELECT j.* FROM jobs j JOIN repo_jobs r ON r.id=j.id '
             'JOIN task_scopes s ON s.scope=j.scope '
-            'WHERE j.state="passed" AND j.created>=? AND s.requester=? '
+            'WHERE j.state="passed" AND s.requester=? '
             'AND s.channel=? AND s.network=? ORDER BY j.created,j.id',
-            (time.time() - 900, requester, req['channel'], req['network'])).fetchall()
+            (requester, req['channel'], req['network'])).fetchall()
         eligible = []
         for row in rows:
             destination = json.loads(self.db.execute('SELECT destination FROM repo_jobs WHERE id=?',
@@ -441,7 +446,7 @@ class Broker:
             if not destination.get('diagnostic_only'):
                 eligible.append(row)
         if len(eligible) != 1:
-            raise ValueError('direct repository publication needs one unambiguous recent passed job')
+            raise ValueError('direct repository publication needs one unambiguous passed job')
         job = eligible[0]
         self.db.execute('INSERT INTO direct_repo_publications VALUES (?,?,?,?,?,?)',
                         (req['scope'], job['id'], requester, req['channel'], req['network'], time.time()))
@@ -478,6 +483,32 @@ class Broker:
         self.db.execute('INSERT INTO task_publications VALUES (?,?,?) '
                         'ON CONFLICT(task_id) DO UPDATE SET consumed=1,updated=excluded.updated',
                         (task_id, 1, now))
+
+    def publication_attempt_count(self, now=None):
+        now = time.time() if now is None else now
+        # Pre-upgrade journals have no attempt receipt. Conservatively retain
+        # their existing created-within-day accounting until a new attempt is
+        # recorded for that job.
+        return self.db.execute('SELECT COUNT(*) FROM ('
+                               'SELECT job_id FROM publication_attempts WHERE attempted>? '
+                               'UNION '
+                               "SELECT id FROM jobs WHERE created>? AND state IN ('published','publishing','uncertain') "
+                               'AND id NOT IN (SELECT job_id FROM publication_attempts))',
+                               (now - 86400, now - 86400)).fetchone()[0]
+
+    def record_publication_attempt(self, job_id, now=None):
+        self.db.execute('INSERT OR IGNORE INTO publication_attempts VALUES (?,?)',
+                        (job_id, time.time() if now is None else now))
+
+    def consume_prior_task_publication_authority(self, task_id):
+        now = time.time()
+        # A database predating phase budgets can retain a passed job; initialize
+        # its original task before enforcing its migrated publication allowance.
+        row = self.ensure_task_phase_budget(task_id, now)
+        if row['public_writes'] >= MAX_PUBLIC_WRITES:
+            raise ValueError('limit: one submission per IRC request')
+        self.db.execute('UPDATE task_phase_budgets SET public_writes=public_writes+1,updated=? WHERE task_id=?',
+                        (now, task_id))
 
     def ensure_task_phase_budget(self, task_id, now, deadline=None):
         row = self.db.execute('SELECT * FROM task_phase_budgets WHERE task_id=?', (task_id,)).fetchone()
@@ -879,7 +910,7 @@ class Broker:
             raise ValueError('publication outcome requires operator reconciliation')
         if job['state'] == 'published':
             return self.result(job)
-        if job['state'] != 'passed' or job['created'] < time.time() - 900:
+        if job['state'] != 'passed' or (not repo_job and job['created'] < time.time() - 900):
             raise ValueError('only a successful, recent, unsubmitted job can be published')
         if repo_job:
             destination = json.loads(repo_job['destination'])
@@ -892,13 +923,13 @@ class Broker:
         if self.token.stat().st_mode & 0o077:
             raise ValueError('gist credential must have mode 600')
         # Check rate budget before crossing the irreversible network boundary.
-        n = self.db.execute("SELECT COUNT(*) FROM jobs WHERE created>? AND state IN ('published','publishing','uncertain')", (time.time()-86400,)).fetchone()[0]
-        if n >= 10:
+        if self.publication_attempt_count() >= 10:
             raise ValueError('global limit: 10 gist submissions per day')
         task_id = self.task_binding(scope)['task_id']
         self.admit_transition(task_id, 'public_write', limit_message='limit: one gist submission per IRC request',
                               allow_after_final_report=_confirmed_publication)
         self.consume_task_publication(task_id, time.time())
+        self.record_publication_attempt(job_id)
         self.db.execute("UPDATE jobs SET state='publishing' WHERE id=?", (job_id,))
         self.resource_checkpoint('publication', job_id, req, 'publishing')
         self.db.commit()
@@ -930,12 +961,18 @@ class Broker:
                 raise ValueError('trusted verification receipt missing or stale; retest')
         if any(snapshot[k] != destination[k] for k in ('base_sha','exists')):
             raise ValueError('branch changed; read project and retest before publishing')
-        n = self.db.execute("SELECT COUNT(*) FROM jobs WHERE created>? AND state IN ('published','publishing','uncertain')", (time.time()-86400,)).fetchone()[0]
-        if n >= 10:
+        if self.publication_attempt_count() >= 10:
             raise ValueError('global limit: 10 submissions per day')
-        task_id = self.task_binding(job['scope'])['task_id']
-        self.admit_transition(task_id, 'public_write', allow_after_final_report=allow_after_final_report)
-        self.consume_task_publication(task_id, time.time())
+        job_task_id = self.task_binding(job['scope'])['task_id']
+        # A direct human request carries fresh bounded write authority while the
+        # older task continues to own its immutable job and publication spend.
+        authority_task_id = (self.task_binding(req['scope'])['task_id']
+                             if allow_after_final_report else job_task_id)
+        self.admit_transition(authority_task_id, 'public_write', allow_after_final_report=allow_after_final_report)
+        if authority_task_id != job_task_id:
+            self.consume_prior_task_publication_authority(job_task_id)
+        self.consume_task_publication(job_task_id, time.time())
+        self.record_publication_attempt(job['id'])
         self.db.execute("UPDATE jobs SET state='publishing' WHERE id=?", (job['id'],))
         self.resource_checkpoint('publication', job['id'], req, 'publishing')
         self.db.commit()

@@ -132,6 +132,10 @@ class RepositoryBrokerTests(unittest.TestCase):
                           (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))
         self.b.db.commit()
         job = self.b.handle(self.repo_req)
+        # The later exact human request must discover durable prior work, not
+        # only a job created within the former 900-second convenience window.
+        self.b.db.execute('UPDATE jobs SET created=? WHERE id=?', (time.time() - 3600, job['id']))
+        self.b.db.commit()
         root = Path(__file__).resolve().parents[2]
         perl = r'''use strict; use warnings; use JSON::PP; use lib 'lib'; use Bot::Runtime::Workbench;
 { package BoundaryBot; sub _bot_name_slug { 'burt' } sub get_nickname { 'burt_bot' }
@@ -159,6 +163,79 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
             self.b.handle(self.b.capability_envelope('repo_publish', 'c' * 64, '#ai', 'irc.perl.org')
                           | {'action':'repo_publish', 'requester':'mateu', 'id':job['id']})
 
+    def test_direct_publish_binds_prior_candidate_then_revalidates_before_fake_write(self):
+        # A prior immutable passed job remains eligible for a later current human
+        # request; freshness is established by current policy/base validation,
+        # not a wall-clock discard of the saved tested bundle.
+        self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
+                          (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))
+        self.b.db.commit()
+        job = self.b.handle(self.repo_req)
+        self.b.db.execute('UPDATE jobs SET created=? WHERE id=?',
+                          (time.time() - 3600, job['id']))
+        # Simulate the original coding request expiring before the later human
+        # publication request arrives; the fresh request owns write authority.
+        self.b.db.execute('UPDATE task_phase_budgets SET deadline=? WHERE task_id=?',
+                          (time.time() - 1, self.req['scope']))
+        self.b.db.commit()
+        self.repo.head = C
+        with self.assertRaisesRegex(ValueError, 'branch changed; read project and retest'):
+            self.direct_repo_publish()
+        bound = self.b.db.execute('SELECT job_id FROM direct_repo_publications WHERE scope=?',
+                                  ('b' * 64,)).fetchone()
+        self.assertEqual(bound['job_id'], job['id'])
+        self.assertFalse(any(payload is not None for _, payload, _ in self.repo.calls))
+        self.repo.head = A
+        published = self.direct_repo_publish()
+        self.assertEqual((published['id'], published['state']), (job['id'], 'published'))
+        self.assertEqual(len([1 for _, payload, _ in self.repo.calls if payload is not None]), 3)
+        original_budget = self.b.db.execute(
+            'SELECT public_writes FROM task_phase_budgets WHERE task_id=?', (self.req['scope'],)).fetchone()
+        self.assertEqual(original_budget['public_writes'], 1)
+        attempt = self.b.db.execute('SELECT attempted FROM publication_attempts WHERE job_id=?',
+                                    (job['id'],)).fetchone()
+        self.assertIsNotNone(attempt)
+        self.assertGreater(attempt['attempted'], time.time() - 60)
+
+    def test_old_candidate_uses_current_publication_attempt_limit(self):
+        self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
+                          (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))
+        self.b.db.commit()
+        job = self.b.handle(self.repo_req)
+        self.b.db.execute('UPDATE jobs SET created=? WHERE id=?',
+                          (time.time() - 2 * 86400, job['id']))
+        now = time.time()
+        for n in range(10):
+            self.b.db.execute('INSERT INTO publication_attempts VALUES (?,?)',
+                              (f'{n:032x}', now))
+        self.b.db.commit()
+        with self.assertRaisesRegex(ValueError, 'global limit: 10 submissions per day'):
+            self.direct_repo_publish()
+        self.assertFalse(any(payload is not None for _, payload, _ in self.repo.calls))
+
+    def test_daily_attempt_limit_keeps_preupgrade_current_publications(self):
+        now = time.time()
+        for n in range(10):
+            self.b.db.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?)',
+                              (f'{n + 100:032x}', self.req['scope'], f'legacy-{n}', now,
+                               '{}', 'legacy', '{}', 'published', None))
+        self.b.db.commit()
+        self.assertEqual(self.b.publication_attempt_count(now), 10)
+
+    def test_direct_publish_initializes_missing_legacy_task_budget(self):
+        self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
+                          (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))
+        self.b.db.commit()
+        job = self.b.handle(self.repo_req)
+        # Simulate a passed repository job persisted before phase budgets existed.
+        self.b.db.execute('DELETE FROM task_phase_budgets WHERE task_id=?', (self.req['scope'],))
+        self.b.db.commit()
+        published = self.direct_repo_publish()
+        self.assertEqual((published['id'], published['state']), (job['id'], 'published'))
+        budget = self.b.db.execute('SELECT public_writes FROM task_phase_budgets WHERE task_id=?',
+                                   (self.req['scope'],)).fetchone()
+        self.assertEqual(budget['public_writes'], 1)
+
     def test_direct_publish_retry_keeps_its_initial_job_binding(self):
         self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
                           (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))
@@ -183,14 +260,14 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         self.assertEqual(len([1 for _, payload, _ in self.repo.calls if payload is not None]), writes)
 
     def test_direct_publish_rejects_missing_or_ambiguous_identity_bound_jobs(self):
-        with self.assertRaisesRegex(ValueError, 'one unambiguous recent passed job'):
+        with self.assertRaisesRegex(ValueError, 'one unambiguous passed job'):
             self.direct_repo_publish()
         self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
                           (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))
         self.b.db.commit()
         self.b.handle(self.repo_req)
         self.b.handle(self.repo_req | {'title':'second passed repository job'})
-        with self.assertRaisesRegex(ValueError, 'one unambiguous recent passed job'):
+        with self.assertRaisesRegex(ValueError, 'one unambiguous passed job'):
             self.direct_repo_publish()
         self.assertFalse(any(payload is not None for _, payload, _ in self.repo.calls))
 
