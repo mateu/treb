@@ -61,7 +61,7 @@ sub _non_task_text {
   # trusted task request and must not erase its offline authority.
   return 1 if $body =~ /\A\s*(?:please\s+)?(?:don't|do\s+not|stop|cancel|abort|never|not\s+now)\b/i;
   return 1 if $body =~ /\bI\s+(?:don't|do\s+not)\s+(?:want|need)\b/i;
-  return 1 if $text =~ /\b(?:how\s+(?:is|was)|what(?:'s|\s+is)\s+(?:the\s+)?(?:status|progress)|status\s+(?:of|on)|progress\s+(?:on|of))\b/i;
+  return 1 if $body =~ /\A\s*(?:how\s+(?:is|was)|what(?:'s|\s+is)\s+(?:the\s+)?(?:status|progress)|status\s+(?:of|on)|progress\s+(?:on|of))\b/i;
   return 1 if $body =~ /\A\s*(?:the|this|that|my)\b.*\b(?:is|are|was|were)\b/i;
   return 0;
 }
@@ -80,7 +80,7 @@ sub bounded_code_read_request {
   # Lists of reads remain reads. Look for an execution/publication action only
   # at the start of a later clause, so resource names such as perl-test-more
   # cannot turn an otherwise read-only request into an execution request.
-  return 0 if $body =~ /(?:[,;]|\b(?:and|then)\b)\s*(?:please\s+)?(?:write|implement|build|update|edit|fix|test|run|repair|publish|push|commit)\b/i;
+  return 0 if $body =~ /(?:[,;.]|\b(?:and|then)\b)\s*(?:please\s+)?(?:write|implement|build|update|edit|fix|test|run|repair|publish|push|commit)\b/i;
   return 1;
 }
 
