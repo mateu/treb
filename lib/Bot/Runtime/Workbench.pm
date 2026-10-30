@@ -581,7 +581,7 @@ sub tool_specs {
             $ttl=3600 if $ttl>3600;
             my $old_expires=$pending->{expires_at};
             $pending->{expires_at}=now()+$ttl;
-            my ($scope,$issued_capability,$grant,$requester,$raw,$r,$repo);
+            my ($scope,$issued_capability,$grant,$requester,$raw,$r,$repo,$execution);
             my $ok=eval {
               ($scope,$issued_capability,$grant)=capability_grant($self,$action);
               $requester=trusted_requester($self);
@@ -592,6 +592,12 @@ sub tool_specs {
               die "Invalid task resume" unless ref($r) eq 'HASH' && ($r->{resumed_scope}//'') eq $scope
                 && ref($r->{jobs}) eq 'ARRAY' && @{$r->{jobs}}<=13
                 && defined($r->{attempts_remaining}) && "$r->{attempts_remaining}" =~ /\A(?:[0-9]|1[0-3])\z/;
+              for my $job (@{$r->{jobs}}) {
+                die "Invalid task resume" unless ref($job) eq 'HASH'
+                  && ($job->{id}//'') =~ /\A[a-f0-9]{32}\z/
+                  && ($job->{state}//'') =~ /\A(?:running|passed|failed|published|publishing|uncertain)\z/;
+              }
+              $execution=$r->{jobs}[-1];
               $repo=$r->{latest_repository_job};
               die "Invalid task resume" if defined($repo) && !(ref($repo) eq 'HASH'
                 && ($repo->{id}//'') =~ /\A[a-f0-9]{32}\z/
@@ -604,18 +610,23 @@ sub tool_specs {
             $pending->{coding_requester}=$requester;
             $pending->{coding_checkpoint_id}=$args->{checkpoint_id};
             $pending->{coding_attempts_remaining}=0+$r->{attempts_remaining};
+            if ($execution) {
+              $pending->{coding_last_execution_job}=$execution->{id};
+              $pending->{coding_last_execution_state}=$execution->{state};
+              $pending->{coding_receipts}//={};
+              $pending->{coding_receipts}{passed}{$execution->{id}}=1 if $execution->{state} eq 'passed';
+            } else {
+              delete $pending->{coding_last_execution_job};
+              delete $pending->{coding_last_execution_state};
+            }
             if ($repo) {
               $pending->{coding_last_repo_job}=$repo->{id};
               $pending->{coding_last_repo_state}=$repo->{state};
-              $pending->{coding_last_execution_job}=$repo->{id};
-              $pending->{coding_last_execution_state}=$repo->{state};
               $pending->{coding_receipts}//={};
               $pending->{coding_receipts}{passed}{$repo->{id}}=1 if $repo->{state} eq 'passed';
             } else {
               delete $pending->{coding_last_repo_job};
               delete $pending->{coding_last_repo_state};
-              delete $pending->{coding_last_execution_job};
-              delete $pending->{coding_last_execution_state};
             }
             task_checkpoint($pending,'started','admitted');
             task_notice($self,$pending,"Resumed coding task (up to ${ttl}s; bounded test/tool attempts). I will report test results and publication status.");
