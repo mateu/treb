@@ -22,8 +22,8 @@ from references import References, CATALOG
 BASE = Path.home() / '.local/share/burt-workbench'
 TOKEN = Path.home() / '.config/burt-publisher/gist.token'
 MAX_REQUEST = MAX_JSON_BYTES
-MAX_ATTEMPTS = 5
-MAX_MODEL_ITERATIONS = 13
+MAX_ATTEMPTS = 13
+MAX_MODEL_ITERATIONS = 26
 MAX_PROGRESS_NOTICES = 8
 MAX_PUBLIC_WRITES = 1
 TERMINAL_REPORT_RESERVE = 1
@@ -476,7 +476,7 @@ class Broker:
             updates['model_iterations'] = max(row['model_iterations'], model_iterations)
         if operation == 'sandbox':
             if row['sandbox_attempts'] >= MAX_ATTEMPTS:
-                raise ValueError('limit: 5 sandbox attempts per IRC request')
+                raise ValueError('limit: 13 sandbox attempts per IRC request')
             updates['sandbox_attempts'] = row['sandbox_attempts'] + 1
         elif operation == 'public_write':
             if row['public_writes'] >= MAX_PUBLIC_WRITES:

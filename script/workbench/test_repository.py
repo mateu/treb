@@ -250,7 +250,7 @@ class RepositoryBrokerTests(unittest.TestCase):
         req=self.request('repo_inspect') | dict(action='repo_inspect',id=job['id'])
         inspected=self.b.handle(req)
         self.assertEqual(inspected['files'],self.repo_req['changes'])
-        self.assertEqual(inspected['attempts_remaining'],4)
+        self.assertEqual(inspected['attempts_remaining'],12)
         with self.assertRaises(ValueError): self.b.handle(req | {'scope':'b'*64})
         self.req['scope']='b'*64
         with self.assertRaises(ValueError): self.repair(job)
@@ -270,14 +270,14 @@ class RepositoryBrokerTests(unittest.TestCase):
         self.assertEqual(self.runs[-1]['files'],{'t/test.py':'assert 42==42'})
         self.assertEqual(fixed['state'],'passed')
 
-    def test_repair_shares_five_attempt_quota_with_diagnostics(self):
+    def test_repair_shares_thirteen_attempt_quota_with_diagnostics(self):
         job=self.b.handle(self.repo_req)
-        for i in range(3): self.b.handle(self.req | {'title':str(i)})
+        for i in range(11): self.b.handle(self.req | {'title':str(i)})
         fixed=self.repair(job)
         self.assertEqual(fixed['attempts_remaining'],0)
         # Idempotence still works at quota; new jobs cannot bypass it.
         self.assertEqual(self.repair(job)['id'],fixed['id'])
-        with self.assertRaisesRegex(ValueError,'5 sandbox attempts'): self.repair(job,title='sixth')
+        with self.assertRaisesRegex(ValueError,'13 sandbox attempts'): self.repair(job,title='fourteenth')
         self.repo_publish(fixed)
         with self.assertRaises(ValueError): self.repair(fixed,title='after publication')
 
@@ -289,7 +289,7 @@ class RepositoryBrokerTests(unittest.TestCase):
             action='repo_diagnose',id=original['id'],argv=['/usr/bin/perl','-e','print 42'],title='diagnostic')
         diagnostic=self.b.handle(request)
         self.assertEqual(self.runs[-1]['files'],self.repo_req['changes'])
-        self.assertEqual(diagnostic['attempts_remaining'],3)
+        self.assertEqual(diagnostic['attempts_remaining'],11)
         self.assertEqual(diagnostic['state'],'passed')
         with self.assertRaisesRegex(ValueError,'diagnostic jobs cannot be published'): self.repo_publish(diagnostic)
         with self.assertRaisesRegex(ValueError,'original repository test job'): self.repair(diagnostic)

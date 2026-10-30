@@ -26,6 +26,7 @@ class Verification:
                     or not set(policy['editable']) <= set(policy['baseline'])
                     or not isinstance(policy['additions'], list)
                     or any(p not in ('tests/', 't/') for p in policy['additions'])
+                    or policy.get('source_baseline') not in (None, 'current_verified')
                     or not any(a.startswith('/checks/') for a in policy['argv'])):
                 raise ValueError('invalid verification policy')
 
@@ -41,7 +42,14 @@ class Verification:
         if key not in self.policies:
             raise ValueError('operator verification policy required for this project')
         policy = self.policies[key]
-        if (policy['base_sha'] != snapshot['base_sha']
+        if policy.get('source_baseline') == 'current_verified':
+            # Dictionary's explicit opt-in advances only the effective baseline.
+            # The policy/checks themselves remain frozen; source comes only from
+            # the broker-owned snapshot and its identity binds each test/publish.
+            policy = json.loads(json.dumps(policy))
+            policy['base_sha'] = snapshot['base_sha']
+            policy['baseline'] = snapshot['files']
+        elif (policy['base_sha'] != snapshot['base_sha']
                 or policy['baseline'] != snapshot['files']):
             raise ValueError('verification baseline changed; operator review required')
         return policy

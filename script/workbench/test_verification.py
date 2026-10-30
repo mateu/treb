@@ -74,6 +74,26 @@ class VerificationTests(unittest.TestCase):
         self.repo.files['data.txt'] = 'changed'
         with self.assertRaisesRegex(ValueError, 'branch changed'): self.b.handle(self.req)
 
+    def test_current_verified_mode_derives_snapshot_but_preserves_protection(self):
+        autonomous = copy.deepcopy(self.policy)
+        autonomous['source_baseline'] = 'current_verified'
+        self.b.verification = Verification({'burt/dictionary:dictionary': autonomous})
+        self.repo.files['data.txt'] = 'advanced fixture'
+        self.snapshot = self.b.handle(Broker.capability_envelope('repo_read', 'b'*64, '#ai', 'irc.perl.org') | dict(
+            action='repo_read', branch='burt/dictionary', project='dictionary'))
+        self.req = Broker.capability_envelope('repo_run', 'b'*64, '#ai', 'irc.perl.org') | dict(
+            action='repo_run', snapshot_id=self.snapshot['snapshot_id'], changes={}, delete=[],
+            argv=['/bin/sh', '-c', 'true'], title='autonomous control')
+        self.b.handle(self.req)
+        with self.assertRaisesRegex(ValueError, 'protected baseline file changed'):
+            self.b.handle(self.req | {'changes': {'data.txt': 'weakened'}, 'title': 'tamper'})
+
+    def test_invalid_source_baseline_mode_fails_closed(self):
+        invalid = copy.deepcopy(self.policy)
+        invalid['source_baseline'] = 'anything'
+        with self.assertRaisesRegex(ValueError, 'invalid verification policy'):
+            Verification({'burt/dictionary:dictionary': invalid})
+
     def test_policy_identity_invalidates_dedup_and_publication(self):
         self.b.verify_execute = lambda job, checks: {'reason': 'exited', 'exit_code': 0}
         first = self.b.handle(self.req)
@@ -100,7 +120,7 @@ class VerificationTests(unittest.TestCase):
         job = self.b.handle(self.req)
         self.b.execute = lambda job: {'reason': 'exited', 'exit_code': 0}
         req = self.request('repo_diagnose')
-        for i in range(3):
+        for i in range(11):
             self.b.handle(req | {'action': 'repo_diagnose', 'id': job['id'], 'argv': ['/bin/sh', '-c', 'true'], 'title': str(i)})
         with self.assertRaisesRegex(ValueError, 'reserved'):
             self.b.handle(req | {'action': 'repo_diagnose', 'id': job['id'], 'argv': ['/bin/sh', '-c', 'true'], 'title': 'last'})
@@ -110,7 +130,7 @@ class VerificationTests(unittest.TestCase):
     def test_resumed_diagnostics_still_reserve_final_verification_attempt(self):
         job = self.b.handle(self.req)
         diagnostic = self.request('repo_diagnose')
-        for i in range(2):
+        for i in range(10):
             self.b.handle(diagnostic | {'action': 'repo_diagnose', 'id': job['id'],
                                         'argv': ['/bin/sh', '-c', 'true'], 'title': str(i)})
         checkpoint = self.b.handle(self.b.capability_envelope('task_checkpoint', 'a'*64, '#ai', 'irc.perl.org') | {

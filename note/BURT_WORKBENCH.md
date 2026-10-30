@@ -175,8 +175,9 @@ Fresh admitted human coding envelopes get `BOT_CODING_TASK_TTL_SECONDS`
 not the five-minute conversational output TTL. Admission uses the existing
 Workbench gate; stale queued messages, ambient chat, other bots/channels and
 reminder wakes gain no authority. This fixed deadline is never extended by a
-tool or retry, so the job scope is stable. Existing five-attempt broker quota,
-13 model-iteration limit, job freshness and publishing gates remain unchanged.
+tool or retry, so the job scope is stable. Burt's 13-attempt broker quota and 26 model-iteration limit apply only to
+admitted Burt coding tasks; other bots retain 13 model iterations. The final
+verification reserve, job freshness and publishing gates remain unchanged.
 This is an admission/tool/output deadline, not cancellation of an in-flight
 model HTTP request. Rate-limit retry budgets still apply.
 
@@ -215,7 +216,7 @@ Forge: `~/.local/share/burt-recovery/dictionary-recovery.tar.gz`.
 remaining quota within the **same current request**. `repair_repo_project(id,
 changes, delete, argv, title)` applies complete replacements only to named files;
 all omitted files survive exactly. Deletions must be explicit. It revalidates
-paths, input sizes, fresh branch base and the shared five-run quota, and creates
+paths, input sizes, fresh branch base and the shared 13-run quota, and creates
 a new immutable repository job. Publishing still requires that new job to pass,
 current publication permission, a recent result and an unchanged remote base.
 No previous request gains renewed publication authority.
@@ -224,8 +225,9 @@ Runtime budget reminders survive in-loop context compaction and point to the
 latest saved repository job. Failed final attempts stop before another model
 call, with a deterministic quota notice. Verbose results retain the error head
 and terminal summary tail, marked `output_truncated`; new results record `argv`.
-The ordinary 13-iteration bound, 30-minute task deadline, five execution attempts,
-offline runner and credential-isolated publisher are unchanged.
+Burt's ordinary 26-iteration bound, 30-minute task deadline, 13 execution
+attempts, offline runner and credential-isolated publisher are unchanged; other
+bots retain their 13-iteration bound.
 
 `diagnose_repo_job(id, argv, title)` runs diagnostics against the saved complete
 repository source without copying it through the gist-oriented flat-file tool.
@@ -343,7 +345,9 @@ Deployment: export the reviewed/CI-green commit to
 `~/.local/share/burt-irc/releases/<sha12>`, use the existing reversible pinned
 service rollout, and copy all six broker modules from that same release. Preserve
 live SQLite state and policy bytes; verify source/module hashes, offline runner,
-namespace/IPC, databases, service restart counters and IRC rejoin. The dictionary
-baseline-review hold is independent of this limit change and must not be silently
-renewed. An operator-only replay can use the frozen baseline and a separate
+namespace/IPC, databases, service restart counters and IRC rejoin. Pinned dictionary policies retain their baseline-review hold. The explicit
+dictionary `source_baseline: "current_verified"` mode instead derives a
+snapshot-bound effective baseline without mutating the operator policy; it still
+requires immutable checks, protected-path enforcement, and exact-artifact
+publication. An operator-only replay can use a frozen baseline and a separate
 journal without publishing or changing the live policy.
