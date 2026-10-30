@@ -386,7 +386,9 @@ sub report_result {
     $receipts->{passed}{$id}=1;
   }
   if ($id && $state eq 'published') {
-    $receipts->{published}{$id}=1;
+    my $url=$r->{url}//'';
+    $url='' unless $url =~ m{\Ahttps://(?:gist\.github\.com/burt-agent/[a-f0-9]+|github\.com/burt-agent/workspace/commit/[a-f0-9]{40})\z};
+    $receipts->{published}{$id}=$url;
   }
   $state='error' unless $state =~ /\A(?:passed|failed|published|publishing|uncertain)\z/;
   my $notice="$action: $state" . ($id ? " (job $id)" : '');
@@ -416,6 +418,7 @@ sub report_result {
   }
   $pending->{coding_last_repo_job}=$id if $id && $action =~ /\Arepo_(?:run|repair)\z/;
   $pending->{coding_last_repo_state}=$state if $id && $action =~ /\Arepo_(?:run|repair)\z/;
+  $pending->{coding_last_publication_job}=$id if $id && $state eq 'published';
   if (defined($remaining) && "$remaining" eq '0' && $state eq 'failed' && $action =~ /(?:run|repair)/) {
     $pending->{coding_stop_reason}='sandbox attempt budget exhausted after a failed test';
   }
@@ -435,11 +438,27 @@ sub verified_final_report {
   my $receipts=$pending->{coding_receipts}//{};
   my $claims_pass=$answer =~ /\b(?:tests?|suite|verification)\s+(?:all\s+)?pass(?:ed|es)?\b/i;
   my $claims_proposal=$answer =~ /\bproposal\b.*\b(?:created|ready|saved|awaiting)\b/i;
-  my $claims_publication=$answer =~ /\b(?:pushed|published|committed)\b/i
-    || $answer =~ m{https://github\.com/burt-agent/workspace/commit/[a-f0-9]{40}}i;
-  return $answer if (!$claims_pass || keys %{$receipts->{passed}//{}})
+  my $claims_publication=0;
+  while ($answer =~ /\b(pushed|published|committed)\b/gi) {
+    my $prefix=substr($answer,0,pos($answer)-length($1));
+    next if $prefix =~ /\b(?:not|never|un|fail\w*)(?:\s+\w+){0,3}\s*\z/i;
+    $claims_publication=1;
+    last;
+  }
+  $claims_publication=1 if $answer =~ m{https://github\.com/burt-agent/workspace/commit/[a-f0-9]{40}}i;
+  my $last_repo_job=$pending->{coding_last_repo_job}//'';
+  my $pass_receipt=$last_repo_job =~ /\A[a-f0-9]{32}\z/
+    && ($pending->{coding_last_repo_state}//'') eq 'passed'
+    && $receipts->{passed}{$last_repo_job};
+  my $last_publication_job=$pending->{coding_last_publication_job}//'';
+  my $publication_receipt=$last_publication_job =~ /\A[a-f0-9]{32}\z/
+    ? $receipts->{published}{$last_publication_job} : undef;
+  my ($reported_url)=$answer =~ m{(https://github\.com/burt-agent/workspace/commit/[a-f0-9]{40})}i;
+  my $publication_matches=defined($publication_receipt)
+    && (!defined($reported_url) || $reported_url eq $publication_receipt);
+  return $answer if (!$claims_pass || $pass_receipt)
     && (!$claims_proposal || $receipts->{proposal})
-    && (!$claims_publication || keys %{$receipts->{published}//{}});
+    && (!$claims_publication || $publication_matches);
   my $status=$pending->{coding_last_result}//'No verified work result recorded.';
   return "Coding task report withheld: the claimed result has no matching broker receipt. $status";
 }

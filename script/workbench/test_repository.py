@@ -280,6 +280,21 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         self.assertEqual((published['id'], published['state']), (changed['id'], 'published'))
         self.assertNotEqual(base_only['id'], published['id'])
 
+    def test_direct_publish_recovers_legacy_candidate_from_its_origin_scope(self):
+        self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
+                          (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))
+        self.b.db.commit()
+        job = self.b.handle(self.repo_req)
+        destination = json.loads(self.b.db.execute('SELECT destination FROM repo_jobs WHERE id=?',
+                                                   (job['id'],)).fetchone()['destination'])
+        destination.pop('candidate_material')
+        self.b.db.execute('UPDATE repo_jobs SET destination=? WHERE id=?',
+                          (json.dumps(destination), job['id']))
+        self.b.db.execute('DELETE FROM repository_candidates WHERE job_id=?', (job['id'],))
+        self.b.db.commit()
+        published = self.direct_repo_publish()
+        self.assertEqual((published['id'], published['state']), (job['id'], 'published'))
+
     def test_direct_publish_rejects_multiple_project_candidates(self):
         self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
                           (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))

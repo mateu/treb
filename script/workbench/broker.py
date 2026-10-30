@@ -475,7 +475,12 @@ class Broker:
             # Migration-safe recovery for jobs written before candidate lineage:
             # compare the immutable tested bundle with its immutable snapshot.
             try:
-                snapshot = self.load_snapshot(req, destination['snapshot_id'], require_active=False)
+                # The candidate query already verifies the originating job's
+                # requester/channel/network identity. Legacy snapshots belong
+                # to that job's original scope, while this fresh publication
+                # request intentionally has a new scope.
+                snapshot = self.load_snapshot({**req, 'scope': row['scope']},
+                                              destination['snapshot_id'], require_active=False)
                 changes, deleted = self.candidate_delta(snapshot['files'], json.loads(row['files']))
                 if changes or deleted:
                     eligible.append((row, destination))

@@ -463,9 +463,22 @@ is($bot->{pending}{expires_at},$resume_deadline,'failed resume restores its orig
 $bot->{pending}={coding_task=>1,coding_last_result=>'No verified work result recorded.'};
 like(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'Tests passed and I pushed it.'),
   qr/report withheld/,'unreceipted test and publication claims are withheld');
-$bot->{pending}{coding_receipts}={passed=>{'a'x32=>1},published=>{'a'x32=>1}};
+$bot->{pending}{coding_last_repo_job}='a'x32;
+$bot->{pending}{coding_last_repo_state}='passed';
+$bot->{pending}{coding_last_publication_job}='a'x32;
+$bot->{pending}{coding_receipts}={passed=>{'a'x32=>1},published=>{'a'x32=>''}};
 is(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'Tests passed and I pushed it.'),
   'Tests passed and I pushed it.','matching broker receipts permit factual final report');
+is(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'Tests passed; the changes have not been published.'),
+  'Tests passed; the changes have not been published.','a truthful denial of publication is not suppressed');
+$bot->{pending}{coding_last_repo_state}='failed';
+like(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'Tests passed.'),
+  qr/report withheld/,'an earlier passed receipt cannot validate later failed work');
+$bot->{pending}{coding_last_repo_state}='passed';
+$bot->{pending}{coding_receipts}{published}{'a'x32}='https://github.com/burt-agent/workspace/commit/'.('a'x40);
+like(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},
+  'I published https://github.com/burt-agent/workspace/commit/'.('b'x40)),
+  qr/report withheld/,'a publication receipt cannot validate a different commit URL');
 like(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'The proposal is ready.'),
   qr/report withheld/,'unreceipted proposal claim is withheld');
 $bot->{pending}{coding_receipts}{proposal}='b'x32;
