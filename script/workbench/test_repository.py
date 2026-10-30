@@ -189,6 +189,9 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         published = self.direct_repo_publish()
         self.assertEqual((published['id'], published['state']), (job['id'], 'published'))
         self.assertEqual(len([1 for _, payload, _ in self.repo.calls if payload is not None]), 3)
+        original_budget = self.b.db.execute(
+            'SELECT public_writes FROM task_phase_budgets WHERE task_id=?', (self.req['scope'],)).fetchone()
+        self.assertEqual(original_budget['public_writes'], 1)
         attempt = self.b.db.execute('SELECT attempted FROM publication_attempts WHERE job_id=?',
                                     (job['id'],)).fetchone()
         self.assertIsNotNone(attempt)
@@ -209,6 +212,15 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         with self.assertRaisesRegex(ValueError, 'global limit: 10 submissions per day'):
             self.direct_repo_publish()
         self.assertFalse(any(payload is not None for _, payload, _ in self.repo.calls))
+
+    def test_daily_attempt_limit_keeps_preupgrade_current_publications(self):
+        now = time.time()
+        for n in range(10):
+            self.b.db.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?)',
+                              (f'{n + 100:032x}', self.req['scope'], f'legacy-{n}', now,
+                               '{}', 'legacy', '{}', 'published', None))
+        self.b.db.commit()
+        self.assertEqual(self.b.publication_attempt_count(now), 10)
 
     def test_direct_publish_retry_keeps_its_initial_job_binding(self):
         self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',

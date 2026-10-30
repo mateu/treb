@@ -486,12 +486,26 @@ class Broker:
 
     def publication_attempt_count(self, now=None):
         now = time.time() if now is None else now
-        return self.db.execute('SELECT COUNT(*) FROM publication_attempts WHERE attempted>?',
-                               (now - 86400,)).fetchone()[0]
+        # Pre-upgrade journals have no attempt receipt. Conservatively retain
+        # their existing created-within-day accounting until a new attempt is
+        # recorded for that job.
+        return self.db.execute('SELECT COUNT(*) FROM ('
+                               'SELECT job_id FROM publication_attempts WHERE attempted>? '
+                               'UNION '
+                               "SELECT id FROM jobs WHERE created>? AND state IN ('published','publishing','uncertain') "
+                               'AND id NOT IN (SELECT job_id FROM publication_attempts))',
+                               (now - 86400, now - 86400)).fetchone()[0]
 
     def record_publication_attempt(self, job_id, now=None):
         self.db.execute('INSERT OR IGNORE INTO publication_attempts VALUES (?,?)',
                         (job_id, time.time() if now is None else now))
+
+    def consume_prior_task_publication_authority(self, task_id):
+        row = self.db.execute('SELECT * FROM task_phase_budgets WHERE task_id=?', (task_id,)).fetchone()
+        if row['public_writes'] >= MAX_PUBLIC_WRITES:
+            raise ValueError('limit: one submission per IRC request')
+        self.db.execute('UPDATE task_phase_budgets SET public_writes=public_writes+1,updated=? WHERE task_id=?',
+                        (time.time(), task_id))
 
     def ensure_task_phase_budget(self, task_id, now, deadline=None):
         row = self.db.execute('SELECT * FROM task_phase_budgets WHERE task_id=?', (task_id,)).fetchone()
@@ -952,6 +966,8 @@ class Broker:
         authority_task_id = (self.task_binding(req['scope'])['task_id']
                              if allow_after_final_report else job_task_id)
         self.admit_transition(authority_task_id, 'public_write', allow_after_final_report=allow_after_final_report)
+        if authority_task_id != job_task_id:
+            self.consume_prior_task_publication_authority(job_task_id)
         self.consume_task_publication(job_task_id, time.time())
         self.record_publication_attempt(job['id'])
         self.db.execute("UPDATE jobs SET state='publishing' WHERE id=?", (job['id'],))
