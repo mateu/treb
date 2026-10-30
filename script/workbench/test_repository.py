@@ -293,6 +293,29 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         published = self.direct_repo_publish()
         self.assertEqual((published['id'], published['state']), (second['id'], 'published'))
 
+    def test_direct_publish_does_not_recover_history_for_a_published_destination(self):
+        self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
+                          (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))
+        self.b.db.commit()
+        self.b.handle(self.repo_req | {'changes': {'lib/main.py':'print("old")'}})
+        snapshot = self.b.handle(self.b.capability_envelope('repo_read', self.req['scope'], '#ai', 'irc.perl.org') | {
+            'action':'repo_read', 'branch':'burt/dictionary', 'project':'dictionary'})
+        newest = self.b.handle(self.repo_req | {'snapshot_id':snapshot['snapshot_id'],
+                                                'changes': {'lib/main.py':'print("new")'}})
+        self.assertEqual(self.direct_repo_publish()['id'], newest['id'])
+        other_scope = 'c' * 64
+        self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
+                          (other_scope, other_scope, 'mateu', '#ai', 'irc.perl.org', time.time()))
+        self.b.db.commit()
+        other_snapshot = self.b.handle(self.b.capability_envelope('repo_read', other_scope, '#ai', 'irc.perl.org') | {
+            'action':'repo_read', 'branch':'burt/other-project', 'project':'other-project'})
+        pending = self.b.handle(self.b.capability_envelope('repo_run', other_scope, '#ai', 'irc.perl.org') | {
+            'action':'repo_run', 'snapshot_id':other_snapshot['snapshot_id'], 'changes':{'lib/other.py':'print(1)'},
+            'delete':[], 'argv':['/bin/sh','-c','true'], 'title':'other project candidate'})
+        selected = self.b.direct_repository_publication_job(self.b.capability_envelope(
+            'repo_publish', 'd' * 64, '#ai', 'irc.perl.org') | {'action':'repo_publish', 'requester':'mateu'})
+        self.assertEqual(selected['id'], pending['id'])
+
     def test_direct_publish_rejects_indexed_and_legacy_candidates(self):
         # A migration-era project without an index remains eligible evidence;
         # an indexed later project must not make publication look unambiguous.

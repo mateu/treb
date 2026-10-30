@@ -457,7 +457,7 @@ class Broker:
             'SELECT c.job_id FROM repository_candidates c JOIN jobs j ON j.id=c.job_id '
             'JOIN repo_jobs r ON r.id=j.id '
             'WHERE c.requester=? AND c.channel=? AND c.network=? '
-            'AND j.state="passed" ORDER BY c.branch,c.project',
+            'AND j.state IN ("passed","published") ORDER BY c.branch,c.project',
             (requester, req['channel'], req['network'])).fetchall()
         eligible = {}
         indexed_destinations = set()
@@ -466,8 +466,9 @@ class Broker:
             destination = json.loads(self.db.execute('SELECT destination FROM repo_jobs WHERE id=?',
                                                      (job['id'],)).fetchone()['destination'])
             key = self.repository_candidate_key(destination)
-            eligible.setdefault(key, (job, destination))
             indexed_destinations.add(key)
+            if job['state'] == 'passed':
+                eligible.setdefault(key, (job, destination))
         rows = self.db.execute(
             'SELECT j.* FROM jobs j JOIN repo_jobs r ON r.id=j.id '
             'JOIN task_scopes s ON s.scope=j.scope '
