@@ -74,6 +74,7 @@ for my $case (
   ['interrogative bounded read','burt_bot: could you inspect the repository?',0],
   ['compound bounded read','burt_bot: inspect the repository and read the python-csv reference',0],
   ['hyphenated bounded read','burt_bot: inspect the perl-test-more reference',0],
+  ['checkpoint status read','burt_bot: status checkpoint '.('a'x32),0],
   ['offline task with no publication','burt_bot: repair this dictionary code; do not publish anything',1],
   ['offline task with negative constraint','burt_bot: update this inventory project (do not clamp negative balances)',1],
   ['post-processing task','burt_bot: fix the post-processing code',1],

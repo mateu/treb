@@ -77,7 +77,7 @@ sub bounded_code_read_request {
   return 0 if _non_task_text($text,$nick) || !_code_context($text);
   my $body=$text;
   return 0 unless $body =~ s/\A\s*$nick\s*[:,]?\s*//i;
-  return 0 unless $body =~ /\A(?:(?:please\s+)?|(?:could|can|would|will)\s+you\s+(?:please\s+)?)?(?:read|inspect|open|review|check)\b/i;
+  return 0 unless $body =~ /\A(?:(?:please\s+)?|(?:could|can|would|will)\s+you\s+(?:please\s+)?)?(?:read|inspect|open|review|check|status)\b/i;
   # Lists of reads remain reads. Look for an execution/publication action only
   # at the start of a later clause, so resource names such as perl-test-more
   # cannot turn an otherwise read-only request into an execution request.
