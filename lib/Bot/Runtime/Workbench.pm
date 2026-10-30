@@ -36,16 +36,88 @@ sub capability_set_from_messages {
     next unless ($m->{source_kind}//'') eq 'conversation' && $self->_is_human_nick($m->{nick}//'');
     my $text=$m->{msg}//'';
     next unless $text =~ /(?:^|\W)$nick(?:\W|$)/i;
-    # A bounded read must name one of the fixed public resources. Generic
-    # discussion of coding is intentionally not an authority signal.
-    $capability{read_status}=1 if $text =~ /\b(?:read|inspect|status)\b/i
-      && $text =~ /\b(?:(?:reference|documentation|python-(?:json|unittest|csv)|perl-(?:json-pp|test-more)|repo(?:sitory)?|project|job|session|checkpoint))\b/i;
-    $capability{edit_test}=1 if $text =~ /\b(?:write|implement|build|update|edit|fix|test|run)\b/i
-      && $text =~ /\b(?:code|coding|script|program|project|repo(?:sitory)?|tests?)\b/i;
+    # The current trusted envelope, not model text, remains the authority.
+    # Treat natural requests to work on named code as tasks. This deliberately
+    # has no edit/test verb password: continuing, revisiting, or asking for a
+    # crack at a bounded project is enough for offline work. Publication stays
+    # on its separate explicit-destination path below.
+    $capability{read_status}=1 if bounded_code_read_request($text,$nick);
+    if (natural_code_task_request($text,$nick)) {
+      $capability{read_status}=1;
+      $capability{edit_test}=1;
+    }
     $capability{publish_gist}=1 if $text =~ /\bgist\b/i && $text =~ /\b(?:publish|post|push|commit)\b/i;
     $capability{publish_repo}=1 if $text =~ /\b(?:repo|repository)\b/i && $text =~ /\b(?:publish|push|commit)\b/i;
   }
   return \%capability;
+}
+
+sub _non_task_text {
+  my ($text,$nick)=@_;
+  my $body=$text;
+  $body =~ s/\A\s*$nick\s*[:,]?\s*//i if defined $nick;
+  # Only a leading cancellation is a cancellation of the task. A negative
+  # implementation constraint such as “do not clamp” remains part of the
+  # trusted task request and must not erase its offline authority.
+  return 1 if $body =~ /\A\s*(?:please\s+)?(?:don't|do\s+not|stop|cancel|abort|never|not\s+now)\b/i;
+  return 1 if $body =~ /\bI\s+(?:don't|do\s+not)\s+(?:want|need)\b/i;
+  return 1 if $body =~ /\A\s*(?:how\s+(?:is|was)|what(?:'s|\s+is)\s+(?:the\s+)?(?:status|progress)|status\s+(?:of|on)|progress\s+(?:on|of))\b/i;
+  return 1 if $body =~ /\A\s*(?:the|this|that|my)\b.*\b(?:is|are|was|were)\b/i
+    && $body !~ /(?:[,;.]|\b(?:and|then)\b)\s*(?:please\s+)?(?:write|implement|build|update|edit|fix|test|run|repair)\b/i;
+  return 0;
+}
+
+sub _code_context {
+  my ($text)=@_;
+  return $text =~ m{(?:\b(?:code|coding|script|program|project|repo(?:sitory)?|tests?|reference|documentation|python-(?:json|unittest|csv)|perl-(?:json-pp|test-more)|job|session|checkpoint)\b|\b(?:qtype|idtype|query\s+params?)\b|https?://github\.com/burt-agent/workspace(?:/|\b))}i;
+}
+
+sub bounded_code_read_request {
+  my ($text,$nick)=@_;
+  return 0 if _non_task_text($text,$nick) || !_code_context($text);
+  my $body=$text;
+  return 0 unless $body =~ s/\A\s*$nick\s*[:,]?\s*//i;
+  return 0 unless $body =~ /\A(?:(?:please\s+)?|(?:could|can|would|will)\s+you\s+(?:please\s+)?)?(?:read|inspect|open|review|check|status)\b/i;
+  # Lists of reads remain reads. Look for an execution/publication action only
+  # at the start of a later clause, so resource names such as perl-test-more
+  # cannot turn an otherwise read-only request into an execution request.
+  return 0 if $body =~ /(?:[,;.]|\b(?:and|then)\b)\s*(?:please\s+)?(?:write|implement|build|update|edit|fix|test|run|repair|publish|push|commit)\b/i;
+  return 1;
+}
+
+sub isolated_publication_request {
+  my ($text)=@_;
+  # Code can legitimately refer to post-processing and pre-commit without
+  # requesting a public write, so require an action-and-destination phrase.
+  return 1 if $text =~ /\b(?:publish|post)\b(?:\s+\w+){0,4}\s+\b(?:a\s+)?gist\b/i;
+  return 1 if $text =~ /\bgist\b(?:\s+\w+){0,4}\s+\b(?:publish|post)\b/i;
+  return 1 if $text =~ /\b(?:publish|push|commit)\b(?:\s+\w+){0,5}\s+\b(?:to\s+(?:the\s+)?)?(?:repo|repository)\b/i;
+  return 1 if $text =~ /\b(?:repo|repository)\b(?:\s+\w+){0,5}\s+\b(?:publish|push|commit)\b/i;
+  return 0;
+}
+
+sub natural_code_task_request {
+  my ($text,$nick)=@_;
+  # Cancellation, negation, and status questions are conversation, not a new
+  # task. Do this before recognizing any code context so quoted task wording
+  # cannot accidentally broaden an otherwise negative request.
+  return 0 if _non_task_text($text,$nick) || !_code_context($text);
+  return 0 if bounded_code_read_request($text,$nick);
+  my $body=$text;
+  $body =~ s/\A\s*$nick\s*[:,]?\s*//i;
+  # An isolated destination-specific publication request is not also a coding
+  # task. A compound task still has its ordinary offline authority, while the
+  # publication half remains separately explicit below. Addressing punctuation
+  # is not itself a compound action.
+  return 0 if isolated_publication_request($body)
+    && $body !~ /\A(?:please\s+)?(?:write|implement|build|update|edit|fix|test|run|repair)\b/i
+    && $body !~ /[,;]|\b(?:and|then)\b/i;
+
+  # A fresh direct human statement about code is a task unless it is one of
+  # the explicit non-task/read forms above. This makes requests, imperative
+  # phrasing, and contextual continuations equivalent without a coding-verb
+  # whitelist. The fixed tool and broker boundaries still constrain the work.
+  return 1;
 }
 
 sub resume_requested {
@@ -127,8 +199,10 @@ sub capability_grant {
   my ($self,$action)=@_;
   my $capability=$ACTION_CAPABILITY{$action} or die "Unknown Workbench action\n";
   # An edit/test request needs a broker-owned project snapshot before its
-  # first repository candidate. Prefer explicit read authority when present.
-  if ($action eq 'repo_read' && !capability_set($self)->{read_status}) {
+  # first repository candidate. Prefer its edit scope when both a task and a
+  # bounded read are available, so the snapshot cannot cross task scopes.
+  my $set=capability_set($self);
+  if ($action eq 'repo_read' && $set->{edit_test}) {
     $capability='edit_test';
   }
   my $scope=request_scope($self,$capability);

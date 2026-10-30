@@ -571,7 +571,9 @@ class Broker:
             raise ValueError('invalid action or fields')
         # A bounded project read is a prerequisite for an edit-authorized
         # repository test. It remains read-only but shares the edit scope.
-        if action == 'repo_read' and capability in ('read_status', 'edit_test'):
+        if (action == 'repo_read' or (action == 'proposal_create'
+                                      and req.get('proposal_action') == 'repo_read')) \
+                and capability in ('read_status', 'edit_test'):
             expected_capability = capability
         expected_grant = hashlib.sha256(json.dumps(
             [scope, req['channel'], req['network'], expected_capability],
