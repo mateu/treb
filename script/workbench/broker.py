@@ -433,7 +433,7 @@ class Broker:
         return job
 
     def task_job_rows(self, task_id):
-        return self.db.execute('SELECT j.id,j.state,j.created,r.destination,e.execution_state FROM jobs j '
+        return self.db.execute('SELECT j.id,j.state,j.created,j.result,j.url,r.destination,e.execution_state FROM jobs j '
                                'LEFT JOIN task_scopes s ON s.scope=j.scope LEFT JOIN repo_jobs r ON r.id=j.id '
                                'LEFT JOIN task_execution_selections e ON e.task_id=COALESCE(s.task_id,j.scope) '
                                'AND e.job_id=j.id WHERE COALESCE(s.task_id,j.scope)=? '
@@ -448,6 +448,18 @@ class Broker:
                          ON CONFLICT(task_id) DO UPDATE SET job_id=excluded.job_id,
                          execution_state=excluded.execution_state,selected=excluded.selected''',
                         (task_id, job_id, state, time.time() if now is None else now))
+
+    @staticmethod
+    def execution_verdict(job):
+        """Recover an immutable execution verdict after publication changes state."""
+        if job['state'] in ('passed', 'failed'):
+            return job['state']
+        result = json.loads(job['result'])
+        if result.get('reason') == 'exited' and result.get('exit_code') == 0:
+            return 'passed'
+        if result.get('reason'):
+            return 'failed'
+        return None
 
     @staticmethod
     def repository_candidate_key(destination):
@@ -705,10 +717,17 @@ class Broker:
             if not destination.get('diagnostic_only'):
                 latest_execution_job = {'id': job['id'], 'state': job['execution_state'] or job['state']}
                 break
+        latest_publication_job = None
+        if latest_execution_job:
+            for job in jobs:
+                if job['id'] == latest_execution_job['id'] and job['state'] == 'published':
+                    latest_publication_job = {'id': job['id'], 'url': job['url']}
+                    break
         return {'checkpoint_id': row['id'], 'task_id': row['task_id'], 'parent_checkpoint_id': row['parent'],
                 'phase': row['phase'], 'reason': row['reason'],
                 'jobs': [{'id': j['id'], 'state': j['state']} for j in jobs],
                 'latest_repository_job': latest_repository_job, 'latest_execution_job': latest_execution_job,
+                'latest_publication_job': latest_publication_job,
                 'attempts_remaining': budget['remaining_budget']['sandbox_executions'], 'budget': budget}
 
     def handle(self, req, _diagnostic=False):
@@ -965,7 +984,9 @@ class Broker:
                 if action == 'repo_run' and old['state'] == 'passed' and destination is not None:
                     self.remember_repository_candidate(req, old['id'], destination)
                 if not _diagnostic:
-                    self.remember_task_execution_selection(req, old['id'], old['state'])
+                    verdict = self.execution_verdict(old)
+                    if verdict:
+                        self.remember_task_execution_selection(req, old['id'], verdict)
                 self.db.commit()
                 return self.result(old)
             task_id = self.task_binding(scope)['task_id']

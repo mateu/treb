@@ -387,7 +387,7 @@ sub report_result {
   }
   if ($id && $state eq 'published') {
     my $url=$r->{url}//'';
-    $url='' unless $url =~ m{\Ahttps://(?:gist\.github\.com/burt-agent/[a-f0-9]+|github\.com/burt-agent/workspace/commit/[a-f0-9]{40})\z};
+    $url='' unless $url =~ m#\Ahttps://(?:gist\.github\.com/burt-agent/[a-f0-9]+|github\.com/burt-agent/workspace/commit/[a-f0-9]{40})\z#;
     $receipts->{published}{$id}=$url;
   }
   $state='error' unless $state =~ /\A(?:passed|failed|published|publishing|uncertain)\z/;
@@ -404,7 +404,7 @@ sub report_result {
     $notice.='; success unconfirmed; the public write may already have succeeded; operator reconciliation required before retrying; do not retry';
   }
   my $url=$r->{url}//'';
-  if ($url =~ m{\Ahttps://(?:gist\.github\.com/burt-agent/[a-f0-9]+|github\.com/burt-agent/workspace/commit/[a-f0-9]{40})\z}) {
+  if ($url =~ m#\Ahttps://(?:gist\.github\.com/burt-agent/[a-f0-9]+|github\.com/burt-agent/workspace/commit/[a-f0-9]{40})\z#) {
     $notice.=" $url";
   }
   if ($action =~ /(?:run|repair|diagnose)/ && ref($r->{result}) eq 'HASH') {
@@ -588,7 +588,7 @@ sub tool_specs {
             $ttl=3600 if $ttl>3600;
             my $old_expires=$pending->{expires_at};
             $pending->{expires_at}=now()+$ttl;
-            my ($scope,$issued_capability,$grant,$requester,$raw,$r,$repo,$execution);
+            my ($scope,$issued_capability,$grant,$requester,$raw,$r,$repo,$execution,$publication);
             my $ok=eval {
               ($scope,$issued_capability,$grant)=capability_grant($self,$action);
               $requester=trusted_requester($self);
@@ -612,6 +612,10 @@ sub tool_specs {
               die "Invalid task resume" if defined($repo) && !(ref($repo) eq 'HASH'
                 && ($repo->{id}//'') =~ /\A[a-f0-9]{32}\z/
                 && ($repo->{state}//'') =~ /\A(?:running|passed|failed|published|publishing|uncertain)\z/);
+              $publication=$r->{latest_publication_job};
+              die "Invalid task resume" if defined($publication) && !(ref($publication) eq 'HASH'
+                && ($publication->{id}//'') =~ /\A[a-f0-9]{32}\z/
+                && ($publication->{url}//'') =~ m#\Ahttps://(?:gist\.github\.com/burt-agent/[a-f0-9]+|github\.com/burt-agent/workspace/commit/[a-f0-9]{40})\z#);
               1;
             };
             if (!$ok) { my $err=$@; $pending->{expires_at}=$old_expires; die $err; }
@@ -637,6 +641,13 @@ sub tool_specs {
             } else {
               delete $pending->{coding_last_repo_job};
               delete $pending->{coding_last_repo_state};
+            }
+            if ($publication) {
+              $pending->{coding_last_publication_job}=$publication->{id};
+              $pending->{coding_receipts}//={};
+              $pending->{coding_receipts}{published}{$publication->{id}}=$publication->{url};
+            } else {
+              delete $pending->{coding_last_publication_job};
             }
             task_checkpoint($pending,'started','admitted');
             task_notice($self,$pending,"Resumed coding task (up to ${ttl}s; bounded test/tool attempts). I will report test results and publication status.");

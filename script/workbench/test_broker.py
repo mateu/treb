@@ -214,6 +214,11 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(self.publish(r)['state'], 'published')
         self.assertEqual(self.publish(r)['state'], 'published')
         self.assertEqual(len(self.posts), 1)
+        replayed = self.b.handle(self.req)
+        self.assertEqual(replayed['id'], r['id'])
+        self.assertEqual(replayed['state'], 'published')
+        checkpoint = self.checkpoint()
+        self.assertEqual(checkpoint['latest_execution_job'], {'id': r['id'], 'state': 'passed'})
         self.assertEqual(self.posts[0]['files'], {n:{'content':c} for n,c in self.req['files'].items()})
         self.assertTrue(self.posts[0]['public'])
 
