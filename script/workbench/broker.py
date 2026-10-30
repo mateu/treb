@@ -167,6 +167,13 @@ class Broker:
             (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, parent TEXT, scope TEXT NOT NULL,
              requester TEXT NOT NULL, channel TEXT NOT NULL, network TEXT NOT NULL,
              created REAL NOT NULL, phase TEXT NOT NULL, reason TEXT NOT NULL)''')
+        # A cached replay returns an old job as the task's newest execution.
+        # Preserve that selection independently of immutable creation times and
+        # prunable audit events so checkpoints resume the actual last result.
+        self.db.execute('''CREATE TABLE IF NOT EXISTS task_execution_selections
+            (task_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, execution_state TEXT NOT NULL, selected REAL NOT NULL)''')
+        try: self.db.execute('ALTER TABLE task_execution_selections ADD COLUMN execution_state TEXT')
+        except sqlite3.OperationalError: pass
         # Attempt budget is durable task state, not a count over the prunable
         # job journal. It must survive restart and job-retention pruning.
         self.db.execute('''CREATE TABLE IF NOT EXISTS task_budgets
@@ -199,6 +206,14 @@ class Broker:
         self.db.execute('''CREATE TABLE IF NOT EXISTS direct_repo_publications
             (scope TEXT PRIMARY KEY, job_id TEXT NOT NULL, requester TEXT NOT NULL,
              channel TEXT NOT NULL, network TEXT NOT NULL, created REAL NOT NULL)''')
+        # A successful material repository change is the durable candidate for
+        # its human/channel/destination workspace. Read-only and base-only
+        # verification runs deliberately do not replace it.
+        self.db.execute('''CREATE TABLE IF NOT EXISTS repository_candidates
+            (requester TEXT NOT NULL, channel TEXT NOT NULL, network TEXT NOT NULL,
+             branch TEXT NOT NULL, project TEXT NOT NULL, job_id TEXT NOT NULL,
+             created REAL NOT NULL,
+             PRIMARY KEY(requester,channel,network,branch,project))''')
         # State tables above are mutable operational indexes. Keep an append-only
         # receipt for every resource transition for recovery and audit.
         self.db.execute('''CREATE TABLE IF NOT EXISTS resource_checkpoints
@@ -234,7 +249,11 @@ class Broker:
         self.db.execute('DELETE FROM publication_attempts WHERE attempted<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM task_phase_budgets WHERE task_id NOT IN (SELECT DISTINCT task_id FROM task_checkpoints) '
                         'AND updated<?', (now - AUDIT_TTL,))
+        self.db.execute('DELETE FROM task_execution_selections WHERE task_id NOT IN (SELECT DISTINCT task_id FROM task_checkpoints) '
+                        'AND selected<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM direct_repo_publications WHERE created<?', (now - AUDIT_TTL,))
+        self.db.execute('DELETE FROM repository_candidates WHERE created<?', (now - AUDIT_TTL,))
+        self.db.execute('DELETE FROM repository_candidates WHERE job_id NOT IN (SELECT id FROM jobs)')
         self.db.execute('DELETE FROM resource_checkpoints WHERE created<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM resource_checkpoints WHERE id NOT IN '
                         '(SELECT id FROM resource_checkpoints ORDER BY created DESC,id DESC LIMIT ?)', (AUDIT_LIMIT,))
@@ -414,9 +433,40 @@ class Broker:
         return job
 
     def task_job_rows(self, task_id):
-        return self.db.execute('SELECT j.id,j.state,j.created,r.destination FROM jobs j '
+        return self.db.execute('SELECT j.id,j.state,j.created,j.result,j.url,r.destination,e.execution_state FROM jobs j '
                                'LEFT JOIN task_scopes s ON s.scope=j.scope LEFT JOIN repo_jobs r ON r.id=j.id '
-                               'WHERE COALESCE(s.task_id,j.scope)=? ORDER BY j.created,j.id', (task_id,)).fetchall()
+                               'LEFT JOIN task_execution_selections e ON e.task_id=COALESCE(s.task_id,j.scope) '
+                               'AND e.job_id=j.id WHERE COALESCE(s.task_id,j.scope)=? '
+                               'ORDER BY e.job_id IS NOT NULL,j.created,j.id', (task_id,)).fetchall()
+
+    def remember_task_execution_selection(self, req, job_id, state, now=None):
+        """Persist the latest non-diagnostic execution verdict for recovery."""
+        if state not in ('passed', 'failed'):
+            raise ValueError('invalid execution selection state')
+        task_id = self.task_binding(req['scope'])['task_id']
+        self.db.execute('''INSERT INTO task_execution_selections
+                         (task_id,job_id,execution_state,selected) VALUES (?,?,?,?)
+                         ON CONFLICT(task_id) DO UPDATE SET job_id=excluded.job_id,
+                         execution_state=excluded.execution_state,selected=excluded.selected''',
+                        (task_id, job_id, state, time.time() if now is None else now))
+
+    @staticmethod
+    def execution_verdict(job):
+        """Recover an immutable execution verdict after publication changes state."""
+        if job['state'] in ('passed', 'failed'):
+            return job['state']
+        result = json.loads(job['result'])
+        if result.get('reason') == 'exited' and result.get('exit_code') == 0:
+            return 'passed'
+        if result.get('reason'):
+            return 'failed'
+        return None
+
+    @staticmethod
+    def repository_candidate_key(destination):
+        # Snapshot IDs and verification metadata are immutable evidence, not the
+        # publication identity. A direct request selects one branch/project.
+        return (destination['branch'], destination['project'])
 
     def direct_repository_publication_job(self, req):
         """Return the job durably bound to this direct IRC publication request."""
@@ -433,27 +483,97 @@ class Broker:
             if not row:
                 raise ValueError('direct repository publication binding is unavailable')
             return row
+        # Indexed candidates are fast-path evidence, but legacy passed work
+        # predates that index. Recover both sets before deciding that a single
+        # candidate is unambiguous; otherwise an indexed project can shadow an
+        # eligible legacy project.
+        indexed = self.db.execute(
+            'SELECT c.job_id FROM repository_candidates c JOIN jobs j ON j.id=c.job_id '
+            'JOIN repo_jobs r ON r.id=j.id '
+            'WHERE c.requester=? AND c.channel=? AND c.network=? '
+            'AND j.state IN ("passed","published","publishing","uncertain") ORDER BY c.branch,c.project',
+            (requester, req['channel'], req['network'])).fetchall()
+        eligible = {}
+        indexed_destinations = set()
+        blocked_destinations = set()
+        for candidate in indexed:
+            job = self.db.execute('SELECT * FROM jobs WHERE id=?', (candidate['job_id'],)).fetchone()
+            destination = json.loads(self.db.execute('SELECT destination FROM repo_jobs WHERE id=?',
+                                                     (job['id'],)).fetchone()['destination'])
+            key = self.repository_candidate_key(destination)
+            indexed_destinations.add(key)
+            if job['state'] in ('publishing', 'uncertain'):
+                blocked_destinations.add(key)
+            if job['state'] == 'passed':
+                eligible.setdefault(key, (job, destination))
         rows = self.db.execute(
             'SELECT j.* FROM jobs j JOIN repo_jobs r ON r.id=j.id '
             'JOIN task_scopes s ON s.scope=j.scope '
             'WHERE j.state="passed" AND s.requester=? '
             'AND s.channel=? AND s.network=? ORDER BY j.created,j.id',
             (requester, req['channel'], req['network'])).fetchall()
-        eligible = []
         for row in rows:
             destination = json.loads(self.db.execute('SELECT destination FROM repo_jobs WHERE id=?',
                                                      (row['id'],)).fetchone()['destination'])
-            if not destination.get('diagnostic_only'):
-                eligible.append(row)
+            if destination.get('diagnostic_only'):
+                continue
+            key = self.repository_candidate_key(destination)
+            if destination.get('candidate_material') is True:
+                if key not in indexed_destinations:
+                    eligible[key] = (row, destination)
+                continue
+            # Migration-safe recovery for jobs written before candidate lineage:
+            # compare the immutable tested bundle with its immutable snapshot.
+            try:
+                # The candidate query already verifies the originating job's
+                # requester/channel/network identity. Legacy snapshots belong
+                # to that job's original scope, while this fresh publication
+                # request intentionally has a new scope.
+                snapshot = self.load_snapshot({**req, 'scope': row['scope']},
+                                              destination['snapshot_id'], require_active=False)
+                changes, deleted = self.candidate_delta(snapshot['files'], json.loads(row['files']))
+                if (changes or deleted) and key not in indexed_destinations:
+                    # Rows are oldest-first, so retain the newest tested legacy
+                    # bundle for a destination while an indexed candidate keeps
+                    # precedence over any recovered legacy history.
+                    eligible[key] = (row, destination)
+            except (KeyError, TypeError, ValueError):
+                # Missing legacy evidence is not proof that a base-only run was
+                # a candidate. Leave it unavailable rather than guessing.
+                continue
+        if blocked_destinations:
+            raise ValueError('publication outcome requires operator reconciliation')
         if len(eligible) != 1:
-            raise ValueError('direct repository publication needs one unambiguous passed job')
-        job = eligible[0]
+            raise ValueError('direct repository publication needs one unambiguous saved project candidate')
+        job, destination = next(iter(eligible.values()))
+        self.remember_repository_candidate(req, job['id'], destination)
         self.db.execute('INSERT INTO direct_repo_publications VALUES (?,?,?,?,?,?)',
                         (req['scope'], job['id'], requester, req['channel'], req['network'], time.time()))
         # Commit before a side effect so a retry cannot reselect different work
         # after a crash or an uncertain publication outcome.
         self.db.commit()
         return job
+
+    def remember_repository_candidate(self, req, job_id, destination):
+        """Persist an intentional changed-and-passed project candidate.
+
+        The broker, not model prose or a later base-only test, owns this
+        lineage. The candidate remains bound to the originating requester,
+        IRC channel/network, and fixed repository destination.
+        """
+        if destination.get('diagnostic_only') or not destination.get('candidate_material'):
+            return
+        binding = self.task_binding(req['scope'])
+        # An identity-bound task receipt is required for cross-request
+        # selection. Older callers remain usable through migration fallback.
+        requester = binding['requester'] if 'requester' in binding.keys() else None
+        if not requester:
+            return
+        self.db.execute('''INSERT INTO repository_candidates VALUES (?,?,?,?,?,?,?)
+                         ON CONFLICT(requester,channel,network,branch,project)
+                         DO UPDATE SET job_id=excluded.job_id,created=excluded.created''',
+                        (requester, req['channel'], req['network'], destination['branch'],
+                         destination['project'], job_id, time.time()))
 
     def task_attempt_count(self, task_id):
         row = self.db.execute('SELECT attempts FROM task_budgets WHERE task_id=?', (task_id,)).fetchone()
@@ -592,10 +712,23 @@ class Broker:
                     latest_repository_job = {'id': job['id'], 'state': job['state']}
                     break
         budget = self.task_budget_status(row['task_id'])
+        latest_execution_job = None
+        for job in reversed(jobs):
+            destination = json.loads(job['destination']) if job['destination'] else {}
+            if not destination.get('diagnostic_only'):
+                latest_execution_job = {'id': job['id'], 'state': job['execution_state'] or job['state']}
+                break
+        latest_publication_job = None
+        if latest_execution_job:
+            for job in jobs:
+                if job['id'] == latest_execution_job['id'] and job['state'] == 'published':
+                    latest_publication_job = {'id': job['id'], 'url': job['url']}
+                    break
         return {'checkpoint_id': row['id'], 'task_id': row['task_id'], 'parent_checkpoint_id': row['parent'],
                 'phase': row['phase'], 'reason': row['reason'],
                 'jobs': [{'id': j['id'], 'state': j['state']} for j in jobs],
-                'latest_repository_job': latest_repository_job,
+                'latest_repository_job': latest_repository_job, 'latest_execution_job': latest_execution_job,
+                'latest_publication_job': latest_publication_job,
                 'attempts_remaining': budget['remaining_budget']['sandbox_executions'], 'budget': budget}
 
     def handle(self, req, _diagnostic=False):
@@ -820,7 +953,9 @@ class Broker:
             if any(current[key] != snapshot[key] for key in ('base_sha', 'tree_sha', 'exists', 'files')):
                 raise ValueError('branch changed; read project and retest against the new base')
             files = self.materialize_files(snapshot['files'], req['changes'], req['delete'])
+            candidate_changes, candidate_deleted = self.candidate_delta(snapshot['files'], files)
             destination = {k: snapshot[k] for k in ('branch','project','base_sha','tree_sha','exists','snapshot_id')}
+            destination['candidate_material'] = bool(candidate_changes or candidate_deleted)
             if self.verification is not None:
                 policy = self.verification.policy(snapshot)
                 destination['verification_policy'] = self.verification.identity(policy)
@@ -844,6 +979,16 @@ class Broker:
             digest = hashlib.sha256(json.dumps([files, argv, title, destination], sort_keys=True).encode()).hexdigest()
             old = self.db.execute('SELECT * FROM jobs WHERE scope=? AND digest=?', (scope, digest)).fetchone()
             if old:
+                # Replaying a material passed request is an explicit retest
+                # selection, not stale history: restore its durable candidate
+                # position so direct publication cannot select later files.
+                if action == 'repo_run' and old['state'] == 'passed' and destination is not None:
+                    self.remember_repository_candidate(req, old['id'], destination)
+                if not _diagnostic:
+                    verdict = self.execution_verdict(old)
+                    if verdict:
+                        self.remember_task_execution_selection(req, old['id'], verdict)
+                self.db.commit()
                 return self.result(old)
             task_id = self.task_binding(scope)['task_id']
             # The final shared execution belongs to a trusted complete repository
@@ -890,6 +1035,10 @@ class Broker:
             result['output_truncated'] = len(output) > 8192
             result['output'] = output if len(output) <= 8192 else output[:4096] + '\n[output excerpted]\n' + output[-4096:]
             self.db.execute('UPDATE jobs SET result=?,state=? WHERE id=?', (json.dumps(result), state, job_id))
+            if action == 'repo_run' and state == 'passed' and destination is not None:
+                self.remember_repository_candidate(req, job_id, destination)
+            if not _diagnostic:
+                self.remember_task_execution_selection(req, job_id, state)
             self.resource_checkpoint('job', job_id, req, state)
             self.db.commit()
             return self.result(self.db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())
@@ -1097,8 +1246,9 @@ class Broker:
         return result
 
     def result(self, job):
-        return {'id': job['id'], 'state': job['state'], 'result': json.loads(job['result']),
-                'url': job['url'], 'files': list(json.loads(job['files'])),
+        verdict = self.execution_verdict(job)
+        return {'id': job['id'], 'state': job['state'], 'execution_state': verdict,
+                'result': json.loads(job['result']), 'url': job['url'], 'files': list(json.loads(job['files'])),
                 'attempts_remaining': max(0, self.max_attempts() - self.task_attempt_count(
                     self.task_binding(job['scope'])['task_id']))}
 

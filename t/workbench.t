@@ -103,6 +103,32 @@ for my $case (
 }
 {
   my $saved=JSON::PP::decode_json(JSON::PP::encode_json($bot->{pending}));
+  $bot->{pending}{messages}[0]{msg}='burt_bot: read burt-agent/workspace project dictionary on branch burt/dictionary, run the tests, and push if they pass';
+  ok(Bot::Runtime::Workbench::request_scope($bot,'read_status'),'natural read/test/push request grants bounded read');
+  ok(Bot::Runtime::Workbench::request_scope($bot,'edit_test'),'natural read/test/push request grants offline test authority');
+  ok(Bot::Runtime::Workbench::request_scope($bot,'publish_repo'),'natural read/test/push request grants explicit conditional publication');
+  $bot->{pending}=$saved;
+}
+{
+  my $saved=JSON::PP::decode_json(JSON::PP::encode_json($bot->{pending}));
+  $bot->{pending}{messages}[0]{msg}='burt_bot: word, please proceed';
+  ok(Bot::Runtime::Workbench::request_scope($bot,'edit_test'),'short addressed continuation grants offline task authority');
+  eval { Bot::Runtime::Workbench::request_scope($bot,'publish_repo') };
+  ok($@,'short continuation cannot grant publication');
+  $bot->{pending}=$saved;
+}
+{
+  my $saved=JSON::PP::decode_json(JSON::PP::encode_json($bot->{pending}));
+  push @{$bot->{pending}{messages}}, {nick=>'mateu',source_kind=>'conversation',
+    msg=>'burt_bot: do not push the dictionary work'};
+  for my $cap (qw(read_status edit_test publish_gist publish_repo)) {
+    eval { Bot::Runtime::Workbench::request_scope($bot,$cap) };
+    ok($@,"latest cancellation revokes earlier buffered $cap authority");
+  }
+  $bot->{pending}=$saved;
+}
+{
+  my $saved=JSON::PP::decode_json(JSON::PP::encode_json($bot->{pending}));
   $bot->{pending}{messages}[0]{msg}='burt_bot: write a script to push this project to the repository';
   ok(Bot::Runtime::Workbench::request_scope($bot,'edit_test'),'publication-tool implementation retains offline authority');
   ok(Bot::Runtime::Workbench::request_scope($bot,'publish_repo'),'publication-tool implementation separately grants repository publication');
@@ -366,7 +392,7 @@ ok(!$bot->{pending}{coding_task},'ambiguous requesters do not admit a coding tas
   my $called=0;
   local *Bot::Runtime::Workbench::broker_call=sub {$called++; return '{}'};
   like($defs{run_code}{code}->($tool,{files=>{'main.pl'=>'print 1'},argv=>['/usr/bin/perl','/work/main.pl'],title=>'test'}),
-    qr/Error: No admitted coding task for run/,'execution rejects an ambiguous unadmitted request');
+    qr/Error: (?:No admitted coding task for run|Need a current trusted human request)/,'execution rejects an ambiguous unadmitted request');
   is($called,0,'unadmitted execution never reaches the broker');
 }
 
@@ -405,7 +431,9 @@ my @resume_requests;
     $forwarded=$_[0]; push @resume_requests,$forwarded;
     $resume_scope=$forwarded->{scope} if $forwarded->{action} eq 'task_resume';
     return $forwarded->{action} eq 'task_resume' ? JSON::PP::encode_json({resumed_scope=>$resume_scope,jobs=>[],
-      latest_repository_job=>{id=>'d'x32,state=>'running'},attempts_remaining=>4})
+      latest_execution_job=>{id=>'d'x32,state=>'passed'},
+      latest_repository_job=>{id=>'d'x32,state=>'published'},
+      latest_publication_job=>{id=>'d'x32,url=>'https://github.com/burt-agent/workspace/commit/'.('e'x40)},attempts_remaining=>4})
       : $forwarded->{action} eq 'task_checkpoint' ? JSON::PP::encode_json({checkpoint_id=>'c'x32,jobs=>[],attempts_remaining=>4})
       : JSON::PP::encode_json({budget=>{}});
   };
@@ -416,8 +444,17 @@ my ($resume_checkpoint)=grep { $_->{action} eq 'task_checkpoint' } reverse @resu
 is($resume_checkpoint->{scope},$bot->{pending}{coding_scope},'post-resume checkpoint retains the broker-bound scope');
 is($resume_requests[-1]{action},'task_progress','resume also records the bounded progress notice');
 is($bot->{pending}{coding_requester},'mateu','resume preserves broker-bound requester identity');
+is($bot->{pending}{coding_last_execution_job},'d'x32,'resume restores the latest non-diagnostic execution job');
+is($bot->{pending}{coding_last_execution_state},'passed','resume restores the latest non-diagnostic execution state');
 is($bot->{pending}{coding_last_repo_job},'d'x32,'resume restores the latest complete repository job');
-is($bot->{pending}{coding_last_repo_state},'running','resume accepts a broker-interrupted repository job');
+is($bot->{pending}{coding_last_repo_state},'published','resume retains publication state separately from the passing execution verdict');
+is($bot->{pending}{coding_receipts}{passed}{'d'x32},1,'resume restores the passed job receipt');
+is($bot->{pending}{coding_last_publication_job},'d'x32,'resume restores the published job identity');
+is($bot->{pending}{coding_receipts}{published}{'d'x32},'https://github.com/burt-agent/workspace/commit/'.('e'x40),'resume restores the publication receipt');
+is(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'Tests passed on the saved bundle.'),
+  'Tests passed on the saved bundle.','resumed passed bundle permits truthful final report');
+is(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'Tests passed and the saved bundle was published.'),
+  'Tests passed and the saved bundle was published.','resumed published bundle permits truthful final report');
 is($bot->{pending}{coding_attempts_remaining},4,'resume restores the broker-derived task budget');
 cmp_ok($bot->{pending}{expires_at},'>=',time+1799,'resume grants a fresh bounded coding lifetime');
 $bot->{pending}={channel=>'#ai',expires_at=>time-1,messages=>[
@@ -434,6 +471,63 @@ my $resume_deadline=$bot->{pending}{expires_at};
     'failed resume reports rejection');
 }
 is($bot->{pending}{expires_at},$resume_deadline,'failed resume restores its original deadline');
+$bot->{pending}={coding_task=>1,coding_last_result=>'No verified work result recorded.'};
+like(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'Tests passed and I pushed it.'),
+  qr/report withheld/,'unreceipted test and publication claims are withheld');
+$bot->{pending}{coding_last_repo_job}='a'x32;
+$bot->{pending}{coding_last_repo_state}='passed';
+$bot->{pending}{coding_last_execution_job}='a'x32;
+$bot->{pending}{coding_last_execution_state}='passed';
+$bot->{pending}{coding_last_publication_job}='a'x32;
+$bot->{pending}{coding_receipts}={passed=>{'a'x32=>1},published=>{'a'x32=>''}};
+is(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'Tests passed and I pushed it.'),
+  'Tests passed and I pushed it.','matching broker receipts permit factual final report');
+is(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'Tests passed; the changes have not been published.'),
+  'Tests passed; the changes have not been published.','a truthful denial of publication is not suppressed');
+$bot->{pending}{coding_receipts}{published}={};
+like(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'I pushed the changes. Tests passed.'),
+  qr/report withheld/,'publication claims before test claims still require a receipt');
+$bot->{pending}{coding_receipts}{published}{'a'x32}='';
+$bot->{pending}={coding_task=>1,coding_last_execution_state=>'failed'};
+is(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'No tests passed; the suite failed because the fixture is missing.'),
+  'No tests passed; the suite failed because the fixture is missing.','a truthful denial of test success is not suppressed');
+$bot->{pending}{coding_last_repo_job}='a'x32;
+$bot->{pending}{coding_last_repo_state}='passed';
+$bot->{pending}{coding_last_execution_job}='a'x32;
+$bot->{pending}{coding_last_execution_state}='passed';
+$bot->{pending}{coding_last_publication_job}='a'x32;
+$bot->{pending}{coding_receipts}={passed=>{'a'x32=>1},published=>{'a'x32=>''}};
+$bot->{pending}{coding_last_repo_state}='failed';
+$bot->{pending}{coding_last_execution_state}='failed';
+like(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'Tests passed.'),
+  qr/report withheld/,'an earlier passed receipt cannot validate later failed work');
+$bot->{pending}{coding_last_repo_state}='passed';
+$bot->{pending}{coding_last_execution_state}='passed';
+$bot->{pending}={coding_task=>1};
+Bot::Runtime::Workbench::report_result($bot,'run','{"id":"'.('c'x32).'","state":"passed"}',1);
+is(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'Tests passed.'),
+  'Tests passed.','matching standalone execution receipt permits factual final report');
+Bot::Runtime::Workbench::report_result($bot,'run',JSON::PP::encode_json({
+  id=>'c'x32,state=>'published',execution_state=>'passed',
+  url=>'https://github.com/burt-agent/workspace/commit/'.('c'x40)}),1);
+is($bot->{pending}{coding_last_execution_state},'passed','cached published execution preserves its passing verdict');
+is(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'Tests passed and I published the script.'),
+  'Tests passed and I published the script.','cached published execution permits truthful final report');
+$bot->{pending}{coding_receipts}{published}{'a'x32}='https://github.com/burt-agent/workspace/commit/'.('a'x40);
+like(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},
+  'I published https://github.com/burt-agent/workspace/commit/'.('b'x40)),
+  qr/report withheld/,'a publication receipt cannot validate a different commit URL');
+is(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},
+  'No proposal was created because the broker is unavailable.'),
+  'No proposal was created because the broker is unavailable.',
+  'a truthful denial of proposal creation is not suppressed');
+like(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'The proposal is ready.'),
+  qr/report withheld/,'unreceipted proposal claim is withheld');
+like(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'The proposal is ready. Tests passed.'),
+  qr/report withheld/,'proposal claims are checked even before a passing test claim');
+$bot->{pending}{coding_receipts}{proposal}='b'x32;
+is(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'The proposal is ready.'),
+  'The proposal is ready.','proposal receipt permits factual final report');
 $bot->{bot}='astrid';
 is_deeply(Bot::Runtime::Workbench::tool_specs($bot),[],'other bots unchanged');
 $bot->{bot}='burt';

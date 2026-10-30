@@ -317,6 +317,8 @@ sub do_raid {
   my $store_non_substantive_rows = $self->_store_non_substantive_rows_enabled;
   my $store_empty_response_rows = $self->_store_empty_response_rows_enabled;
 
+  $answer=Bot::Runtime::Workbench::verified_final_report($self,$pending,$answer);
+
   for my $m (@{$messages}) {
     if ($m->{nick} eq 'system' && !$store_system_rows) {
       $self->info('Skipping storage for system row');

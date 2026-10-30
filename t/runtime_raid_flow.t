@@ -621,7 +621,7 @@ use Bot::Runtime::RaidFlow qw(do_raid);
   my $bot=Local::RaidFlowBot->new(pending=>$pending,replies=>[sub {$clock+=400;return 'Tests passed; here is the result.'}]);
   do_raid(self=>$bot);
   like($bot->{sent}[0]{msg},qr/Started coding task/,'start reported before generation');
-  like($bot->{sent}[-1]{msg},qr/Tests passed/,'coding answer after normal chat TTL delivered');
+  like($bot->{sent}[-1]{msg},qr/report withheld.*no matching broker receipt/,'unreceipted coding success claim is withheld after normal chat TTL');
   ok(!$bot->_processing,'coding lane released after final answer');
 }
 
@@ -665,6 +665,16 @@ for my $ending (qw(error silent empty deadline report)) {
     : $ending eq 'deadline' ? 'deadline' : 'no_report',"$ending persists safe reason");
   like($bot->{sent}[-1]{msg},qr/No project bundle was saved/,
     "$ending zero-job notice is truthful") unless $ending eq 'report';
+}
+
+{
+  my $pending={channel=>'#ai',expires_at=>time+100,coding_task=>1,
+    input=>'code',messages=>[{nick=>'mateu',channel=>'#ai',msg=>'run tests',source_kind=>'conversation'}]};
+  my $bot=Local::RaidFlowBot->new(pending=>$pending,replies=>['Tests passed.']);
+  do_raid(self=>$bot);
+  like($bot->{sent}[-1]{msg},qr/report withheld/,'unverified report is withheld before delivery');
+  like($bot->{memory}{rows}[0]{response},qr/report withheld/,'stored history matches withheld delivery');
+  unlike($bot->{memory}{rows}[0]{response},qr/^Tests passed\.$/,'unsupported claim is never stored');
 }
 
 done_testing;
