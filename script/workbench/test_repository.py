@@ -1,5 +1,8 @@
 import base64
 import json
+from pathlib import Path
+import subprocess
+import time
 import unittest
 from urllib.error import HTTPError
 from repository import Repository, validate_destination, validate_files
@@ -115,7 +118,81 @@ class RepositoryBrokerTests(unittest.TestCase):
                                 'phase': 'stopped', 'reason': 'iteration_limit'})
 
     def repo_publish(self, job):
-        return self.b.handle(self.b.capability_envelope('repo_publish', self.req['scope'], self.req['channel'], self.req['network'])|{'action':'repo_publish','id':job['id']})
+        # Existing explicit-job cases exercise the broker's durable-offer path.
+        return self.b._handle(self.b.capability_envelope('repo_publish', self.req['scope'], self.req['channel'], self.req['network'])|{'action':'repo_publish','id':job['id']}, _confirmed_publication=True)
+
+    def direct_repo_publish(self, scope='b' * 64):
+        return self.b.handle(self.b.capability_envelope('repo_publish', scope, self.req['channel'], self.req['network'])
+                             | {'action':'repo_publish', 'requester':'mateu'})
+
+    def test_exact_transcript_crosses_runtime_grant_to_broker_fake_publication_boundary(self):
+        # The Perl runtime is the producer.  Capture its actual no-ID envelope,
+        # then feed it to the Python broker with a fake repository write edge.
+        self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
+                          (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))
+        self.b.db.commit()
+        job = self.b.handle(self.repo_req)
+        root = Path(__file__).resolve().parents[2]
+        perl = r'''use strict; use warnings; use JSON::PP; use lib 'lib'; use Bot::Runtime::Workbench;
+{ package BoundaryBot; sub _bot_name_slug { 'burt' } sub get_nickname { 'burt_bot' }
+  sub _is_human_nick { $_[1] ne 'system' } sub _pending_raid { $_[0]{pending} }
+  sub _send_to_channel {} }
+{ package BoundaryTool; sub text_result { $_[1] } }
+$ENV{BURT_WORKBENCH_SOCKET} = '/not/a/socket'; $ENV{IRC_SERVER} = 'irc.perl.org';
+my $bot = bless { pending => { channel => '#ai', expires_at => time + 60, messages => [
+  { nick => 'mateu', source_kind => 'conversation', queued_at => time,
+    msg => 'burt_bot: please push your dictionary coding work' } ] } }, 'BoundaryBot';
+my %defs = map { $_->{name} => $_ } @{ Bot::Runtime::Workbench::tool_specs($bot) };
+no warnings 'redefine'; local *Bot::Runtime::Workbench::broker_call = sub { print JSON::PP::encode_json($_[0]); return '{"state":"passed"}' };
+$defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
+        produced = subprocess.run(['script/with-burt-env.sh', 'perl', '-Ilib', '-e', perl], cwd=root,
+                                  text=True, capture_output=True)
+        self.assertEqual(produced.returncode, 0, produced.stderr)
+        envelope = json.loads(produced.stdout)
+        self.assertEqual(envelope['capability'], 'publish_repo')
+        self.assertNotIn('id', envelope)
+        self.assertNotIn('destination', envelope)
+        published = self.b.handle(envelope)
+        self.assertEqual((published['id'], published['state']), (job['id'], 'published'))
+        self.assertEqual(len([1 for _, payload, _ in self.repo.calls if payload is not None]), 3)
+        with self.assertRaisesRegex(ValueError, 'selects its job'):
+            self.b.handle(self.b.capability_envelope('repo_publish', 'c' * 64, '#ai', 'irc.perl.org')
+                          | {'action':'repo_publish', 'requester':'mateu', 'id':job['id']})
+
+    def test_direct_publish_retry_keeps_its_initial_job_binding(self):
+        self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
+                          (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))
+        self.b.db.commit()
+        first = self.b.handle(self.repo_req)
+        initial = self.direct_repo_publish()
+        self.assertEqual((initial['id'], initial['state']), (first['id'], 'published'))
+        writes = len([1 for _, payload, _ in self.repo.calls if payload is not None])
+        later_scope = 'd' * 64
+        later_id = 'e' * 32
+        self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
+                          (later_scope, later_scope, 'mateu', '#ai', 'irc.perl.org', time.time()))
+        first_row = self.b.db.execute('SELECT * FROM jobs WHERE id=?', (first['id'],)).fetchone()
+        self.b.db.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?)',
+                          (later_id, later_scope, 'later-passed-job', time.time(), first_row['files'],
+                           first_row['title'], first_row['result'], 'passed', None))
+        destination = self.b.db.execute('SELECT destination FROM repo_jobs WHERE id=?', (first['id'],)).fetchone()['destination']
+        self.b.db.execute('INSERT INTO repo_jobs VALUES (?,?)', (later_id, destination))
+        self.b.db.commit()
+        retried = self.direct_repo_publish()
+        self.assertEqual((retried['id'], retried['state']), (first['id'], 'published'))
+        self.assertEqual(len([1 for _, payload, _ in self.repo.calls if payload is not None]), writes)
+
+    def test_direct_publish_rejects_missing_or_ambiguous_identity_bound_jobs(self):
+        with self.assertRaisesRegex(ValueError, 'one unambiguous recent passed job'):
+            self.direct_repo_publish()
+        self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
+                          (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))
+        self.b.db.commit()
+        self.b.handle(self.repo_req)
+        self.b.handle(self.repo_req | {'title':'second passed repository job'})
+        with self.assertRaisesRegex(ValueError, 'one unambiguous recent passed job'):
+            self.direct_repo_publish()
+        self.assertFalse(any(payload is not None for _, payload, _ in self.repo.calls))
 
     def test_edit_authority_can_read_its_required_snapshot(self):
         req=self.b.capability_envelope('repo_run', self.req['scope'], self.req['channel'], self.req['network']) | {
@@ -132,7 +209,7 @@ class RepositoryBrokerTests(unittest.TestCase):
         # Publisher returns stored URL even after restart, without networking.
         from broker import Broker
         second=Broker(self.tmp.name,self.token);self.addCleanup(second.db.close)
-        result=second.handle(second.capability_envelope('repo_publish',self.req['scope'],self.req['channel'],self.req['network'])|{'action':'repo_publish','id':r['id']})
+        result=second._handle(second.capability_envelope('repo_publish',self.req['scope'],self.req['channel'],self.req['network'])|{'action':'repo_publish','id':r['id']}, _confirmed_publication=True)
         self.assertEqual(result['state'],'published')
         self.assertEqual(self.repo_publish(r)['url'],result['url'])
         self.assertEqual(len([1 for _,p,_ in self.repo.calls if p is not None]),3)
@@ -188,7 +265,7 @@ class RepositoryBrokerTests(unittest.TestCase):
             'changes': {'lib/main.py': 'print(43)'}, 'delete': [],
             'argv': self.repo_req['argv'], 'title': 'resumed repair'})
         self.assertEqual(repaired['state'], 'passed')
-        published = self.b.handle(resumed('repo_publish') | {'action': 'repo_publish', 'id': repaired['id']})
+        published = self.b._handle(resumed('repo_publish') | {'action': 'repo_publish', 'id': repaired['id']}, _confirmed_publication=True)
         self.assertEqual(published['state'], 'published')
         self.assertGreaterEqual(self.b.db.execute(
             "SELECT COUNT(*) FROM resource_checkpoints WHERE resource_id=?", (repaired['id'],)).fetchone()[0], 3)
@@ -296,6 +373,6 @@ class RepositoryBrokerTests(unittest.TestCase):
         from broker import Broker
         second=Broker(self.tmp.name,self.token);self.addCleanup(second.db.close)
         with self.assertRaisesRegex(ValueError,'diagnostic jobs cannot be published'):
-            second.handle(second.capability_envelope('repo_publish',self.req['scope'],self.req['channel'],self.req['network']) | dict(action='repo_publish',id=diagnostic['id']))
+            second._handle(second.capability_envelope('repo_publish',self.req['scope'],self.req['channel'],self.req['network']) | dict(action='repo_publish',id=diagnostic['id']), _confirmed_publication=True)
         with self.assertRaises(ValueError): self.b.handle(request | {'scope':'b'*64})
         self.assertFalse(any(p is not None for _,p,_ in self.repo.calls))

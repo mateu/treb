@@ -107,7 +107,7 @@ class VerificationTests(unittest.TestCase):
         self.b.verification = Verification({'burt/dictionary:dictionary': changed})
         publish = self.request('repo_publish')
         with self.assertRaisesRegex(ValueError, 'receipt missing or stale'):
-            self.b.handle(publish | {'action': 'repo_publish', 'id': first['id']})
+            self.b._handle(publish | {'action': 'repo_publish', 'id': first['id']}, _confirmed_publication=True)
         second = self.b.handle(self.req)
         self.assertNotEqual(first['id'], second['id'])
 
@@ -118,7 +118,7 @@ class VerificationTests(unittest.TestCase):
         self.b.verification = self.gate
         publish = self.request('repo_publish')
         with self.assertRaisesRegex(ValueError, 'receipt missing or stale'):
-            self.b.handle(publish | {'action': 'repo_publish', 'id': job['id']})
+            self.b._handle(publish | {'action': 'repo_publish', 'id': job['id']}, _confirmed_publication=True)
 
     def test_final_execution_reserved(self):
         job = self.b.handle(self.req)

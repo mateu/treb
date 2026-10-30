@@ -189,6 +189,12 @@ class Broker:
             (id TEXT PRIMARY KEY, scope TEXT NOT NULL, channel TEXT NOT NULL,
              network TEXT NOT NULL, snapshot TEXT NOT NULL, created REAL NOT NULL,
              expires REAL NOT NULL, state TEXT NOT NULL)''')
+        # A direct ordinary publication request chooses once. Persisting the
+        # selection makes retries idempotent and prevents later work from being
+        # substituted into the original human authorization.
+        self.db.execute('''CREATE TABLE IF NOT EXISTS direct_repo_publications
+            (scope TEXT PRIMARY KEY, job_id TEXT NOT NULL, requester TEXT NOT NULL,
+             channel TEXT NOT NULL, network TEXT NOT NULL, created REAL NOT NULL)''')
         # State tables above are mutable operational indexes. Keep an append-only
         # receipt for every resource transition for recovery and audit.
         self.db.execute('''CREATE TABLE IF NOT EXISTS resource_checkpoints
@@ -223,6 +229,7 @@ class Broker:
                         'AND updated<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM task_phase_budgets WHERE task_id NOT IN (SELECT DISTINCT task_id FROM task_checkpoints) '
                         'AND updated<?', (now - AUDIT_TTL,))
+        self.db.execute('DELETE FROM direct_repo_publications WHERE created<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM resource_checkpoints WHERE created<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM resource_checkpoints WHERE id NOT IN '
                         '(SELECT id FROM resource_checkpoints ORDER BY created DESC,id DESC LIMIT ?)', (AUDIT_LIMIT,))
@@ -406,6 +413,43 @@ class Broker:
                                'LEFT JOIN task_scopes s ON s.scope=j.scope LEFT JOIN repo_jobs r ON r.id=j.id '
                                'WHERE COALESCE(s.task_id,j.scope)=? ORDER BY j.created,j.id', (task_id,)).fetchall()
 
+    def direct_repository_publication_job(self, req):
+        """Return the job durably bound to this direct IRC publication request."""
+        requester = req.get('requester')
+        if not isinstance(requester, str) or not REQUESTER_IDENTITY.fullmatch(requester):
+            raise ValueError('direct repository publication requires the trusted requester')
+        bound = self.db.execute('SELECT * FROM direct_repo_publications WHERE scope=?',
+                                (req['scope'],)).fetchone()
+        if bound:
+            if (bound['requester'], bound['channel'], bound['network']) != (
+                    requester, req['channel'], req['network']):
+                raise ValueError('direct repository publication binding does not match request')
+            row = self.db.execute('SELECT * FROM jobs WHERE id=?', (bound['job_id'],)).fetchone()
+            if not row:
+                raise ValueError('direct repository publication binding is unavailable')
+            return row
+        rows = self.db.execute(
+            'SELECT j.* FROM jobs j JOIN repo_jobs r ON r.id=j.id '
+            'JOIN task_scopes s ON s.scope=j.scope '
+            'WHERE j.state="passed" AND j.created>=? AND s.requester=? '
+            'AND s.channel=? AND s.network=? ORDER BY j.created,j.id',
+            (time.time() - 900, requester, req['channel'], req['network'])).fetchall()
+        eligible = []
+        for row in rows:
+            destination = json.loads(self.db.execute('SELECT destination FROM repo_jobs WHERE id=?',
+                                                     (row['id'],)).fetchone()['destination'])
+            if not destination.get('diagnostic_only'):
+                eligible.append(row)
+        if len(eligible) != 1:
+            raise ValueError('direct repository publication needs one unambiguous recent passed job')
+        job = eligible[0]
+        self.db.execute('INSERT INTO direct_repo_publications VALUES (?,?,?,?,?,?)',
+                        (req['scope'], job['id'], requester, req['channel'], req['network'], time.time()))
+        # Commit before a side effect so a retry cannot reselect different work
+        # after a crash or an uncertain publication outcome.
+        self.db.commit()
+        return job
+
     def task_attempt_count(self, task_id):
         row = self.db.execute('SELECT attempts FROM task_budgets WHERE task_id=?', (task_id,)).fetchone()
         if row:
@@ -538,14 +582,15 @@ class Broker:
         fields = {'run': {'files','argv','title'}, 'publish': {'id'},
                   'repo_read': {'branch','project'},
                   'repo_run': {'snapshot_id','changes','delete','argv','title'},
-                  'repo_publish': {'id'}, 'repo_inspect': {'id'}, 'job_inspect': {'id'},
+                  'repo_publish': set(), 'repo_inspect': {'id'}, 'job_inspect': {'id'},
                   'repo_repair': {'id','changes','delete','argv','title'},
                   'repo_diagnose': {'id','argv','title'}}
         fields['reference'] = {'key'}
         fields['task_status'] = {'phase', 'reason'}
         fields['task_progress'] = set()
         fields['task_checkpoint'] = {'requester', 'phase', 'reason'}
-        optional_fields = {'task_status': {'deadline', 'model_iterations'}, 'task_checkpoint': {'deadline'}}
+        optional_fields = {'task_status': {'deadline', 'model_iterations'}, 'task_checkpoint': {'deadline'},
+                           'repo_publish': {'id', 'requester'}}
         fields['checkpoint_status'] = {'checkpoint_id', 'requester'}
         fields['task_resume'] = {'checkpoint_id', 'requester'}
         optional_fields['task_resume'] = {'deadline'}
@@ -559,6 +604,8 @@ class Broker:
         elif (action not in fields or not {'action', 'scope', 'capability', 'grant', 'channel', 'network'} <= set(req)
               or not fields[action] <= set(req) or set(req) - allowed):
             raise ValueError('invalid action or fields')
+        if action == 'repo_publish' and not _confirmed_publication and 'id' in req:
+            raise ValueError('direct repository publication selects its job from trusted task evidence')
         if req['channel'] not in ('#ai', '#mateu-test') or req['network'] != 'irc.perl.org':
             raise ValueError('workbench is restricted to irc.perl.org #ai or #mateu-test')
         scope = req['scope']
@@ -815,15 +862,20 @@ class Broker:
             self.resource_checkpoint('job', job_id, req, state)
             self.db.commit()
             return self.result(self.db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())
-        job_id = req['id']
-        if not isinstance(job_id, str) or not re.fullmatch(r'[a-f0-9]{32}', job_id):
-            raise ValueError('invalid job id')
-        job = self.load_job(req, job_id)
+        if action == 'repo_publish' and not _confirmed_publication:
+            job = self.direct_repository_publication_job(req)
+        else:
+            job_id = req['id']
+            if not isinstance(job_id, str) or not re.fullmatch(r'[a-f0-9]{32}', job_id):
+                raise ValueError('invalid job id')
+            job = self.load_job(req, job_id)
+        job_id = job['id']
         repo_job = self.db.execute('SELECT destination FROM repo_jobs WHERE id=?', (job_id,)).fetchone()
         if bool(repo_job) != (action == 'repo_publish'):
             raise ValueError('job publication destination does not match tool')
+        job_task_id = self.task_binding(job['scope'])['task_id']
         if any(row['state'] in ('publishing', 'uncertain') for row in
-               self.task_job_rows(self.task_binding(scope)['task_id'])):
+               self.task_job_rows(job_task_id)):
             raise ValueError('publication outcome requires operator reconciliation')
         if job['state'] == 'published':
             return self.result(job)
@@ -833,7 +885,8 @@ class Broker:
             destination = json.loads(repo_job['destination'])
             if destination.get('diagnostic_only'):
                 raise ValueError('diagnostic jobs cannot be published; rerun the complete project suite')
-            return self.publish_repository(req, job, destination, allow_after_final_report=_confirmed_publication)
+            return self.publish_repository(req, job, destination,
+                                           allow_after_final_report=_confirmed_publication or action == 'repo_publish')
         if not self.token.is_file():
             raise ValueError('Burt gist credential is not installed; ask the operator')
         if self.token.stat().st_mode & 0o077:
