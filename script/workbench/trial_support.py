@@ -123,6 +123,10 @@ class Snapshot:
 
 
 class ExperimentBroker(Broker):
+    # Trial manifests remain comparable with the frozen five-execution protocol.
+    def max_attempts(self):
+        return LIMITS['max_executions']
+
     def __init__(self, base, task, deadline, execute=run):
         super().__init__(base, token=Path(base) / 'NO_TOKEN', execute=execute)
         self.repository = Snapshot(task)

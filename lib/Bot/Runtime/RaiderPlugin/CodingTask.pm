@@ -21,13 +21,17 @@ async sub plugin_before_llm_call {
   }
   # The Raider enforces this same fixed cap; persist the observed iteration so
   # terminal/checkpoint status reports a broker-owned remaining budget.
-  $p->{coding_model_iterations}=$iteration if defined($iteration) && $iteration =~ /\A\d+\z/ && $iteration <= 13;
+  # Only Burt admits coding tasks; keep the runtime status clamp aligned with
+  # Burt's Raider cap so the broker sees all 26 permitted iterations.
+  $p->{coding_model_iterations}=$iteration if defined($iteration) && $iteration =~ /\A\d+\z/ && $iteration <= 26;
   $p->{coding_stop_reason}='coding deadline reached' if now() >= $p->{expires_at};
   $p->{coding_stop_reason}='sandbox attempt budget exhausted before a complete project passed'
     if defined($p->{coding_attempts_remaining}) && $p->{coding_attempts_remaining} == 0
       && ($p->{coding_last_repo_state}//'') eq 'failed';
   die "Coding task stopped: $p->{coding_stop_reason}\n" if $p->{coding_stop_reason};
-  my $text='Runtime coding budget: FIVE sandbox runs total, including diagnostics. '
+  my $sandbox_attempts=$ENV{BURT_SANDBOX_ATTEMPTS}//13;
+  die 'BURT_SANDBOX_ATTEMPTS must be 5 or 13' unless $sandbox_attempts =~ /\A(?:5|13)\z/;
+  my $text="Runtime coding budget: $sandbox_attempts sandbox runs total, including diagnostics. "
     .'Read test failures and repair only the affected files with repair_repo_project; unchanged files are preserved. '
     .'For diagnostics use diagnose_repo_job with that saved id and a diagnostic argv, NEVER copy project files into run_code. '
     .'Use inspect_repo_job if source was lost from context. Never restart the project or weaken tests to get a pass. '

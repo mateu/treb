@@ -14,7 +14,15 @@ my $plugin=Bot::Runtime::RaiderPlugin::CodingTask->new(host=>$host,pending=>sub 
 my $original={role=>'user',content=>'request'};
 my $messages=$plugin->plugin_before_llm_call([$original],1)->get;
 is(scalar @$messages,2,'one runtime reminder appended');
+like($messages->[-1]{content},qr/Runtime coding budget: 13 sandbox runs total/,'production reminder advertises the thirteen-attempt budget');
 like($messages->[-1]{content},qr/Remaining sandbox runs: 2/,'budget survives context loss');
+{
+  local $ENV{BURT_SANDBOX_ATTEMPTS}=5;
+  my $trial_messages=$plugin->plugin_before_llm_call([$original],1)->get;
+  like($trial_messages->[-1]{content},qr/Runtime coding budget: 5 sandbox runs total/,
+    'frozen trial reminder advertises the five-attempt budget');
+}
+$plugin->reminder($messages->[-1]); # restore the production turn's replacement identity
 like($messages->[-1]{content},qr/Latest repository job: a{32}/,'latest job remains inspectable');
 $pending->{coding_attempts_remaining}=1;
 $messages=$plugin->plugin_before_llm_call($messages,2)->get;

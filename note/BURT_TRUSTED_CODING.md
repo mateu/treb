@@ -19,8 +19,13 @@ existing paths, permitted `additions` (`tests/` and/or `t/`), fixed absolute `ar
 and operator-written `checks` text files. Verification argv addresses `/checks/`.
 Missing projects, baseline drift, deleted files, protected edits, or unapproved
 new paths fail closed. Policies are frozen in memory for the broker lifetime.
-Review/restart is required to adopt a new baseline; a Burt-written branch head
-never automatically becomes the protected baseline.
+Pinned policies require review/restart to adopt a new baseline; a Burt-written
+branch head never automatically becomes the protected baseline. Dictionary may
+explicitly set `source_baseline` to `current_verified`: only then does the broker
+derive a snapshot-bound effective base/baseline from its own current repository
+snapshot. It does not rewrite the operator policy, and immutable checks,
+editable/additions restrictions, receipt identity, stale-base rejection, and
+exact-tested-artifact publication remain enforced.
 
 In gated mode, repository run/repair executes the **policy command**, not the
 model-selected argv, with both `/work` and `/checks` mounted read-only. Use `/tmp`

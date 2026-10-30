@@ -44,7 +44,7 @@ class RejectionAuditTests(unittest.TestCase):
         finally:
             other.db.close()
         job = self.b.handle(self.req)
-        self.assertEqual(job['attempts_remaining'], 4)
+        self.assertEqual(job['attempts_remaining'], 12)
         # A real failed sandbox run keeps the exact files/results independently.
         saved = self.b.db.execute('SELECT * FROM jobs WHERE id=?', (job['id'],)).fetchone()
         self.assertEqual(json.loads(saved['files']), self.files)

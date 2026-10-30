@@ -42,6 +42,11 @@ class ScoringTests(unittest.TestCase):
                                      {'action':'repo_read', 'branch':task['branch'], 'project':task['project']})
             job = broker.handle(req(task, {'main.py':'changed\n'}, snapshot['snapshot_id']))
             self.assertEqual(job['state'], 'passed')
+            for attempt in range(1, 5):
+                job = broker.handle(req(task, {'main.py':'changed\n'}, snapshot['snapshot_id'], f'attempt-{attempt}'))
+            self.assertEqual(job['attempts_remaining'], 0)
+            with self.assertRaisesRegex(ValueError, 'limit: 5 sandbox attempts'):
+                broker.handle(req(task, {'main.py':'changed\n'}, snapshot['snapshot_id'], 'sixth'))
 
     def test_returned_launcher_failure_is_unscored(self):
         result = evaluator_verdict({'reason':'exited', 'exit_code':1,

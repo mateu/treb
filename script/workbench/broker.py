@@ -22,8 +22,8 @@ from references import References, CATALOG
 BASE = Path.home() / '.local/share/burt-workbench'
 TOKEN = Path.home() / '.config/burt-publisher/gist.token'
 MAX_REQUEST = MAX_JSON_BYTES
-MAX_ATTEMPTS = 5
-MAX_MODEL_ITERATIONS = 13
+MAX_ATTEMPTS = 13
+MAX_MODEL_ITERATIONS = 26
 MAX_PROGRESS_NOTICES = 8
 MAX_PUBLIC_WRITES = 1
 TERMINAL_REPORT_RESERVE = 1
@@ -131,6 +131,9 @@ SAFE_REASONS = frozenset({
 
 
 class Broker:
+    def max_attempts(self):
+        return MAX_ATTEMPTS
+
     def __init__(self, base=BASE, token=TOKEN, execute=run, verification=None, verify_execute=None):
         self.base, self.token, self.execute = Path(base), Path(token), execute
         self.base.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -449,7 +452,7 @@ class Broker:
                 'deadline_remaining_seconds': max(0, int(row['deadline'] - now)),
                 'remaining_budget': {
                     'model_iterations': max(0, MAX_MODEL_ITERATIONS - row['model_iterations']),
-                    'sandbox_executions': max(0, MAX_ATTEMPTS - row['sandbox_attempts']),
+                    'sandbox_executions': max(0, self.max_attempts() - row['sandbox_attempts']),
                     'public_writes': max(0, MAX_PUBLIC_WRITES - row['public_writes']),
                     'progress_notices': max(0, MAX_PROGRESS_NOTICES - row['progress_notices']),
                     'terminal_reports': max(0, TERMINAL_REPORT_RESERVE - row['terminal_reports'])}}
@@ -475,8 +478,8 @@ class Broker:
                 raise ValueError('invalid model iteration count')
             updates['model_iterations'] = max(row['model_iterations'], model_iterations)
         if operation == 'sandbox':
-            if row['sandbox_attempts'] >= MAX_ATTEMPTS:
-                raise ValueError('limit: 5 sandbox attempts per IRC request')
+            if row['sandbox_attempts'] >= self.max_attempts():
+                raise ValueError(f'limit: {self.max_attempts()} sandbox attempts per IRC request')
             updates['sandbox_attempts'] = row['sandbox_attempts'] + 1
         elif operation == 'public_write':
             if row['public_writes'] >= MAX_PUBLIC_WRITES:
@@ -763,7 +766,11 @@ class Broker:
             if old:
                 return self.result(old)
             task_id = self.task_binding(scope)['task_id']
-            if (_diagnostic and self.verification is not None and self.task_attempt_count(task_id) >= MAX_ATTEMPTS - 1):
+            # The final shared execution belongs to a trusted complete repository
+            # verification. Diagnostics and standalone code runs cannot consume it.
+            trusted_verification = action == 'repo_run' and policy is not None and not _diagnostic
+            if (self.verification is not None and not trusted_verification
+                    and self.task_attempt_count(task_id) >= self.max_attempts() - 1):
                 raise ValueError('last execution reserved for trusted project verification')
             now = time.time()
             # Retain a bounded journal; ambiguous submissions remain for manual reconciliation.
@@ -1002,7 +1009,7 @@ class Broker:
     def result(self, job):
         return {'id': job['id'], 'state': job['state'], 'result': json.loads(job['result']),
                 'url': job['url'], 'files': list(json.loads(job['files'])),
-                'attempts_remaining': max(0, MAX_ATTEMPTS - self.task_attempt_count(
+                'attempts_remaining': max(0, self.max_attempts() - self.task_attempt_count(
                     self.task_binding(job['scope'])['task_id']))}
 
 

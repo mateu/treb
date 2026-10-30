@@ -23,6 +23,16 @@ like($scope,qr/^[a-f0-9]{64}$/,'scope is bounded digest');
 my $tool=bless {},'WorkbenchTool';
 my %defs=map {$_->{name}=>$_} @{Bot::Runtime::Workbench::tool_specs($bot)};
 is(scalar keys %defs,15,'fifteen narrow tools including standalone checkpoint recovery');
+like($defs{run_repo_project}{description},qr/THIRTEEN total sandbox attempts/,
+  'production tools advertise the thirteen-attempt budget');
+{
+  local $ENV{BURT_SANDBOX_ATTEMPTS}=5;
+  my %trial_defs=map {$_->{name}=>$_} @{Bot::Runtime::Workbench::tool_specs($bot)};
+  like($trial_defs{run_code}{description},qr/At most FIVE sandbox runs TOTAL/,
+    'frozen trials advertise the five-attempt budget');
+  like($trial_defs{diagnose_repo_job}{description},qr/one of the FIVE shared executions/,
+    'frozen diagnostics advertise the five-attempt budget');
+}
 {
   no warnings 'redefine';
   local *Bot::Runtime::Workbench::broker_call=sub { '{"reference":"python-csv","text":"documentation","untrusted":true}' };
@@ -162,6 +172,10 @@ delete $bot->{pending}{coding_stop_reason};
 Bot::Runtime::Workbench::report_result($bot,'repo_publish',JSON::PP::encode_json({
  id=>'a'x32,state=>'published',url=>'https://github.com/burt-agent/workspace/commit/'.('b'x40)}));
 like($bot->{sent}[-1],qr{https://github.com/burt-agent/workspace/commit/},'actual broker commit URL reported');
+Bot::Runtime::Workbench::report_result($bot,'run',JSON::PP::encode_json({
+ id=>'e'x32,state=>'passed',attempts_remaining=>12,result=>{exit_code=>0}}));
+is($bot->{pending}{coding_attempts_remaining},12,'expanded remaining budget reaches runtime status');
+like($bot->{sent}[-1],qr/12 sandbox attempts left/,'expanded shared budget is reported');
 Bot::Runtime::Workbench::report_result($bot,'repo_repair',JSON::PP::encode_json({
  id=>'c'x32,state=>'failed',attempts_remaining=>0,result=>{exit_code=>1}}));
 like($bot->{sent}[-1],qr/0 sandbox attempts left/,'shared budget is visible');

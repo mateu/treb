@@ -219,12 +219,18 @@ subtest 'operator Burt budget is opt-in and does not affect other profiles' => s
     $ENV{BURT_CONTEXT_TOKENS} = '32768';
     my $raider = setup_raider(%args);
     is($raider->{max_context_tokens}, 32768, 'Burt receives configured compactor budget');
-    is($raider->{max_iterations}, 13, 'iteration limit remains unchanged');
-    like($bot->{infos}[-1], qr/32768 tokens; max iterations: 13/, 'effective budget is observable');
+    is($raider->{max_iterations}, 26, 'Burt receives the expanded tool iteration limit');
+    like($bot->{infos}[-1], qr/32768 tokens; max iterations: 26/, 'effective Burt budget is observable');
     is(setup_raider(%args, max_context_tokens => 4096)->{max_context_tokens}, 4096,
        'explicit caller budget takes precedence');
+    is(setup_raider(%args, max_iterations => 13)->{max_iterations}, 13,
+       'explicit frozen experiment iteration budget takes precedence');
+    eval { setup_raider(%args, max_iterations => 14) };
+    like($@, qr/max_iterations must be 13 or 26/, 'unsupported iteration override rejected');
     $bot->{bot_slug} = 'bert';
-    is(setup_raider(%args)->{max_context_tokens}, 8192, 'other bots ignore Burt setting');
+    my $other = setup_raider(%args);
+    is($other->{max_context_tokens}, 8192, 'other bots ignore Burt setting');
+    is($other->{max_iterations}, 13, 'other bots retain the default iteration limit');
     $bot->{bot_slug} = 'burt';
     for my $invalid ('', '0', '32768x', '32768.5', '65537', '-1') {
         $ENV{BURT_CONTEXT_TOKENS} = $invalid;

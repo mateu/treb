@@ -43,7 +43,7 @@ class BrokerTests(unittest.TestCase):
         first = self.b.handle(self.req)
         checkpoint = self.checkpoint()
         self.assertEqual(checkpoint['jobs'], [{'id': first['id'], 'state': 'passed'}])
-        self.assertEqual(checkpoint['attempts_remaining'], 4)
+        self.assertEqual(checkpoint['attempts_remaining'], 12)
         fresh_scope = 'b' * 64
         stale = self.b.capability_envelope('task_resume', self.req['scope'], '#ai', 'irc.perl.org')
         with self.assertRaisesRegex(ValueError, 'fresh task scope'):
@@ -53,7 +53,7 @@ class BrokerTests(unittest.TestCase):
         resumed = self.b.handle(resume | {'action': 'task_resume', 'checkpoint_id': checkpoint['checkpoint_id'],
                                           'requester': 'mateu'})
         self.assertEqual(resumed['resumed_scope'], fresh_scope)
-        self.assertEqual(resumed['attempts_remaining'], 4)
+        self.assertEqual(resumed['attempts_remaining'], 12)
         inspected = self.b.handle(self.b.capability_envelope('job_inspect', fresh_scope, '#ai', 'irc.perl.org') | {'action': 'job_inspect', 'id': first['id']})
         self.assertEqual(inspected['files'], self.req['files'])
         self.assertEqual(inspected['state'], 'passed')
@@ -68,7 +68,7 @@ class BrokerTests(unittest.TestCase):
             'grant': self.b.capability_envelope('run', fresh_scope, '#ai', 'irc.perl.org')['grant'], 'title': 'fresh'}
         second = self.b.handle(resumed_request)
         self.assertNotEqual(second['id'], first['id'])
-        self.assertEqual(second['attempts_remaining'], 3)
+        self.assertEqual(second['attempts_remaining'], 11)
         next_checkpoint = self.checkpoint(fresh_scope)
         self.assertEqual(next_checkpoint['parent_checkpoint_id'], checkpoint['checkpoint_id'])
         self.assertEqual([job['id'] for job in next_checkpoint['jobs']], [first['id'], second['id']])
@@ -82,14 +82,14 @@ class BrokerTests(unittest.TestCase):
         resume = self.b.capability_envelope('task_resume', fresh_scope, '#ai', 'irc.perl.org')
         resumed = self.b.handle(resume | {'action': 'task_resume', 'checkpoint_id': checkpoint['checkpoint_id'],
                                           'requester': 'mateu', 'deadline': time.time() + 60})
-        self.assertEqual(resumed['attempts_remaining'], 4)
+        self.assertEqual(resumed['attempts_remaining'], 12)
         self.assertGreater(resumed['budget']['deadline_remaining_seconds'], 0)
         fresh = self.req | {'scope': fresh_scope,
             'grant': self.b.capability_envelope('run', fresh_scope, '#ai', 'irc.perl.org')['grant'], 'title': 'resumed'}
-        self.assertEqual(self.b.handle(fresh)['attempts_remaining'], 3)
+        self.assertEqual(self.b.handle(fresh)['attempts_remaining'], 11)
 
     def test_checkpointed_task_budget_survives_pruned_job_journal(self):
-        for attempt in range(5):
+        for attempt in range(13):
             self.b.handle(self.req | {'title': f'attempt-{attempt}'})
         checkpoint = self.checkpoint()
         self.assertEqual(checkpoint['attempts_remaining'], 0)
@@ -106,9 +106,9 @@ class BrokerTests(unittest.TestCase):
         sixth = self.req | {'scope': fresh_scope,
                             'grant': self.b.capability_envelope('run', fresh_scope, '#ai', 'irc.perl.org')['grant'],
                             'title': 'must-not-run'}
-        with self.assertRaisesRegex(ValueError, 'limit: 5 sandbox attempts'):
+        with self.assertRaisesRegex(ValueError, 'limit: 13 sandbox attempts'):
             self.b.handle(sixth)
-        self.assertEqual(self.runs.__len__(), 5)
+        self.assertEqual(self.runs.__len__(), 13)
 
     def test_checkpointed_publication_budget_survives_pruned_job_journal(self):
         first = self.b.handle(self.req)
@@ -156,8 +156,10 @@ class BrokerTests(unittest.TestCase):
             'action': 'task_status', 'phase': 'started', 'reason': 'admitted', 'deadline': deadline,
             'model_iterations': 3}
         admitted = self.b.handle(status)
-        self.assertEqual(admitted['budget']['remaining_budget']['model_iterations'], 10)
+        self.assertEqual(admitted['budget']['remaining_budget']['model_iterations'], 23)
         self.assertEqual(admitted['budget']['remaining_budget']['terminal_reports'], 1)
+        with self.assertRaisesRegex(ValueError, 'invalid model iteration count'):
+            self.b.handle(status | {'model_iterations': 27})
         progress = self.b.capability_envelope('task_progress', self.req['scope'], '#ai', 'irc.perl.org') | {'action': 'task_progress'}
         for _ in range(8):
             self.b.handle(progress)
@@ -165,7 +167,7 @@ class BrokerTests(unittest.TestCase):
             self.b.handle(progress)
         job = self.b.handle(self.req)
         checkpoint = self.checkpoint()
-        self.assertEqual(checkpoint['budget']['remaining_budget']['sandbox_executions'], 4)
+        self.assertEqual(checkpoint['budget']['remaining_budget']['sandbox_executions'], 12)
         terminal = status | {'phase': 'reported', 'reason': 'final_report'}
         finished = self.b.handle(terminal)
         self.assertEqual(finished['budget']['remaining_budget']['terminal_reports'], 0)
@@ -286,11 +288,11 @@ class BrokerTests(unittest.TestCase):
         self.b.db.execute('UPDATE jobs SET created=0')
         self.b.db.commit()
         with self.assertRaises(ValueError): self.publish(r)
-        # A fresh scope can run at most five distinct attempts.
+        # A fresh scope can run at most thirteen distinct attempts.
         self.req['scope'] = 'c'*64
         self.req['grant'] = '98d4412bd6e494e71d8fa5db3821efdf8340ca898f201f039f0dad29021d7169'
-        for i in range(5): self.b.handle(self.req | {'title':str(i)})
-        with self.assertRaises(ValueError): self.b.handle(self.req | {'title':'sixth'})
+        for i in range(13): self.b.handle(self.req | {'title':str(i)})
+        with self.assertRaises(ValueError): self.b.handle(self.req | {'title':'fourteenth'})
 
     def test_one_publish_per_request(self):
         a = self.b.handle(self.req)

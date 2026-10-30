@@ -5,14 +5,19 @@ into the 32K application-compactor budget used in the controlled coding trials.
 It applies to the Burt instance, including ordinary conversation; other bot
 profiles retain their settings. Unset preserves 8192, explicit caller budgets
 win, and invalid configured values fail startup before model requests.
-The 13-iteration limit and five shared sandbox executions remain unchanged.
-This is not a provider hard-input cap or a claim of improved coding accuracy.
+Burt alone uses 26 model iterations and 13 shared sandbox executions per task;
+other bot profiles retain 13 iterations. The broker preserves the final
+verification reserve, the 30-per-hour global execution limit, task deadline, and
+publication quotas. This is not a provider hard-input cap or a claim of improved
+coding accuracy.
 
 Merge integration, pinned deployment, and operator project-policy activation
 are separate steps. `BURT_VERIFICATION_POLICY` belongs to the broker service;
 it selects reviewed projects and fails closed for unlisted projects. No policy
-is loaded from model-writable files. After each reviewed publication, renew the
-exact base and baseline deliberately before a fresh-turn continuation.
+is loaded from model-writable files. Pinned policies require deliberate operator
+renewal. Dictionary alone may explicitly use `source_baseline: "current_verified"`:
+the broker derives a snapshot-bound effective base/baseline while immutable
+operator checks and protected-path rules remain unchanged.
 
 Keep generated code offline and publication credentials outside both namespaces.
 Use three to five useful canary tasks with at least one source modification and

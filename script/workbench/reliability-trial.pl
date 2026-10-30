@@ -37,6 +37,7 @@ $ENV{MODEL}=$config->{model};
 $ENV{FALLBACK_MODELS}='';
 $ENV{BOT_CODING_TASK_TTL_SECONDS}=$config->{deadline_seconds};
 $ENV{EXPERIMENT_DEADLINE}=$config->{deadline};
+$ENV{BURT_SANDBOX_ATTEMPTS}=$config->{max_executions};
 my $task=$config->{task};
 my $request='burt_bot: '.$task->{prompt}."\nRead workspace repository branch $task->{branch}, project $task->{project}. Preserve existing project files and tests. Test the complete project. Do not publish anything.";
 my $bot=bless {pending=>{channel=>'#ai',expires_at=>time+300,messages=>[
@@ -47,7 +48,7 @@ $bot->{pending}{expires_at}=$config->{deadline};
 my ($raider,$plugin,$result,$error);
 my $compactions=0;
 eval {
-  $raider=Bot::Runtime::RaiderSetup::setup_raider(self=>$bot,owner=>'operator',max_line=>400,script_file=>'/app/burt.pl',max_context_tokens=>$config->{context_tokens});
+  $raider=Bot::Runtime::RaiderSetup::setup_raider(self=>$bot,owner=>'operator',max_line=>400,script_file=>'/app/burt.pl',max_context_tokens=>$config->{context_tokens},max_iterations=>$config->{max_iterations});
   die "effective iteration limit differs from frozen config\n" unless $raider->max_iterations==$config->{max_iterations};
   my $engine=$raider->engine;
   my $url=$engine->can('url') ? URI->new($engine->url) : undef;
