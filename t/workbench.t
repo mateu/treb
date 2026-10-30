@@ -512,6 +512,8 @@ is(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},
   'a truthful denial of proposal creation is not suppressed');
 like(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'The proposal is ready.'),
   qr/report withheld/,'unreceipted proposal claim is withheld');
+like(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'The proposal is ready. Tests passed.'),
+  qr/report withheld/,'proposal claims are checked even before a passing test claim');
 $bot->{pending}{coding_receipts}{proposal}='b'x32;
 is(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'The proposal is ready.'),
   'The proposal is ready.','proposal receipt permits factual final report');

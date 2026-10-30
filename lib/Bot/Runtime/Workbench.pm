@@ -449,6 +449,7 @@ sub verified_final_report {
     last;
   }
   my $claims_proposal=0;
+  pos($answer)=0;
   while ($answer =~ /\bproposal\b.*\b(?:created|ready|saved|awaiting)\b/gi) {
     my $prefix=substr($answer,0,pos($answer)-length($&));
     next if $prefix =~ /\b(?:no|not|never|un|fail\w*)(?:\s+\w+){0,3}\s*\z/i;
