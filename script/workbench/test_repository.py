@@ -485,6 +485,21 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
                              | dict(action='repo_repair',id=job['id'],changes={'lib/main.py':'print(43)'},
                                     delete=[],argv=self.repo_req['argv'],title='repair') | changes)
 
+    def test_checkpoint_uses_cached_replay_as_latest_execution(self):
+        first = self.b.handle(self.repo_req | {'title': 'first passing execution'})
+        self.b.execute = lambda job: {'reason': 'exited', 'exit_code': 1, 'output': 'failed'}
+        failed = self.b.handle(self.repo_req | {'title': 'later failed execution'})
+        replayed = self.b.handle(self.repo_req | {'title': 'first passing execution'})
+        self.assertEqual(replayed['id'], first['id'])
+        checkpoint = self.checkpoint()
+        self.assertEqual(checkpoint['latest_execution_job'], {'id': first['id'], 'state': 'passed'})
+        self.assertNotEqual(checkpoint['latest_execution_job']['id'], failed['id'])
+        resumed_scope = 'b' * 64
+        resume = self.b.capability_envelope('task_resume', resumed_scope, '#ai', 'irc.perl.org')
+        resumed = self.b.handle(resume | {'action': 'task_resume', 'checkpoint_id': checkpoint['checkpoint_id'],
+                                          'requester': 'mateu'})
+        self.assertEqual(resumed['latest_execution_job'], {'id': first['id'], 'state': 'passed'})
+
     def test_checkpoint_excludes_diagnostic_success_from_latest_execution(self):
         self.b.execute = lambda job: {'reason':'exited', 'exit_code':1, 'output':'failed'}
         failed = self.b.handle(self.repo_req)
