@@ -506,6 +506,10 @@ $bot->{pending}{coding_receipts}{published}{'a'x32}='https://github.com/burt-age
 like(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},
   'I published https://github.com/burt-agent/workspace/commit/'.('b'x40)),
   qr/report withheld/,'a publication receipt cannot validate a different commit URL');
+is(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},
+  'No proposal was created because the broker is unavailable.'),
+  'No proposal was created because the broker is unavailable.',
+  'a truthful denial of proposal creation is not suppressed');
 like(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'The proposal is ready.'),
   qr/report withheld/,'unreceipted proposal claim is withheld');
 $bot->{pending}{coding_receipts}{proposal}='b'x32;

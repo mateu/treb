@@ -448,7 +448,13 @@ sub verified_final_report {
     $claims_pass=1;
     last;
   }
-  my $claims_proposal=$answer =~ /\bproposal\b.*\b(?:created|ready|saved|awaiting)\b/i;
+  my $claims_proposal=0;
+  while ($answer =~ /\bproposal\b.*\b(?:created|ready|saved|awaiting)\b/gi) {
+    my $prefix=substr($answer,0,pos($answer)-length($&));
+    next if $prefix =~ /\b(?:no|not|never|un|fail\w*)(?:\s+\w+){0,3}\s*\z/i;
+    $claims_proposal=1;
+    last;
+  }
   pos($answer)=0;
   my $claims_publication=0;
   while ($answer =~ /\b(pushed|published|committed)\b/gi) {

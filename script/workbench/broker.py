@@ -454,12 +454,14 @@ class Broker:
             'AND j.state="passed" ORDER BY c.branch,c.project',
             (requester, req['channel'], req['network'])).fetchall()
         eligible = {}
+        indexed_destinations = set()
         for candidate in indexed:
             job = self.db.execute('SELECT * FROM jobs WHERE id=?', (candidate['job_id'],)).fetchone()
             destination = json.loads(self.db.execute('SELECT destination FROM repo_jobs WHERE id=?',
                                                      (job['id'],)).fetchone()['destination'])
             key = json.dumps(destination, sort_keys=True, separators=(',', ':'))
             eligible.setdefault(key, (job, destination))
+            indexed_destinations.add(key)
         rows = self.db.execute(
             'SELECT j.* FROM jobs j JOIN repo_jobs r ON r.id=j.id '
             'JOIN task_scopes s ON s.scope=j.scope '
@@ -473,7 +475,8 @@ class Broker:
                 continue
             key = json.dumps(destination, sort_keys=True, separators=(',', ':'))
             if destination.get('candidate_material') is True:
-                eligible.setdefault(key, (row, destination))
+                if key not in indexed_destinations:
+                    eligible[key] = (row, destination)
                 continue
             # Migration-safe recovery for jobs written before candidate lineage:
             # compare the immutable tested bundle with its immutable snapshot.
@@ -485,8 +488,11 @@ class Broker:
                 snapshot = self.load_snapshot({**req, 'scope': row['scope']},
                                               destination['snapshot_id'], require_active=False)
                 changes, deleted = self.candidate_delta(snapshot['files'], json.loads(row['files']))
-                if changes or deleted:
-                    eligible.setdefault(key, (row, destination))
+                if changes or deleted and key not in indexed_destinations:
+                    # Rows are oldest-first, so retain the newest tested legacy
+                    # bundle for a destination while an indexed candidate keeps
+                    # precedence over any recovered legacy history.
+                    eligible[key] = (row, destination)
             except (KeyError, TypeError, ValueError):
                 # Missing legacy evidence is not proof that a base-only run was
                 # a candidate. Leave it unavailable rather than guessing.
