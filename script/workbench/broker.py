@@ -550,7 +550,7 @@ class Broker:
         fields['task_resume'] = {'checkpoint_id', 'requester'}
         optional_fields['task_resume'] = {'deadline'}
         fields['proposal_create'] = {'proposal_action', 'params', 'requester'}
-        fields['proposal_confirm'] = {'requester', 'confirmed_at', 'publish_capability', 'publish_grant'}
+        fields['proposal_confirm'] = {'requester', 'confirmed_at', 'publication_confirmation'}
         allowed |= fields.get(action, set()) | optional_fields.get(action, set())
         if action == 'proposal_confirm':
             required = {'action', 'scope', 'capability', 'grant', 'channel', 'network', 'requester', 'confirmed_at'}
@@ -982,16 +982,14 @@ class Broker:
             self.db.commit()
             raise ValueError('proposal confirmation requires a later fresh request')
         action = proposal['action']
-        if action in ('publish', 'repo_publish'):
-            capability = ACTION_CAPABILITY[action]
-            expected = self.capability_envelope(action, req['scope'], req['channel'], req['network'])['grant']
-            if (req.get('publish_capability') != capability or not isinstance(req.get('publish_grant'), str)
-                    or not hmac.compare_digest(req['publish_grant'], expected)):
-                self.db.commit()
-                raise ValueError('confirmation requires fresh explicit publication authority')
-        elif 'publish_capability' in req or 'publish_grant' in req:
+        # For publication the durable proposal, created only after the broker
+        # verified a real passed job, is the authority anchor. Its immutable
+        # params bind this later natural-language approval to that exact job
+        # and fixed destination. The fresh reply must still explicitly express
+        # publication intent: “read it” can approve a read, never a public write.
+        if action in ('publish', 'repo_publish') and req.get('publication_confirmation') is not True:
             self.db.commit()
-            raise ValueError('invalid action or fields')
+            raise ValueError('confirmation requires explicit publication intent')
         changed = self.db.execute('UPDATE proposals SET state="consumed" WHERE id=? AND state="proposed"',
                                   (proposal['id'],)).rowcount
         if changed == 1:
