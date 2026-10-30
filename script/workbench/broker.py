@@ -171,7 +171,9 @@ class Broker:
         # Preserve that selection independently of immutable creation times and
         # prunable audit events so checkpoints resume the actual last result.
         self.db.execute('''CREATE TABLE IF NOT EXISTS task_execution_selections
-            (task_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, selected REAL NOT NULL)''')
+            (task_id TEXT PRIMARY KEY, job_id TEXT NOT NULL, execution_state TEXT NOT NULL, selected REAL NOT NULL)''')
+        try: self.db.execute('ALTER TABLE task_execution_selections ADD COLUMN execution_state TEXT')
+        except sqlite3.OperationalError: pass
         # Attempt budget is durable task state, not a count over the prunable
         # job journal. It must survive restart and job-retention pruning.
         self.db.execute('''CREATE TABLE IF NOT EXISTS task_budgets
@@ -431,18 +433,21 @@ class Broker:
         return job
 
     def task_job_rows(self, task_id):
-        return self.db.execute('SELECT j.id,j.state,j.created,r.destination FROM jobs j '
+        return self.db.execute('SELECT j.id,j.state,j.created,r.destination,e.execution_state FROM jobs j '
                                'LEFT JOIN task_scopes s ON s.scope=j.scope LEFT JOIN repo_jobs r ON r.id=j.id '
                                'LEFT JOIN task_execution_selections e ON e.task_id=COALESCE(s.task_id,j.scope) '
                                'AND e.job_id=j.id WHERE COALESCE(s.task_id,j.scope)=? '
                                'ORDER BY e.job_id IS NOT NULL,j.created,j.id', (task_id,)).fetchall()
 
-    def remember_task_execution_selection(self, req, job_id, now=None):
-        """Persist the job most recently returned for checkpoint recovery."""
+    def remember_task_execution_selection(self, req, job_id, state, now=None):
+        """Persist the latest non-diagnostic execution verdict for recovery."""
+        if state not in ('passed', 'failed'):
+            raise ValueError('invalid execution selection state')
         task_id = self.task_binding(req['scope'])['task_id']
-        self.db.execute('''INSERT INTO task_execution_selections VALUES (?,?,?)
-                         ON CONFLICT(task_id) DO UPDATE SET job_id=excluded.job_id,selected=excluded.selected''',
-                        (task_id, job_id, time.time() if now is None else now))
+        self.db.execute('''INSERT INTO task_execution_selections VALUES (?,?,?,?)
+                         ON CONFLICT(task_id) DO UPDATE SET job_id=excluded.job_id,
+                         execution_state=excluded.execution_state,selected=excluded.selected''',
+                        (task_id, job_id, state, time.time() if now is None else now))
 
     @staticmethod
     def repository_candidate_key(destination):
@@ -698,7 +703,7 @@ class Broker:
         for job in reversed(jobs):
             destination = json.loads(job['destination']) if job['destination'] else {}
             if not destination.get('diagnostic_only'):
-                latest_execution_job = {'id': job['id'], 'state': job['state']}
+                latest_execution_job = {'id': job['id'], 'state': job['execution_state'] or job['state']}
                 break
         return {'checkpoint_id': row['id'], 'task_id': row['task_id'], 'parent_checkpoint_id': row['parent'],
                 'phase': row['phase'], 'reason': row['reason'],
@@ -959,7 +964,8 @@ class Broker:
                 # position so direct publication cannot select later files.
                 if action == 'repo_run' and old['state'] == 'passed' and destination is not None:
                     self.remember_repository_candidate(req, old['id'], destination)
-                self.remember_task_execution_selection(req, old['id'])
+                if not _diagnostic:
+                    self.remember_task_execution_selection(req, old['id'], old['state'])
                 self.db.commit()
                 return self.result(old)
             task_id = self.task_binding(scope)['task_id']
@@ -1009,7 +1015,8 @@ class Broker:
             self.db.execute('UPDATE jobs SET result=?,state=? WHERE id=?', (json.dumps(result), state, job_id))
             if action == 'repo_run' and state == 'passed' and destination is not None:
                 self.remember_repository_candidate(req, job_id, destination)
-            self.remember_task_execution_selection(req, job_id)
+            if not _diagnostic:
+                self.remember_task_execution_selection(req, job_id, state)
             self.resource_checkpoint('job', job_id, req, state)
             self.db.commit()
             return self.result(self.db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())

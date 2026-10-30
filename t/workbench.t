@@ -432,7 +432,7 @@ my @resume_requests;
     $resume_scope=$forwarded->{scope} if $forwarded->{action} eq 'task_resume';
     return $forwarded->{action} eq 'task_resume' ? JSON::PP::encode_json({resumed_scope=>$resume_scope,jobs=>[],
       latest_execution_job=>{id=>'d'x32,state=>'passed'},
-      latest_repository_job=>{id=>'d'x32,state=>'passed'},attempts_remaining=>4})
+      latest_repository_job=>{id=>'d'x32,state=>'published'},attempts_remaining=>4})
       : $forwarded->{action} eq 'task_checkpoint' ? JSON::PP::encode_json({checkpoint_id=>'c'x32,jobs=>[],attempts_remaining=>4})
       : JSON::PP::encode_json({budget=>{}});
   };
@@ -446,7 +446,7 @@ is($bot->{pending}{coding_requester},'mateu','resume preserves broker-bound requ
 is($bot->{pending}{coding_last_execution_job},'d'x32,'resume restores the latest non-diagnostic execution job');
 is($bot->{pending}{coding_last_execution_state},'passed','resume restores the latest non-diagnostic execution state');
 is($bot->{pending}{coding_last_repo_job},'d'x32,'resume restores the latest complete repository job');
-is($bot->{pending}{coding_last_repo_state},'passed','resume restores a completed repository job');
+is($bot->{pending}{coding_last_repo_state},'published','resume retains publication state separately from the passing execution verdict');
 is($bot->{pending}{coding_receipts}{passed}{'d'x32},1,'resume restores the passed job receipt');
 is(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'Tests passed on the saved bundle.'),
   'Tests passed on the saved bundle.','resumed passed bundle permits truthful final report');

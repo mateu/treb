@@ -491,6 +491,11 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         failed = self.b.handle(self.repo_req | {'title': 'later failed execution'})
         replayed = self.b.handle(self.repo_req | {'title': 'first passing execution'})
         self.assertEqual(replayed['id'], first['id'])
+        self.b.execute = lambda job: {'reason': 'exited', 'exit_code': 0, 'output': 'diagnostic passed'}
+        diagnostic = self.b.handle(self.b.capability_envelope('repo_diagnose', self.req['scope'], '#ai', 'irc.perl.org') | {
+            'action': 'repo_diagnose', 'id': failed['id'], 'argv': ['/bin/sh', '-c', 'true'],
+            'title': 'diagnose later failure'})
+        self.assertEqual(diagnostic['state'], 'passed')
         checkpoint = self.checkpoint()
         self.assertEqual(checkpoint['latest_execution_job'], {'id': first['id'], 'state': 'passed'})
         self.assertNotEqual(checkpoint['latest_execution_job']['id'], failed['id'])
@@ -499,6 +504,18 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         resumed = self.b.handle(resume | {'action': 'task_resume', 'checkpoint_id': checkpoint['checkpoint_id'],
                                           'requester': 'mateu'})
         self.assertEqual(resumed['latest_execution_job'], {'id': first['id'], 'state': 'passed'})
+
+    def test_checkpoint_preserves_execution_verdict_after_publication(self):
+        tested = self.b.handle(self.repo_req)
+        self.assertEqual(self.repo_publish(tested)['state'], 'published')
+        checkpoint = self.checkpoint()
+        self.assertEqual(checkpoint['latest_repository_job'], {'id': tested['id'], 'state': 'published'})
+        self.assertEqual(checkpoint['latest_execution_job'], {'id': tested['id'], 'state': 'passed'})
+        resumed_scope = 'b' * 64
+        resume = self.b.capability_envelope('task_resume', resumed_scope, '#ai', 'irc.perl.org')
+        resumed = self.b.handle(resume | {'action': 'task_resume', 'checkpoint_id': checkpoint['checkpoint_id'],
+                                          'requester': 'mateu'})
+        self.assertEqual(resumed['latest_execution_job'], {'id': tested['id'], 'state': 'passed'})
 
     def test_checkpoint_excludes_diagnostic_success_from_latest_execution(self):
         self.b.execute = lambda job: {'reason':'exited', 'exit_code':1, 'output':'failed'}
