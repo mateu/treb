@@ -42,7 +42,7 @@ like($defs{run_repo_project}{description},qr/THIRTEEN total sandbox attempts/,
 }
 like($defs{publish_gist}{code}->($tool,{id=>'x',channel=>'#ai'}),qr/Invalid tool fields/,'model cannot choose scope/channel');
 # Authoritative transition table: only a direct trusted envelope can mint its
-# named capability; generic coding discussion is not an authority signal.
+# named capability; natural task requests do not require magic coding verbs.
 for my $case (
   ['read_status','burt_bot: inspect the python-csv reference'],
   ['read_status','burt_bot: inspect job '.('a'x32)],
@@ -56,7 +56,33 @@ for my $case (
   ok(Bot::Runtime::Workbench::request_scope($bot,$cap),"$cap is granted only by its direct request");
   for my $other (grep { $_ ne $cap } qw(read_status edit_test publish_gist publish_repo)) {
     eval { Bot::Runtime::Workbench::request_scope($bot,$other) };
-    ok($@,"$cap does not upgrade $other");
+    if ($cap eq 'edit_test' && $other eq 'read_status') {
+      ok(!$@,'edit/test task includes its bounded repository read');
+    } else {
+      ok($@,"$cap does not upgrade $other");
+    }
+  }
+  $bot->{pending}=$saved;
+}
+for my $case (
+  ['reported dictionary continuation','burt_bot: you want to have another crack at the qtype/idtype/id query params for the dictionary code at https://github.com/burt-agent/workspace/tree/burt/dictionary',1],
+  ['natural revisit','burt_bot: could you revisit the dictionary project and see what is missing?',1],
+  ['indirect offline task','burt_bot: please help with this Perl program',1],
+  ['bounded read','burt_bot: inspect the repository project',0],
+) {
+  my ($name,$text,$edit)=@$case;
+  my $saved=JSON::PP::decode_json(JSON::PP::encode_json($bot->{pending}));
+  $bot->{pending}{messages}[0]{msg}=$text;
+  ok(Bot::Runtime::Workbench::request_scope($bot,'read_status'),"$name grants bounded read/status");
+  if ($edit) {
+    ok(Bot::Runtime::Workbench::request_scope($bot,'edit_test'),"$name grants offline edit/test");
+  } else {
+    eval { Bot::Runtime::Workbench::request_scope($bot,'edit_test') };
+    ok($@,"$name does not grant offline edit/test");
+  }
+  for my $publication (qw(publish_gist publish_repo)) {
+    eval { Bot::Runtime::Workbench::request_scope($bot,$publication) };
+    ok($@,"$name does not grant $publication");
   }
   $bot->{pending}=$saved;
 }
@@ -66,6 +92,21 @@ for my $case (
   for my $cap (qw(read_status edit_test publish_gist publish_repo)) {
     eval { Bot::Runtime::Workbench::request_scope($bot,$cap) };
     ok($@,"coding-vocabulary-only text grants no $cap authority");
+  }
+  $bot->{pending}=$saved;
+}
+for my $case (
+  ['status-only','burt_bot: what is the status of the dictionary code?'],
+  ['cancelled','burt_bot: do not revisit the dictionary code'],
+  ['negated','burt_bot: please do not work on this repository project'],
+  ['nonrequest','burt_bot: the dictionary code is in the repository'],
+) {
+  my ($name,$text)=@$case;
+  my $saved=JSON::PP::decode_json(JSON::PP::encode_json($bot->{pending}));
+  $bot->{pending}{messages}[0]{msg}=$text;
+  for my $cap (qw(read_status edit_test publish_gist publish_repo)) {
+    eval { Bot::Runtime::Workbench::request_scope($bot,$cap) };
+    ok($@,"$name text grants no $cap authority");
   }
   $bot->{pending}=$saved;
 }
