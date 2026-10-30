@@ -441,7 +441,13 @@ sub verified_final_report {
   my ($self,$pending,$answer)=@_;
   return $answer unless $pending && $pending->{coding_task};
   my $receipts=$pending->{coding_receipts}//{};
-  my $claims_pass=$answer =~ /\b(?:tests?|suite|verification)\s+(?:all\s+)?pass(?:ed|es)?\b/i;
+  my $claims_pass=0;
+  while ($answer =~ /\b(?:tests?|suite|verification)\s+(?:all\s+)?pass(?:ed|es)?\b/gi) {
+    my $prefix=substr($answer,0,pos($answer)-length($&));
+    next if $prefix =~ /\b(?:no|not|never|un|fail\w*)(?:\s+\w+){0,3}\s*\z/i;
+    $claims_pass=1;
+    last;
+  }
   my $claims_proposal=$answer =~ /\bproposal\b.*\b(?:created|ready|saved|awaiting)\b/i;
   my $claims_publication=0;
   while ($answer =~ /\b(pushed|published|committed)\b/gi) {
@@ -600,9 +606,15 @@ sub tool_specs {
             if ($repo) {
               $pending->{coding_last_repo_job}=$repo->{id};
               $pending->{coding_last_repo_state}=$repo->{state};
+              $pending->{coding_last_execution_job}=$repo->{id};
+              $pending->{coding_last_execution_state}=$repo->{state};
+              $pending->{coding_receipts}//={};
+              $pending->{coding_receipts}{passed}{$repo->{id}}=1 if $repo->{state} eq 'passed';
             } else {
               delete $pending->{coding_last_repo_job};
               delete $pending->{coding_last_repo_state};
+              delete $pending->{coding_last_execution_job};
+              delete $pending->{coding_last_execution_state};
             }
             task_checkpoint($pending,'started','admitted');
             task_notice($self,$pending,"Resumed coding task (up to ${ttl}s; bounded test/tool attempts). I will report test results and publication status.");

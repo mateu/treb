@@ -667,4 +667,14 @@ for my $ending (qw(error silent empty deadline report)) {
     "$ending zero-job notice is truthful") unless $ending eq 'report';
 }
 
+{
+  my $pending={channel=>'#ai',expires_at=>time+100,coding_task=>1,
+    input=>'code',messages=>[{nick=>'mateu',channel=>'#ai',msg=>'run tests',source_kind=>'conversation'}]};
+  my $bot=Local::RaidFlowBot->new(pending=>$pending,replies=>['Tests passed.']);
+  do_raid(self=>$bot);
+  like($bot->{sent}[-1]{msg},qr/report withheld/,'unverified report is withheld before delivery');
+  like($bot->{memory}{rows}[0]{response},qr/report withheld/,'stored history matches withheld delivery');
+  unlike($bot->{memory}{rows}[0]{response},qr/^Tests passed\.$/,'unsupported claim is never stored');
+}
+
 done_testing;
