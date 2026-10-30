@@ -907,8 +907,8 @@ class Broker:
             raise ValueError('publication outcome requires operator reconciliation')
         if job['state'] == 'published':
             return self.result(job)
-        if job['state'] != 'passed':
-            raise ValueError('only a successful, unsubmitted job can be published')
+        if job['state'] != 'passed' or (not repo_job and job['created'] < time.time() - 900):
+            raise ValueError('only a successful, recent, unsubmitted job can be published')
         if repo_job:
             destination = json.loads(repo_job['destination'])
             if destination.get('diagnostic_only'):
