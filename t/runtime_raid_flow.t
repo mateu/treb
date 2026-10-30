@@ -621,7 +621,7 @@ use Bot::Runtime::RaidFlow qw(do_raid);
   my $bot=Local::RaidFlowBot->new(pending=>$pending,replies=>[sub {$clock+=400;return 'Tests passed; here is the result.'}]);
   do_raid(self=>$bot);
   like($bot->{sent}[0]{msg},qr/Started coding task/,'start reported before generation');
-  like($bot->{sent}[-1]{msg},qr/Tests passed/,'coding answer after normal chat TTL delivered');
+  like($bot->{sent}[-1]{msg},qr/report withheld.*no matching broker receipt/,'unreceipted coding success claim is withheld after normal chat TTL');
   ok(!$bot->_processing,'coding lane released after final answer');
 }
 

@@ -28,27 +28,37 @@ sub capability_set {
   return capability_set_from_messages($self,$pending->{messages});
 }
 
+sub _latest_human_message {
+  my ($self,$messages,$addressed)=@_;
+  my $nick=quotemeta($self->get_nickname);
+  my @messages=grep {
+    ($_->{source_kind}//'') eq 'conversation' && $self->_is_human_nick($_->{nick}//'')
+      && (!$addressed || ($_->{msg}//'') =~ /(?:^|\W)$nick(?:\W|$)/i)
+  } @{$messages||[]};
+  return $messages[-1];
+}
+
 sub capability_set_from_messages {
   my ($self,$messages)=@_;
   my %capability;
   my $nick=quotemeta($self->get_nickname);
-  for my $m (@{$messages||[]}) {
-    next unless ($m->{source_kind}//'') eq 'conversation' && $self->_is_human_nick($m->{nick}//'');
-    my $text=$m->{msg}//'';
-    next unless $text =~ /(?:^|\W)$nick(?:\W|$)/i;
-    # The current trusted envelope, not model text, remains the authority.
-    # Treat natural requests to work on named code as tasks. This deliberately
-    # has no edit/test verb password: continuing, revisiting, or asking for a
-    # crack at a bounded project is enough for offline work. Publication stays
-    # on its separate explicit-destination path below.
-    $capability{read_status}=1 if bounded_code_read_request($text,$nick);
-    if (natural_code_task_request($text,$nick)) {
-      $capability{read_status}=1;
-      $capability{edit_test}=1;
-    }
-    $capability{publish_gist}=1 if $text =~ /\bgist\b/i && $text =~ /\b(?:publish|post|push|commit)\b/i;
-    $capability{publish_repo}=1 if direct_repository_publication_request($text,$nick);
+  # Only the latest addressed human command is authority.  Older buffered
+  # messages are context, never a retained push/edit grant after a later
+  # cancellation or status request.
+  my $m=_latest_human_message($self,$messages,1) or return \%capability;
+  my $text=$m->{msg}//'';
+  # The current trusted envelope, not model text, remains the authority.
+  # Treat natural requests to work on named code as tasks. This deliberately
+  # has no edit/test verb password: continuing, revisiting, or asking for a
+  # crack at a bounded project is enough for offline work. Publication stays
+  # on its separate explicit-destination path below.
+  $capability{read_status}=1 if bounded_code_read_request($text,$nick);
+  if (natural_code_task_request($text,$nick)) {
+    $capability{read_status}=1;
+    $capability{edit_test}=1;
   }
+  $capability{publish_gist}=1 if $text =~ /\bgist\b/i && $text =~ /\b(?:publish|post|push|commit)\b/i;
+  $capability{publish_repo}=1 if direct_repository_publication_request($text,$nick);
   return \%capability;
 }
 
@@ -110,7 +120,7 @@ sub direct_repository_publication_request {
   # how to commit”. A compound coding instruction can also explicitly end in
   # a publication verb without making every occurrence of that word authority.
   return 1 if $body =~ /\A\s*(?:(?:please|can|could|would)\s+(?:you\s+)?)?(?:publish|push|commit)\b/i;
-  return $body =~ /\A\s*(?:please\s+)?(?:write|implement|build|update|edit|fix|test|run|repair|inspect)\b.*\b(?:and|then|to)\s+(?:publish|push|commit)\b/i ? 1 : 0;
+  return $body =~ /\A\s*(?:please\s+)?(?:read|inspect|write|implement|build|update|edit|fix|test|run|repair)\b.*\b(?:and|then|to)\s+(?:publish|push|commit)\b/i ? 1 : 0;
 }
 
 sub natural_code_task_request {
@@ -118,10 +128,14 @@ sub natural_code_task_request {
   # Cancellation, negation, and status questions are conversation, not a new
   # task. Do this before recognizing any code context so quoted task wording
   # cannot accidentally broaden an otherwise negative request.
-  return 0 if _non_task_text($text,$nick) || !_code_context($text);
-  return 0 if bounded_code_read_request($text,$nick);
+  return 0 if _non_task_text($text,$nick);
   my $body=$text;
   $body =~ s/\A\s*$nick\s*[:,]?\s*//i;
+  # A short addressed continuation is offline-only task authority. It cannot
+  # publish because direct_repository_publication_request still requires an
+  # explicit public-write verb in this same message.
+  return 1 if $body =~ /\A\s*(?:(?:the\s+)?word\s*,?\s*)?(?:please\s+)?(?:proceed|continue|go\s+ahead|carry\s+on|do\s+it)\b/i;
+  return 0 if !_code_context($text) || bounded_code_read_request($text,$nick);
   # An isolated destination-specific publication request is not also a coding
   # task. A compound task still has its ordinary offline authority, while the
   # publication half remains separately explicit below. Addressing punctuation
@@ -166,15 +180,9 @@ sub request_scope {
 sub trusted_requester {
   my ($self)=@_;
   my $pending=$self->_pending_raid or die "No active request\n";
-  my $nick=quotemeta($self->get_nickname);
-  my %requester;
-  for my $m (@{$pending->{messages}||[]}) {
-    next unless ($m->{source_kind}//'') eq 'conversation' && $self->_is_human_nick($m->{nick}//'');
-    next unless ($m->{msg}//'') =~ /(?:^|\W)$nick(?:\W|$)/i;
-    $requester{irc_fold($m->{nick})}=1;
-  }
-  die "Need exactly one current trusted requester\n" unless keys(%requester)==1;
-  return (keys %requester)[0];
+  my $m=_latest_human_message($self,$pending->{messages},1);
+  die "Need exactly one current trusted requester\n" unless $m;
+  return irc_fold($m->{nick});
 }
 
 sub confirmation_envelope {
@@ -184,24 +192,30 @@ sub confirmation_envelope {
   die "Workbench network is not permitted\n" unless lc($ENV{IRC_SERVER}//'irc.perl.org') eq 'irc.perl.org';
   die "No active #ai or #mateu-test request\n" unless lc($pending->{channel}//'') =~ /\A(?:#ai|#mateu-test)\z/
     && ($pending->{expires_at}//0)>time;
+  # A confirmation can be the natural short follow-up “push it”, so it
+  # need not repeat the bot name. Ignore unrelated conversation, but take the
+  # newest actual confirmation; older buffered approvals never supply scope.
   my $nick=quotemeta($self->get_nickname);
-  my @messages=grep {
-    ($_->{source_kind}//'') eq 'conversation' && $self->_is_human_nick($_->{nick}//'')
-      && irc_fold($_->{nick}) ne irc_fold($self->get_nickname)
+  my @confirmations=grep {
+    ($_->{source_kind}//'') eq 'conversation'
+      && $self->_is_human_nick($_->{nick}//'')
+      && irc_fold($_->{nick}//'') ne irc_fold($self->get_nickname)
       && confirmation_text($_->{msg}//'', $nick)
-  } @{$pending->{messages}||[]};
-  die "Need one fresh explicit confirmation from the trusted requester\n" unless @messages==1;
+  } @{$pending->{messages}//[]};
+  my $m=$confirmations[-1];
   die "Need one fresh explicit confirmation from the trusted requester\n"
-    unless defined($messages[0]{queued_at}) && $messages[0]{queued_at}=~ /\A\d+(?:\.\d+)?\z/;
-  my $requester=irc_fold($messages[0]{nick});
+    unless $m;
+  die "Need one fresh explicit confirmation from the trusted requester\n"
+    unless defined($m->{queued_at}) && $m->{queued_at}=~ /\A\d+(?:\.\d+)?\z/;
+  my $requester=irc_fold($m->{nick});
   my $scope=sha256_hex(JSON::PP->new->canonical->utf8->encode([
     $pending->{channel},$pending->{expires_at},$pending->{messages}]));
   my $channel=lc($pending->{channel});
   my $grant=sha256_hex(JSON::PP->new->canonical->utf8->encode(
     [$scope,$channel,'irc.perl.org','read_status']));
   my %envelope=(action=>'proposal_confirm',scope=>$scope,capability=>'read_status',grant=>$grant,
-    channel=>$channel,network=>'irc.perl.org',requester=>$requester,confirmed_at=>0+$messages[0]{queued_at},
-    publication_confirmation=>publication_confirmation_text($messages[0]{msg}//'') ? JSON::PP::true : JSON::PP::false);
+    channel=>$channel,network=>'irc.perl.org',requester=>$requester,confirmed_at=>0+$m->{queued_at},
+    publication_confirmation=>publication_confirmation_text($m->{msg}//'') ? JSON::PP::true : JSON::PP::false);
   return \%envelope;
 }
 
@@ -364,6 +378,16 @@ sub report_result {
   my $id=$r->{id}//'';
   $id='' unless $id =~ /\A[a-f0-9]{32}\z/;
   my $state=exists($r->{error}) ? 'error' : ($r->{state}//'');
+  my $receipts=$pending->{coding_receipts}//={};
+  if (($r->{proposal_id}//'') =~ /\A[a-f0-9]{32}\z/ && ($r->{state}//'') eq 'proposed') {
+    $receipts->{proposal}=$r->{proposal_id};
+  }
+  if ($id && $state eq 'passed' && $action =~ /\A(?:run|repo_(?:run|repair))\z/) {
+    $receipts->{passed}{$id}=1;
+  }
+  if ($id && $state eq 'published') {
+    $receipts->{published}{$id}=1;
+  }
   $state='error' unless $state =~ /\A(?:passed|failed|published|publishing|uncertain)\z/;
   my $notice="$action: $state" . ($id ? " (job $id)" : '');
   if ($state eq 'error' && ($r->{rejection_schema}//'') eq '1') {
@@ -403,6 +427,21 @@ sub report_result {
   $pending->{coding_last_result}=$notice if $publication;
   task_notice($self,$pending,$notice) unless $quiet && !exists($r->{error})
     && ($r->{rejection_schema}//'') ne '1';
+}
+
+sub verified_final_report {
+  my ($self,$pending,$answer)=@_;
+  return $answer unless $pending && $pending->{coding_task};
+  my $receipts=$pending->{coding_receipts}//{};
+  my $claims_pass=$answer =~ /\b(?:tests?|suite|verification)\s+(?:all\s+)?pass(?:ed|es)?\b/i;
+  my $claims_proposal=$answer =~ /\bproposal\b.*\b(?:created|ready|saved|awaiting)\b/i;
+  my $claims_publication=$answer =~ /\b(?:pushed|published|committed)\b/i
+    || $answer =~ m{https://github\.com/burt-agent/workspace/commit/[a-f0-9]{40}}i;
+  return $answer if (!$claims_pass || keys %{$receipts->{passed}//{}})
+    && (!$claims_proposal || $receipts->{proposal})
+    && (!$claims_publication || keys %{$receipts->{published}//{}});
+  my $status=$pending->{coding_last_result}//'No verified work result recorded.';
+  return "Coding task report withheld: the claimed result has no matching broker receipt. $status";
 }
 
 sub broker_call {

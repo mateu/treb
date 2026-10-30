@@ -199,6 +199,14 @@ class Broker:
         self.db.execute('''CREATE TABLE IF NOT EXISTS direct_repo_publications
             (scope TEXT PRIMARY KEY, job_id TEXT NOT NULL, requester TEXT NOT NULL,
              channel TEXT NOT NULL, network TEXT NOT NULL, created REAL NOT NULL)''')
+        # A successful material repository change is the durable candidate for
+        # its human/channel/destination workspace. Read-only and base-only
+        # verification runs deliberately do not replace it.
+        self.db.execute('''CREATE TABLE IF NOT EXISTS repository_candidates
+            (requester TEXT NOT NULL, channel TEXT NOT NULL, network TEXT NOT NULL,
+             branch TEXT NOT NULL, project TEXT NOT NULL, job_id TEXT NOT NULL,
+             created REAL NOT NULL,
+             PRIMARY KEY(requester,channel,network,branch,project))''')
         # State tables above are mutable operational indexes. Keep an append-only
         # receipt for every resource transition for recovery and audit.
         self.db.execute('''CREATE TABLE IF NOT EXISTS resource_checkpoints
@@ -235,6 +243,8 @@ class Broker:
         self.db.execute('DELETE FROM task_phase_budgets WHERE task_id NOT IN (SELECT DISTINCT task_id FROM task_checkpoints) '
                         'AND updated<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM direct_repo_publications WHERE created<?', (now - AUDIT_TTL,))
+        self.db.execute('DELETE FROM repository_candidates WHERE created<?', (now - AUDIT_TTL,))
+        self.db.execute('DELETE FROM repository_candidates WHERE job_id NOT IN (SELECT id FROM jobs)')
         self.db.execute('DELETE FROM resource_checkpoints WHERE created<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM resource_checkpoints WHERE id NOT IN '
                         '(SELECT id FROM resource_checkpoints ORDER BY created DESC,id DESC LIMIT ?)', (AUDIT_LIMIT,))
@@ -433,6 +443,20 @@ class Broker:
             if not row:
                 raise ValueError('direct repository publication binding is unavailable')
             return row
+        candidates = self.db.execute(
+            'SELECT c.job_id FROM repository_candidates c JOIN jobs j ON j.id=c.job_id '
+            'JOIN repo_jobs r ON r.id=j.id '
+            'WHERE c.requester=? AND c.channel=? AND c.network=? '
+            'AND j.state IN ("passed","published") ORDER BY c.branch,c.project',
+            (requester, req['channel'], req['network'])).fetchall()
+        if len(candidates) == 1:
+            job = self.db.execute('SELECT * FROM jobs WHERE id=?', (candidates[0]['job_id'],)).fetchone()
+            self.db.execute('INSERT INTO direct_repo_publications VALUES (?,?,?,?,?,?)',
+                            (req['scope'], job['id'], requester, req['channel'], req['network'], time.time()))
+            self.db.commit()
+            return job
+        if candidates:
+            raise ValueError('direct repository publication needs one unambiguous saved project candidate')
         rows = self.db.execute(
             'SELECT j.* FROM jobs j JOIN repo_jobs r ON r.id=j.id '
             'JOIN task_scopes s ON s.scope=j.scope '
@@ -443,17 +467,53 @@ class Broker:
         for row in rows:
             destination = json.loads(self.db.execute('SELECT destination FROM repo_jobs WHERE id=?',
                                                      (row['id'],)).fetchone()['destination'])
-            if not destination.get('diagnostic_only'):
-                eligible.append(row)
+            if destination.get('diagnostic_only'):
+                continue
+            if destination.get('candidate_material') is True:
+                eligible.append((row, destination))
+                continue
+            # Migration-safe recovery for jobs written before candidate lineage:
+            # compare the immutable tested bundle with its immutable snapshot.
+            try:
+                snapshot = self.load_snapshot(req, destination['snapshot_id'], require_active=False)
+                changes, deleted = self.candidate_delta(snapshot['files'], json.loads(row['files']))
+                if changes or deleted:
+                    eligible.append((row, destination))
+            except (KeyError, TypeError, ValueError):
+                # Missing legacy evidence is not proof that a base-only run was
+                # a candidate. Leave it unavailable rather than guessing.
+                continue
         if len(eligible) != 1:
-            raise ValueError('direct repository publication needs one unambiguous passed job')
-        job = eligible[0]
+            raise ValueError('direct repository publication needs one unambiguous saved project candidate')
+        job, destination = eligible[0]
+        self.remember_repository_candidate(req, job['id'], destination)
         self.db.execute('INSERT INTO direct_repo_publications VALUES (?,?,?,?,?,?)',
                         (req['scope'], job['id'], requester, req['channel'], req['network'], time.time()))
         # Commit before a side effect so a retry cannot reselect different work
         # after a crash or an uncertain publication outcome.
         self.db.commit()
         return job
+
+    def remember_repository_candidate(self, req, job_id, destination):
+        """Persist an intentional changed-and-passed project candidate.
+
+        The broker, not model prose or a later base-only test, owns this
+        lineage. The candidate remains bound to the originating requester,
+        IRC channel/network, and fixed repository destination.
+        """
+        if destination.get('diagnostic_only') or not destination.get('candidate_material'):
+            return
+        binding = self.task_binding(req['scope'])
+        # An identity-bound task receipt is required for cross-request
+        # selection. Older callers remain usable through migration fallback.
+        requester = binding['requester'] if 'requester' in binding.keys() else None
+        if not requester:
+            return
+        self.db.execute('''INSERT INTO repository_candidates VALUES (?,?,?,?,?,?,?)
+                         ON CONFLICT(requester,channel,network,branch,project)
+                         DO UPDATE SET job_id=excluded.job_id,created=excluded.created''',
+                        (requester, req['channel'], req['network'], destination['branch'],
+                         destination['project'], job_id, time.time()))
 
     def task_attempt_count(self, task_id):
         row = self.db.execute('SELECT attempts FROM task_budgets WHERE task_id=?', (task_id,)).fetchone()
@@ -820,7 +880,9 @@ class Broker:
             if any(current[key] != snapshot[key] for key in ('base_sha', 'tree_sha', 'exists', 'files')):
                 raise ValueError('branch changed; read project and retest against the new base')
             files = self.materialize_files(snapshot['files'], req['changes'], req['delete'])
+            candidate_changes, candidate_deleted = self.candidate_delta(snapshot['files'], files)
             destination = {k: snapshot[k] for k in ('branch','project','base_sha','tree_sha','exists','snapshot_id')}
+            destination['candidate_material'] = bool(candidate_changes or candidate_deleted)
             if self.verification is not None:
                 policy = self.verification.policy(snapshot)
                 destination['verification_policy'] = self.verification.identity(policy)
@@ -890,6 +952,8 @@ class Broker:
             result['output_truncated'] = len(output) > 8192
             result['output'] = output if len(output) <= 8192 else output[:4096] + '\n[output excerpted]\n' + output[-4096:]
             self.db.execute('UPDATE jobs SET result=?,state=? WHERE id=?', (json.dumps(result), state, job_id))
+            if action == 'repo_run' and state == 'passed' and destination is not None:
+                self.remember_repository_candidate(req, job_id, destination)
             self.resource_checkpoint('job', job_id, req, state)
             self.db.commit()
             return self.result(self.db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())

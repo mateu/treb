@@ -103,6 +103,32 @@ for my $case (
 }
 {
   my $saved=JSON::PP::decode_json(JSON::PP::encode_json($bot->{pending}));
+  $bot->{pending}{messages}[0]{msg}='burt_bot: read burt-agent/workspace project dictionary on branch burt/dictionary, run the tests, and push if they pass';
+  ok(Bot::Runtime::Workbench::request_scope($bot,'read_status'),'natural read/test/push request grants bounded read');
+  ok(Bot::Runtime::Workbench::request_scope($bot,'edit_test'),'natural read/test/push request grants offline test authority');
+  ok(Bot::Runtime::Workbench::request_scope($bot,'publish_repo'),'natural read/test/push request grants explicit conditional publication');
+  $bot->{pending}=$saved;
+}
+{
+  my $saved=JSON::PP::decode_json(JSON::PP::encode_json($bot->{pending}));
+  $bot->{pending}{messages}[0]{msg}='burt_bot: word, please proceed';
+  ok(Bot::Runtime::Workbench::request_scope($bot,'edit_test'),'short addressed continuation grants offline task authority');
+  eval { Bot::Runtime::Workbench::request_scope($bot,'publish_repo') };
+  ok($@,'short continuation cannot grant publication');
+  $bot->{pending}=$saved;
+}
+{
+  my $saved=JSON::PP::decode_json(JSON::PP::encode_json($bot->{pending}));
+  push @{$bot->{pending}{messages}}, {nick=>'mateu',source_kind=>'conversation',
+    msg=>'burt_bot: do not push the dictionary work'};
+  for my $cap (qw(read_status edit_test publish_gist publish_repo)) {
+    eval { Bot::Runtime::Workbench::request_scope($bot,$cap) };
+    ok($@,"latest cancellation revokes earlier buffered $cap authority");
+  }
+  $bot->{pending}=$saved;
+}
+{
+  my $saved=JSON::PP::decode_json(JSON::PP::encode_json($bot->{pending}));
   $bot->{pending}{messages}[0]{msg}='burt_bot: write a script to push this project to the repository';
   ok(Bot::Runtime::Workbench::request_scope($bot,'edit_test'),'publication-tool implementation retains offline authority');
   ok(Bot::Runtime::Workbench::request_scope($bot,'publish_repo'),'publication-tool implementation separately grants repository publication');
@@ -366,7 +392,7 @@ ok(!$bot->{pending}{coding_task},'ambiguous requesters do not admit a coding tas
   my $called=0;
   local *Bot::Runtime::Workbench::broker_call=sub {$called++; return '{}'};
   like($defs{run_code}{code}->($tool,{files=>{'main.pl'=>'print 1'},argv=>['/usr/bin/perl','/work/main.pl'],title=>'test'}),
-    qr/Error: No admitted coding task for run/,'execution rejects an ambiguous unadmitted request');
+    qr/Error: (?:No admitted coding task for run|Need a current trusted human request)/,'execution rejects an ambiguous unadmitted request');
   is($called,0,'unadmitted execution never reaches the broker');
 }
 
@@ -434,6 +460,17 @@ my $resume_deadline=$bot->{pending}{expires_at};
     'failed resume reports rejection');
 }
 is($bot->{pending}{expires_at},$resume_deadline,'failed resume restores its original deadline');
+$bot->{pending}={coding_task=>1,coding_last_result=>'No verified work result recorded.'};
+like(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'Tests passed and I pushed it.'),
+  qr/report withheld/,'unreceipted test and publication claims are withheld');
+$bot->{pending}{coding_receipts}={passed=>{'a'x32=>1},published=>{'a'x32=>1}};
+is(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'Tests passed and I pushed it.'),
+  'Tests passed and I pushed it.','matching broker receipts permit factual final report');
+like(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'The proposal is ready.'),
+  qr/report withheld/,'unreceipted proposal claim is withheld');
+$bot->{pending}{coding_receipts}{proposal}='b'x32;
+is(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'The proposal is ready.'),
+  'The proposal is ready.','proposal receipt permits factual final report');
 $bot->{bot}='astrid';
 is_deeply(Bot::Runtime::Workbench::tool_specs($bot),[],'other bots unchanged');
 $bot->{bot}='burt';

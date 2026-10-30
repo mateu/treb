@@ -145,7 +145,7 @@ class RepositoryBrokerTests(unittest.TestCase):
 $ENV{BURT_WORKBENCH_SOCKET} = '/not/a/socket'; $ENV{IRC_SERVER} = 'irc.perl.org';
 my $bot = bless { pending => { channel => '#ai', expires_at => time + 60, messages => [
   { nick => 'mateu', source_kind => 'conversation', queued_at => time,
-    msg => 'burt_bot: please push your dictionary coding work' } ] } }, 'BoundaryBot';
+    msg => 'burt_bot: read burt-agent/workspace project dictionary on branch burt/dictionary, run the tests, and push if they pass.' } ] } }, 'BoundaryBot';
 my %defs = map { $_->{name} => $_ } @{ Bot::Runtime::Workbench::tool_specs($bot) };
 no warnings 'redefine'; local *Bot::Runtime::Workbench::broker_call = sub { print JSON::PP::encode_json($_[0]); return '{"state":"passed"}' };
 $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
@@ -259,15 +259,39 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         self.assertEqual((retried['id'], retried['state']), (first['id'], 'published'))
         self.assertEqual(len([1 for _, payload, _ in self.repo.calls if payload is not None]), writes)
 
-    def test_direct_publish_rejects_missing_or_ambiguous_identity_bound_jobs(self):
-        with self.assertRaisesRegex(ValueError, 'one unambiguous passed job'):
-            self.direct_repo_publish()
+    def test_direct_publish_preserves_material_candidate_across_later_base_only_test(self):
+        # Transcript regression: a natural task changes query parsing, then a
+        # later full-suite run against the base snapshot must not shadow it.
+        self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
+                          (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))
+        self.b.db.commit()
+        self.repo.files = {'lib/query.py':'def parse(query): return query'}
+        snapshot = self.b.handle(self.b.capability_envelope('repo_read', self.req['scope'], '#ai', 'irc.perl.org') | {
+            'action':'repo_read', 'branch':'burt/dictionary', 'project':'dictionary'})
+        changed_req = self.repo_req | {'snapshot_id': snapshot['snapshot_id']}
+        changed = self.b.handle(changed_req | {
+            'changes': {'lib/query.py':'def parse(qtype, idtype): return qtype, idtype'},
+            'title':'query-string request style (qtype/idtype/id/lang)'})
+        base_only = self.b.handle(changed_req | {
+            'changes': {}, 'title':'full offline suite on burt/dictionary'})
+        candidate = self.b.db.execute('SELECT job_id FROM repository_candidates').fetchone()
+        self.assertEqual(candidate['job_id'], changed['id'])
+        published = self.direct_repo_publish()
+        self.assertEqual((published['id'], published['state']), (changed['id'], 'published'))
+        self.assertNotEqual(base_only['id'], published['id'])
+
+    def test_direct_publish_rejects_multiple_project_candidates(self):
         self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
                           (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))
         self.b.db.commit()
         self.b.handle(self.repo_req)
-        self.b.handle(self.repo_req | {'title':'second passed repository job'})
-        with self.assertRaisesRegex(ValueError, 'one unambiguous passed job'):
+        snapshot = self.b.handle(self.b.capability_envelope('repo_read', self.req['scope'], '#ai', 'irc.perl.org') | {
+            'action':'repo_read', 'branch':'burt/other-project', 'project':'other-project'})
+        self.b.handle(self.repo_req | {
+            'snapshot_id': snapshot['snapshot_id'],
+            'changes': {'lib/other.py':'print(1)'},
+            'title':'other project candidate'})
+        with self.assertRaisesRegex(ValueError, 'one unambiguous saved project candidate'):
             self.direct_repo_publish()
         self.assertFalse(any(payload is not None for _, payload, _ in self.repo.calls))
 

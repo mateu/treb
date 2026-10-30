@@ -336,6 +336,7 @@ sub do_raid {
     );
   }
 
+  $answer=Bot::Runtime::Workbench::verified_final_report($self,$pending,$answer);
   Bot::Runtime::Workbench::finish_task($self,$pending,'final_report');
   $self->_send_to_channel($channel, $answer);
 
