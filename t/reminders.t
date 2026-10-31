@@ -30,10 +30,13 @@ my $tool=bless {},'ReminderTool';
 my %tools=map {$_->{name}=>$_} @{Bot::Runtime::Reminders::tool_specs($bot)};
 sub call { my ($name,%args)=@_; $tools{$name}{code}->($tool,\%args) }
 sub scope { (bot=>'burt',channel=>'#second') }
+my $before_alarm=time;
 my $r=decode_json(call('set_alarm',reason=>' tea ',delay_seconds=>2));
+my $after_alarm=time;
 ok($r->{id},'set returns stable reminder ID');
 is($r->{channel},'#second','uses originating channel, not default');
-cmp_ok(abs($r->{due_at}-time()-10),'<=',1,'minimum delay normalized');
+cmp_ok($r->{due_at},'>=',$before_alarm+10,'minimum delay is not shortened');
+cmp_ok($r->{due_at},'<=',$after_alarm+10,'minimum delay uses the creation clock');
 my $list=decode_json(call('list_alarms'));
 is($list->[0]{reason},'tea','trimmed reason persisted');
 is(decode_json(call('set_alarm',reason=>'default',delay_seconds=>'oops'))->{state},'armed','legacy invalid delay uses default');

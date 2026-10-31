@@ -7,12 +7,14 @@ from trial_support import Snapshot
 
 
 class ScoringTests(unittest.TestCase):
-    def test_experiment_request_uses_action_bound_capability_envelope(self):
+    def test_experiment_request_uses_structured_proxy_envelope(self):
         task = {'branch':'burt/dictionary', 'project':'dictionary', 'files':{'main.py':'pass\n'}}
         request = req(task, task['files'], 'f'*32)
         self.assertEqual(request['action'], 'repo_run')
-        self.assertEqual(request['capability'], 'edit_test')
-        self.assertEqual(request, Broker.capability_envelope('repo_run', 'a'*64, '#ai', 'irc.perl.org') | {
+        self.assertEqual(request['requester'], 'experiment')
+        self.assertNotIn('capability', request)
+        self.assertNotIn('grant', request)
+        self.assertEqual(request, {'scope':'a'*64, 'requester':'experiment', 'channel':'#ai', 'network':'irc.perl.org',
             'action':'repo_run', 'snapshot_id':'f'*32, 'changes':{}, 'delete':[],
             'argv':['/bin/sh','-c','true'], 'title':'control'})
 
@@ -38,8 +40,8 @@ class ScoringTests(unittest.TestCase):
             broker = TrialBroker(base, task, time.time()+30)
             self.addCleanup(broker.db.close)
             broker.execute = lambda job: {'reason':'exited', 'exit_code':0, 'output':''}
-            snapshot = broker.handle(Broker.capability_envelope('repo_read', 'a'*64, '#ai', 'irc.perl.org') |
-                                     {'action':'repo_read', 'branch':task['branch'], 'project':task['project']})
+            snapshot = broker.handle({'scope':'a'*64, 'requester':'experiment', 'channel':'#ai', 'network':'irc.perl.org',
+                                     'action':'repo_read', 'branch':task['branch'], 'project':task['project']})
             job = broker.handle(req(task, {'main.py':'changed\n'}, snapshot['snapshot_id']))
             self.assertEqual(job['state'], 'passed')
             for attempt in range(1, 5):
