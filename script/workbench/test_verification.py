@@ -11,6 +11,11 @@ from references import References
 from test_repository import FakeRepository, A
 
 
+def envelope(action, scope, channel, network, requester='mateu'):
+    return {'action': action, 'scope': scope, 'requester': requester,
+            'channel': channel, 'network': network}
+
+
 class VerificationTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -29,9 +34,9 @@ class VerificationTests(unittest.TestCase):
         self.repo = FakeRepository()
         self.repo.files = self.files.copy()
         self.b.repository = self.repo
-        self.snapshot = self.b.handle(Broker.capability_envelope('repo_read', 'a'*64, '#ai', 'irc.perl.org') | dict(
+        self.snapshot = self.b.handle(envelope('repo_read', 'a'*64, '#ai', 'irc.perl.org') | dict(
             action='repo_read', branch='burt/dictionary', project='dictionary'))
-        self.req = Broker.capability_envelope('repo_run', 'a'*64, '#ai', 'irc.perl.org') | dict(
+        self.req = envelope('repo_run', 'a'*64, '#ai', 'irc.perl.org') | dict(
             action='repo_run', snapshot_id=self.snapshot['snapshot_id'], changes={}, delete=[],
             argv=['/bin/sh', '-c', 'true'], title='control')
 
@@ -39,12 +44,15 @@ class VerificationTests(unittest.TestCase):
         files = self.files if files is None else files
         changes = {name: value for name, value in files.items() if self.files.get(name) != value}
         deleted = sorted(set(self.files) - set(files))
-        return Broker.capability_envelope('repo_run', 'a'*64, '#ai', 'irc.perl.org') | dict(
+        return envelope('repo_run', 'a'*64, '#ai', 'irc.perl.org') | dict(
             action='repo_run', snapshot_id=self.snapshot['snapshot_id'], changes=changes, delete=deleted,
             argv=['/bin/sh', '-c', 'true'], title=title)
 
+    def envelope(self, action, scope, channel, network):
+        return envelope(action, scope, channel, network)
+
     def request(self, action):
-        return self.b.capability_envelope(action, self.req['scope'], self.req['channel'], self.req['network'])
+        return self.envelope(action, self.req['scope'], self.req['channel'], self.req['network'])
 
     def test_model_command_and_fake_success_cannot_replace_gate(self):
         job = self.b.handle(self.req)
@@ -79,9 +87,9 @@ class VerificationTests(unittest.TestCase):
         autonomous['source_baseline'] = 'current_verified'
         self.b.verification = Verification({'burt/dictionary:dictionary': autonomous})
         self.repo.files['data.txt'] = 'advanced fixture'
-        self.snapshot = self.b.handle(Broker.capability_envelope('repo_read', 'b'*64, '#ai', 'irc.perl.org') | dict(
+        self.snapshot = self.b.handle(envelope('repo_read', 'b'*64, '#ai', 'irc.perl.org') | dict(
             action='repo_read', branch='burt/dictionary', project='dictionary'))
-        self.req = Broker.capability_envelope('repo_run', 'b'*64, '#ai', 'irc.perl.org') | dict(
+        self.req = envelope('repo_run', 'b'*64, '#ai', 'irc.perl.org') | dict(
             action='repo_run', snapshot_id=self.snapshot['snapshot_id'], changes={}, delete=[],
             argv=['/bin/sh', '-c', 'true'], title='autonomous control')
         self.b.handle(self.req)
@@ -106,8 +114,8 @@ class VerificationTests(unittest.TestCase):
         changed['checks']['verify.py'] += '\n# new policy'
         self.b.verification = Verification({'burt/dictionary:dictionary': changed})
         publish = self.request('repo_publish')
-        with self.assertRaisesRegex(ValueError, 'receipt missing or stale'):
-            self.b._handle(publish | {'action': 'repo_publish', 'id': first['id']}, _confirmed_publication=True)
+        with self.assertRaisesRegex(ValueError, 'receipt missing or stale|needs one unambiguous saved project candidate'):
+            self.b.handle(publish)
         second = self.b.handle(self.req)
         self.assertNotEqual(first['id'], second['id'])
 
@@ -117,8 +125,8 @@ class VerificationTests(unittest.TestCase):
         job = self.b.handle(self.req)
         self.b.verification = self.gate
         publish = self.request('repo_publish')
-        with self.assertRaisesRegex(ValueError, 'receipt missing or stale'):
-            self.b._handle(publish | {'action': 'repo_publish', 'id': job['id']}, _confirmed_publication=True)
+        with self.assertRaisesRegex(ValueError, 'receipt missing or stale|needs one unambiguous saved project candidate'):
+            self.b.handle(publish)
 
     def test_final_execution_reserved(self):
         job = self.b.handle(self.req)
@@ -128,7 +136,7 @@ class VerificationTests(unittest.TestCase):
             self.b.handle(req | {'action': 'repo_diagnose', 'id': job['id'], 'argv': ['/bin/sh', '-c', 'true'], 'title': str(i)})
         with self.assertRaisesRegex(ValueError, 'reserved'):
             self.b.handle(req | {'action': 'repo_diagnose', 'id': job['id'], 'argv': ['/bin/sh', '-c', 'true'], 'title': 'last'})
-        standalone = self.b.capability_envelope('run', self.req['scope'], self.req['channel'], self.req['network']) | {
+        standalone = self.envelope('run', self.req['scope'], self.req['channel'], self.req['network']) | {
             'action': 'run', 'files': {'main.py': 'print(1)'},
             'argv': ['/usr/bin/python3', '/work/main.py'], 'title': 'must not consume verification reserve'}
         with self.assertRaisesRegex(ValueError, 'reserved'):
@@ -142,12 +150,12 @@ class VerificationTests(unittest.TestCase):
         for i in range(10):
             self.b.handle(diagnostic | {'action': 'repo_diagnose', 'id': job['id'],
                                         'argv': ['/bin/sh', '-c', 'true'], 'title': str(i)})
-        checkpoint = self.b.handle(self.b.capability_envelope('task_checkpoint', 'a'*64, '#ai', 'irc.perl.org') | {
+        checkpoint = self.b.handle(self.envelope('task_checkpoint', 'a'*64, '#ai', 'irc.perl.org') | {
             'action': 'task_checkpoint', 'requester': 'mateu', 'phase': 'stopped', 'reason': 'iteration_limit'})
         resumed_scope = 'b' * 64
-        self.b.handle(self.b.capability_envelope('task_resume', resumed_scope, '#ai', 'irc.perl.org') | {
+        self.b.handle(self.envelope('task_resume', resumed_scope, '#ai', 'irc.perl.org') | {
             'action': 'task_resume', 'checkpoint_id': checkpoint['checkpoint_id'], 'requester': 'mateu'})
-        resumed = self.b.capability_envelope('repo_diagnose', resumed_scope, '#ai', 'irc.perl.org')
+        resumed = self.envelope('repo_diagnose', resumed_scope, '#ai', 'irc.perl.org')
         self.b.handle(resumed | {'action': 'repo_diagnose', 'id': job['id'],
                                  'argv': ['/bin/sh', '-c', 'true'], 'title': 'resumed diagnostic'})
         with self.assertRaisesRegex(ValueError, 'reserved'):

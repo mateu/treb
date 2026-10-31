@@ -1,7 +1,6 @@
 #!/usr/bin/python3
 """Narrow local IPC: run immutable text inputs; publish only successful bundles."""
 import hashlib
-import hmac
 import json
 import math
 import os
@@ -31,28 +30,12 @@ TERMINAL_REPORT_RESERVE = 1
 # Operator-only audit: fixed strings, never arbitrary exception/source text.
 AUDIT_LIMIT = 512
 AUDIT_TTL = 7 * 86400
-PROPOSAL_TTL = 300
 SNAPSHOT_TTL = 300
 REJECTION_SCHEMA_VERSION = 1
 REPEAT_REJECTION_LIMIT = 3
 ACTIONS = frozenset(('run', 'publish', 'repo_read', 'repo_run', 'repo_publish',
                      'repo_inspect', 'job_inspect', 'repo_repair', 'repo_diagnose', 'reference', 'task_status',
-                     'task_progress', 'task_checkpoint', 'checkpoint_status', 'task_resume',
-                     'proposal_create', 'proposal_confirm'))
-ACTION_CAPABILITY = {
-    'reference': 'read_status', 'repo_read': 'read_status', 'repo_inspect': 'read_status', 'job_inspect': 'read_status',
-    'run': 'edit_test', 'repo_run': 'edit_test', 'repo_repair': 'edit_test',
-    'repo_diagnose': 'edit_test', 'task_status': 'edit_test', 'task_progress': 'edit_test',
-    'task_checkpoint': 'edit_test', 'checkpoint_status': 'read_status', 'task_resume': 'edit_test',
-    'publish': 'publish_gist', 'repo_publish': 'publish_repo',
-    'proposal_confirm': 'read_status',
-}
-PROPOSAL_FIELDS = {
-    'reference': frozenset(('key',)),
-    'repo_read': frozenset(('branch', 'project')),
-    'publish': frozenset(('id',)),
-    'repo_publish': frozenset(('id',)),
-}
+                     'task_progress', 'task_checkpoint', 'checkpoint_status', 'task_resume'))
 # `irc_fold` on the Perl side emits the rfc1459 canonical alphabet. Do not
 # require an alphanumeric first character: IRC permits a leading special.
 REQUESTER_IDENTITY = re.compile(r'[a-z0-9_{}|~][a-z0-9_{}|~\-]{0,63}')
@@ -148,6 +131,11 @@ class Broker:
             (seq INTEGER PRIMARY KEY, created REAL, scope TEXT, channel TEXT,
              network TEXT, action TEXT, request_sha256 TEXT, reason TEXT, error_kind TEXT,
              code TEXT, schema_version INTEGER)''')
+        # Bounded operator-only dispatch ledger: provenance and action only.
+        # It intentionally never stores source, tool args, output, or secrets.
+        self.db.execute('''CREATE TABLE IF NOT EXISTS dispatches
+            (seq INTEGER PRIMARY KEY, created REAL, scope TEXT, requester TEXT,
+             channel TEXT, network TEXT, action TEXT)''')
         for column, definition in (('code', 'TEXT'), ('schema_version', 'INTEGER')):
             try: self.db.execute(f'ALTER TABLE rejections ADD COLUMN {column} {definition}')
             except sqlite3.OperationalError: pass
@@ -191,11 +179,6 @@ class Broker:
              model_iterations INTEGER NOT NULL, sandbox_attempts INTEGER NOT NULL, public_writes INTEGER NOT NULL,
              progress_notices INTEGER NOT NULL, terminal_reports INTEGER NOT NULL,
              terminal_reason TEXT, updated REAL NOT NULL)''')
-        self.db.execute('''CREATE TABLE IF NOT EXISTS proposals
-            (id TEXT PRIMARY KEY, scope TEXT NOT NULL, requester TEXT NOT NULL,
-             channel TEXT NOT NULL, network TEXT NOT NULL, action TEXT NOT NULL,
-             params TEXT NOT NULL, created REAL NOT NULL, expires REAL NOT NULL,
-             state TEXT NOT NULL)''')
         self.db.execute('''CREATE TABLE IF NOT EXISTS repo_snapshots
             (id TEXT PRIMARY KEY, scope TEXT NOT NULL, channel TEXT NOT NULL,
              network TEXT NOT NULL, snapshot TEXT NOT NULL, created REAL NOT NULL,
@@ -234,6 +217,9 @@ class Broker:
         self.db.execute('DELETE FROM rejections WHERE created<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM rejections WHERE seq NOT IN '
                         '(SELECT seq FROM rejections ORDER BY seq DESC LIMIT ?)', (AUDIT_LIMIT,))
+        self.db.execute('DELETE FROM dispatches WHERE created<?', (now - AUDIT_TTL,))
+        self.db.execute('DELETE FROM dispatches WHERE seq NOT IN '
+                        '(SELECT seq FROM dispatches ORDER BY seq DESC LIMIT ?)', (AUDIT_LIMIT,))
         self.db.execute('DELETE FROM task_status WHERE updated<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM task_status WHERE scope NOT IN '
                         '(SELECT scope FROM task_status ORDER BY updated DESC LIMIT ?)', (AUDIT_LIMIT,))
@@ -257,14 +243,6 @@ class Broker:
         self.db.execute('DELETE FROM resource_checkpoints WHERE created<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM resource_checkpoints WHERE id NOT IN '
                         '(SELECT id FROM resource_checkpoints ORDER BY created DESC,id DESC LIMIT ?)', (AUDIT_LIMIT,))
-        expired_proposals = self.db.execute(
-            'SELECT id,scope,channel,network FROM proposals WHERE state="proposed" AND expires<=?', (now,)).fetchall()
-        self.db.execute('UPDATE proposals SET state="expired" WHERE state="proposed" AND expires<=?', (now,))
-        for row in expired_proposals:
-            self.resource_checkpoint('proposal', row['id'], dict(row), 'expired', now)
-        self.db.execute('DELETE FROM proposals WHERE created<?', (now - AUDIT_TTL,))
-        self.db.execute('DELETE FROM proposals WHERE id NOT IN '
-                        '(SELECT id FROM proposals ORDER BY created DESC LIMIT ?)', (AUDIT_LIMIT,))
         expired_snapshots = self.db.execute(
             'SELECT id,scope,channel,network FROM repo_snapshots WHERE state="active" AND expires<=?', (now,)).fetchall()
         self.db.execute('UPDATE repo_snapshots SET state="expired" WHERE state="active" AND expires<=?', (now,))
@@ -392,20 +370,12 @@ class Broker:
                 'reconciliation': 'required' if uncertain else None,
                 'repeat_count': min(repeated, REPEAT_REJECTION_LIMIT)}
 
-    @staticmethod
-    def capability_envelope(action, scope, channel, network):
-        capability = ACTION_CAPABILITY[action]
-        grant = hashlib.sha256(json.dumps(
-            [scope, channel, network, capability], separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
-        return {'scope': scope, 'capability': capability, 'grant': grant,
-                'channel': channel, 'network': network}
-
     def task_binding(self, scope):
         row = self.db.execute('SELECT * FROM task_scopes WHERE scope=?', (scope,)).fetchone()
         return row or {'scope': scope, 'task_id': scope}
 
     def resource_scope_authorized(self, req, resource_scope, resource_channel, resource_network):
-        """Authorize resources by durable task identity, never by grant reuse."""
+        """Authorize resources by durable task identity, never by caller replay."""
         if resource_channel != req['channel'] or resource_network != req['network']:
             return False
         # Keep same-scope legacy rows usable before their first checkpoint.
@@ -738,11 +708,11 @@ class Broker:
             exc.rejection = self.record_rejection(req, exc)
             raise
 
-    def _handle(self, req, _diagnostic=False, _saved_snapshot=False, _confirmed_publication=False):
+    def _handle(self, req, _diagnostic=False, _saved_snapshot=False):
         if not isinstance(req, dict):
             raise ValueError('object required')
         action = req.get('action')
-        allowed = {'action', 'scope', 'capability', 'grant', 'channel', 'network'}
+        allowed = {'action', 'scope', 'requester', 'channel', 'network'}
         fields = {'run': {'files','argv','title'}, 'publish': {'id'},
                   'repo_read': {'branch','project'},
                   'repo_run': {'snapshot_id','changes','delete','argv','title'},
@@ -758,50 +728,28 @@ class Broker:
         fields['checkpoint_status'] = {'checkpoint_id', 'requester'}
         fields['task_resume'] = {'checkpoint_id', 'requester'}
         optional_fields['task_resume'] = {'deadline'}
-        fields['proposal_create'] = {'proposal_action', 'params', 'requester'}
-        fields['proposal_confirm'] = {'requester', 'confirmed_at', 'publication_confirmation'}
         allowed |= fields.get(action, set()) | optional_fields.get(action, set())
-        if action == 'proposal_confirm':
-            required = {'action', 'scope', 'capability', 'grant', 'channel', 'network', 'requester', 'confirmed_at'}
-            if not required <= set(req) or set(req) - allowed:
-                raise ValueError('invalid action or fields')
-        elif (action not in fields or not {'action', 'scope', 'capability', 'grant', 'channel', 'network'} <= set(req)
+        if (action not in fields or not {'action', 'scope', 'requester', 'channel', 'network'} <= set(req)
               or not fields[action] <= set(req) or set(req) - allowed):
             raise ValueError('invalid action or fields')
-        if action == 'repo_publish' and not _confirmed_publication and 'id' in req:
+        if action == 'repo_publish' and 'id' in req:
             raise ValueError('direct repository publication selects its job from trusted task evidence')
         if req['channel'] not in ('#ai', '#mateu-test') or req['network'] != 'irc.perl.org':
             raise ValueError('workbench is restricted to irc.perl.org #ai or #mateu-test')
         scope = req['scope']
         if not isinstance(scope, str) or not re.fullmatch(r'[a-f0-9]{64}', scope):
             raise ValueError('invalid turn scope')
-        capability = req['capability']
-        expected_capability = (ACTION_CAPABILITY.get(req.get('proposal_action'))
-                               if action == 'proposal_create' else ACTION_CAPABILITY.get(action))
-        if expected_capability is None:
-            raise ValueError('invalid action or fields')
-        # A bounded project read is a prerequisite for an edit-authorized
-        # repository test. It remains read-only but shares the edit scope.
-        if (action == 'repo_read' or (action == 'proposal_create'
-                                      and req.get('proposal_action') == 'repo_read')) \
-                and capability in ('read_status', 'edit_test'):
-            expected_capability = capability
-        expected_grant = hashlib.sha256(json.dumps(
-            [scope, req['channel'], req['network'], expected_capability],
-            separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
-        if (capability != expected_capability or not isinstance(req['grant'], str)
-                or not hmac.compare_digest(req['grant'], expected_grant)):
-            raise ValueError('invalid capability grant')
+        requester = req['requester']
+        if not isinstance(requester, str) or not REQUESTER_IDENTITY.fullmatch(requester):
+            raise ValueError('invalid requester identity')
+        self.db.execute('INSERT INTO dispatches (created,scope,requester,channel,network,action) VALUES (?,?,?,?,?,?)',
+                        (time.time(), scope, requester, req['channel'], req['network'], action))
         # Every operation in an admitted task observes the same durable
         # deadline/terminal state before dispatch. Read/status-like operations
         # spend nothing and remain available for truthful recovery inspection.
         binding = self.task_binding(scope)
         if self.db.execute('SELECT 1 FROM task_phase_budgets WHERE task_id=?', (binding['task_id'],)).fetchone():
             self.admit_transition(binding['task_id'], 'status')
-        if action == 'proposal_create':
-            return self.create_proposal(req)
-        if action == 'proposal_confirm':
-            return self.confirm_proposal(req)
         if action in ('task_checkpoint', 'checkpoint_status', 'task_resume'):
             requester = req['requester']
             if not isinstance(requester, str) or not REQUESTER_IDENTITY.fullmatch(requester):
@@ -817,7 +765,7 @@ class Broker:
                 if action == 'checkpoint_status':
                     return self.checkpoint_summary(checkpoint)
                 # A resume always derives authority from this new envelope. Old
-                # grants are not accepted, and an ambiguous public write is an
+                # old envelopes are not accepted, and an ambiguous public write is an
                 # absorbing terminal state until an operator reconciles it.
                 if req['scope'] == checkpoint['scope']:
                     raise ValueError('resume requires a fresh task scope')
@@ -929,8 +877,7 @@ class Broker:
                 # publish, even if its command exits zero.
                 source = self.load_snapshot(req, destination['snapshot_id'], require_active=False)
                 changes, deleted = self.candidate_delta(source['files'], json.loads(job['files']))
-                return Broker._handle(self, self.capability_envelope('repo_run', req['scope'], req['channel'], req['network'])
-                                     | {k: req[k] for k in ('argv','title')}
+                return Broker._handle(self, {k: req[k] for k in ('scope','requester','channel','network','argv','title')}
                                      | {'action':'repo_run', 'snapshot_id':source['snapshot_id'],
                                         'changes':changes, 'delete':deleted},
                                      _diagnostic=True, _saved_snapshot=True)
@@ -938,8 +885,7 @@ class Broker:
             source = self.load_snapshot(req, destination['snapshot_id'], require_active=False)
             changes, deleted = self.candidate_delta(source['files'], files)
             # Re-enter the ordinary run path through the same snapshot materializer.
-            return self._handle(self.capability_envelope('repo_run', req['scope'], req['channel'], req['network'])
-                               | {k: req[k] for k in ('argv','title')}
+            return self._handle({k: req[k] for k in ('scope','requester','channel','network','argv','title')}
                                | {'action': 'repo_run', 'snapshot_id': source['snapshot_id'],
                                   'changes': changes, 'delete': deleted}, _saved_snapshot=True)
         destination = None
@@ -1042,7 +988,7 @@ class Broker:
             self.resource_checkpoint('job', job_id, req, state)
             self.db.commit()
             return self.result(self.db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())
-        if action == 'repo_publish' and not _confirmed_publication:
+        if action == 'repo_publish':
             job = self.direct_repository_publication_job(req)
         else:
             job_id = req['id']
@@ -1065,8 +1011,7 @@ class Broker:
             destination = json.loads(repo_job['destination'])
             if destination.get('diagnostic_only'):
                 raise ValueError('diagnostic jobs cannot be published; rerun the complete project suite')
-            return self.publish_repository(req, job, destination,
-                                           allow_after_final_report=_confirmed_publication or action == 'repo_publish')
+            return self.publish_repository(req, job, destination, allow_after_final_report=True)
         if not self.token.is_file():
             raise ValueError('Burt gist credential is not installed; ask the operator')
         if self.token.stat().st_mode & 0o077:
@@ -1075,8 +1020,7 @@ class Broker:
         if self.publication_attempt_count() >= 10:
             raise ValueError('global limit: 10 gist submissions per day')
         task_id = self.task_binding(scope)['task_id']
-        self.admit_transition(task_id, 'public_write', limit_message='limit: one gist submission per IRC request',
-                              allow_after_final_report=_confirmed_publication)
+        self.admit_transition(task_id, 'public_write', limit_message='limit: one gist submission per IRC request')
         self.consume_task_publication(task_id, time.time())
         self.record_publication_attempt(job_id)
         self.db.execute("UPDATE jobs SET state='publishing' WHERE id=?", (job_id,))
@@ -1156,94 +1100,6 @@ class Broker:
         if data.get('owner', {}).get('login') != 'burt-agent' or not re.fullmatch(r'https://gist.github.com/burt-agent/[a-f0-9]+', url):
             raise ValueError('unexpected gist owner or URL')
         return url
-
-    def create_proposal(self, req):
-        action, params, requester = req['proposal_action'], req['params'], req['requester']
-        if action not in PROPOSAL_FIELDS or not isinstance(params, dict):
-            raise ValueError('invalid action or fields')
-        if set(params) != PROPOSAL_FIELDS[action]:
-            raise ValueError('invalid action or fields')
-        if not isinstance(requester, str) or not REQUESTER_IDENTITY.fullmatch(requester):
-            raise ValueError('invalid requester identity')
-        if action == 'reference':
-            if not isinstance(params['key'], str) or params['key'] not in CATALOG:
-                raise ValueError('unknown reference; available: ' + ', '.join(CATALOG))
-        elif action == 'repo_read':
-            validate_destination(params['branch'], params['project'])
-        else:
-            job_id = params['id']
-            if not isinstance(job_id, str) or not re.fullmatch(r'[a-f0-9]{32}', job_id):
-                raise ValueError('invalid job id')
-            job = self.load_job(req, job_id, 'proposal action is not available for this request')
-            repo_job = self.db.execute('SELECT id FROM repo_jobs WHERE id=?', (job_id,)).fetchone()
-            if not job or job['state'] != 'passed' or bool(repo_job) != (action == 'repo_publish'):
-                raise ValueError('proposal action is not available for this request')
-        canonical = json.dumps(params, sort_keys=True, separators=(',', ':'), ensure_ascii=True)
-        if len(canonical.encode()) > MAX_REQUEST:
-            raise ValueError('encoded project response exceeds transport bound')
-        now = time.time()
-        existing = self.db.execute(
-            'SELECT id,expires FROM proposals WHERE scope=? AND requester=? AND channel=? AND network=? '
-            'AND action=? AND params=? AND state="proposed" AND expires>? ORDER BY created,id',
-            (req['scope'], requester, req['channel'], req['network'], action, canonical, now)).fetchall()
-        if len(existing) == 1:
-            self.db.commit()
-            return {'proposal_id': existing[0]['id'], 'state': 'proposed', 'action': action,
-                    'expires_at': existing[0]['expires']}
-        proposal_id = uuid.uuid4().hex
-        self.db.execute('INSERT INTO proposals VALUES (?,?,?,?,?,?,?,?,?,?)',
-                        (proposal_id, req['scope'], requester, req['channel'], req['network'],
-                         action, canonical, now, now + PROPOSAL_TTL, 'proposed'))
-        self.resource_checkpoint('proposal', proposal_id, req, 'proposed', now)
-        self.prune_audit()
-        self.db.commit()
-        return {'proposal_id': proposal_id, 'state': 'proposed', 'action': action,
-                'expires_at': now + PROPOSAL_TTL}
-
-    def confirm_proposal(self, req):
-        requester = req['requester']
-        if not isinstance(requester, str) or not REQUESTER_IDENTITY.fullmatch(requester):
-            raise ValueError('invalid requester identity')
-        confirmed_at = req['confirmed_at']
-        if (isinstance(confirmed_at, bool) or not isinstance(confirmed_at, (int, float))
-                or not math.isfinite(confirmed_at)):
-            raise ValueError('invalid confirmation timestamp')
-        self.prune_audit()
-        now = time.time()
-        rows = self.db.execute('SELECT * FROM proposals WHERE requester=? AND channel=? AND network=? '
-                               'AND state="proposed" AND expires>? AND created<? ORDER BY created,id',
-                               (requester, req['channel'], req['network'], now, confirmed_at)).fetchall()
-        if len(rows) != 1:
-            self.db.commit()
-            raise ValueError('proposal confirmation is missing or ambiguous')
-        proposal = rows[0]
-        if proposal['scope'] == req['scope']:
-            self.db.commit()
-            raise ValueError('proposal confirmation requires a later fresh request')
-        action = proposal['action']
-        # For publication the durable proposal, created only after the broker
-        # verified a real passed job, is the authority anchor. Its immutable
-        # params bind this later natural-language approval to that exact job
-        # and fixed destination. The fresh reply must still explicitly express
-        # publication intent: “read it” can approve a read, never a public write.
-        if action in ('publish', 'repo_publish') and req.get('publication_confirmation') is not True:
-            self.db.commit()
-            raise ValueError('confirmation requires explicit publication intent')
-        changed = self.db.execute('UPDATE proposals SET state="consumed" WHERE id=? AND state="proposed"',
-                                  (proposal['id'],)).rowcount
-        if changed == 1:
-            self.resource_checkpoint('proposal', proposal['id'], req, 'consumed')
-        if changed != 1:
-            self.db.commit()
-            raise ValueError('proposal confirmation is missing or ambiguous')
-        self.db.commit()
-        params = json.loads(proposal['params'])
-        internal = (self.capability_envelope(action, proposal['scope'], proposal['channel'], proposal['network'])
-                    | params | {'action': action})
-        result = self._handle(internal, _confirmed_publication=action in ('publish', 'repo_publish'))
-        result['proposal_id'] = proposal['id']
-        result['confirmed_action'] = action
-        return result
 
     def result(self, job):
         verdict = self.execution_verdict(job)

@@ -102,30 +102,42 @@ class RepositoryBrokerTests(unittest.TestCase):
     def setUp(self):
         test_broker.BrokerTests.setUp(self)
         self.repo=FakeRepository();self.b.repository=self.repo
-        snapshot=self.b.handle(self.b.capability_envelope('repo_read', self.req['scope'], self.req['channel'], self.req['network']) | dict(action='repo_read',branch='burt/dictionary',project='dictionary'))
+        snapshot=self.b.handle(self.envelope('repo_read', self.req['scope'], self.req['channel'], self.req['network']) | dict(action='repo_read',branch='burt/dictionary',project='dictionary'))
         self.repo_req={k:v for k,v in self.req.items() if k not in ('files','argv','title')}|dict(
                   action='repo_run',snapshot_id=snapshot['snapshot_id'],
                   changes={'lib/main.py':'print(42)','t/test.py':'assert 42==42'},delete=[],
                   argv=['/bin/sh','-c','true'],title='repository test')
 
+    def envelope(self, action, scope=None, channel=None, network=None, requester='mateu'):
+        return {'action': action, 'scope': scope or self.req['scope'], 'requester': requester,
+                'channel': channel or self.req['channel'], 'network': network or self.req['network']}
+
     def request(self, action):
-        return self.b.capability_envelope(action, self.req['scope'], self.req['channel'], self.req['network'])
+        return self.envelope(action)
 
     def checkpoint(self, scope=None, requester='mateu'):
         scope = scope or self.req['scope']
-        return self.b.handle(self.b.capability_envelope('task_checkpoint', scope, '#ai', 'irc.perl.org')
+        return self.b.handle(self.envelope('task_checkpoint', scope, '#ai', 'irc.perl.org')
                              | {'action': 'task_checkpoint', 'requester': requester,
                                 'phase': 'stopped', 'reason': 'iteration_limit'})
 
     def repo_publish(self, job):
-        # Existing explicit-job cases exercise the broker's durable-offer path.
-        return self.b._handle(self.b.capability_envelope('repo_publish', self.req['scope'], self.req['channel'], self.req['network'])|{'action':'repo_publish','id':job['id']}, _confirmed_publication=True)
+        request = self.envelope('repo_publish', self.req['scope'], self.req['channel'], self.req['network'])
+        self.b.db.execute('INSERT OR IGNORE INTO task_scopes VALUES (?,?,?,?,?,?)',
+                          (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))
+        row = self.b.db.execute('SELECT destination FROM repo_jobs WHERE id=?', (job['id'],)).fetchone()
+        if not row:
+            return self.b.handle(request)
+        destination = json.loads(row['destination'])
+        self.b.remember_repository_candidate(request, job['id'], destination)
+        self.b.db.commit()
+        return self.b.handle(request)
 
     def direct_repo_publish(self, scope='b' * 64):
-        return self.b.handle(self.b.capability_envelope('repo_publish', scope, self.req['channel'], self.req['network'])
+        return self.b.handle(self.envelope('repo_publish', scope, self.req['channel'], self.req['network'])
                              | {'action':'repo_publish', 'requester':'mateu'})
 
-    def test_exact_transcript_crosses_runtime_grant_to_broker_fake_publication_boundary(self):
+    def test_exact_transcript_crosses_runtime_proxy_to_broker_fake_publication_boundary(self):
         # The Perl runtime is the producer.  Capture its actual no-ID envelope,
         # then feed it to the Python broker with a fake repository write edge.
         self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
@@ -153,14 +165,16 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
                                   text=True, capture_output=True)
         self.assertEqual(produced.returncode, 0, produced.stderr)
         envelope = json.loads(produced.stdout)
-        self.assertEqual(envelope['capability'], 'publish_repo')
+        self.assertEqual(envelope['action'], 'repo_publish')
+        self.assertNotIn('capability', envelope)
+        self.assertNotIn('grant', envelope)
         self.assertNotIn('id', envelope)
         self.assertNotIn('destination', envelope)
         published = self.b.handle(envelope)
         self.assertEqual((published['id'], published['state']), (job['id'], 'published'))
         self.assertEqual(len([1 for _, payload, _ in self.repo.calls if payload is not None]), 3)
         with self.assertRaisesRegex(ValueError, 'selects its job'):
-            self.b.handle(self.b.capability_envelope('repo_publish', 'c' * 64, '#ai', 'irc.perl.org')
+            self.b.handle(self.envelope('repo_publish', 'c' * 64, '#ai', 'irc.perl.org')
                           | {'action':'repo_publish', 'requester':'mateu', 'id':job['id']})
 
     def test_direct_publish_binds_prior_candidate_then_revalidates_before_fake_write(self):
@@ -266,7 +280,7 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
                           (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))
         self.b.db.commit()
         self.repo.files = {'lib/query.py':'def parse(query): return query'}
-        snapshot = self.b.handle(self.b.capability_envelope('repo_read', self.req['scope'], '#ai', 'irc.perl.org') | {
+        snapshot = self.b.handle(self.envelope('repo_read', self.req['scope'], '#ai', 'irc.perl.org') | {
             'action':'repo_read', 'branch':'burt/dictionary', 'project':'dictionary'})
         changed_req = self.repo_req | {'snapshot_id': snapshot['snapshot_id']}
         changed = self.b.handle(changed_req | {
@@ -285,7 +299,7 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
                           (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))
         self.b.db.commit()
         first = self.b.handle(self.repo_req | {'changes': {'lib/main.py':'print("old")'}})
-        snapshot = self.b.handle(self.b.capability_envelope('repo_read', self.req['scope'], '#ai', 'irc.perl.org') | {
+        snapshot = self.b.handle(self.envelope('repo_read', self.req['scope'], '#ai', 'irc.perl.org') | {
             'action':'repo_read', 'branch':'burt/dictionary', 'project':'dictionary'})
         second = self.b.handle(self.repo_req | {'snapshot_id':snapshot['snapshot_id'],
                                                 'changes': {'lib/main.py':'print("new")'}})
@@ -298,7 +312,7 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
                           (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))
         self.b.db.commit()
         self.b.handle(self.repo_req | {'changes': {'lib/main.py':'print("old")'}})
-        snapshot = self.b.handle(self.b.capability_envelope('repo_read', self.req['scope'], '#ai', 'irc.perl.org') | {
+        snapshot = self.b.handle(self.envelope('repo_read', self.req['scope'], '#ai', 'irc.perl.org') | {
             'action':'repo_read', 'branch':'burt/dictionary', 'project':'dictionary'})
         newest = self.b.handle(self.repo_req | {'snapshot_id':snapshot['snapshot_id'],
                                                 'changes': {'lib/main.py':'print("new")'}})
@@ -307,12 +321,12 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
                           (other_scope, other_scope, 'mateu', '#ai', 'irc.perl.org', time.time()))
         self.b.db.commit()
-        other_snapshot = self.b.handle(self.b.capability_envelope('repo_read', other_scope, '#ai', 'irc.perl.org') | {
+        other_snapshot = self.b.handle(self.envelope('repo_read', other_scope, '#ai', 'irc.perl.org') | {
             'action':'repo_read', 'branch':'burt/other-project', 'project':'other-project'})
-        pending = self.b.handle(self.b.capability_envelope('repo_run', other_scope, '#ai', 'irc.perl.org') | {
+        pending = self.b.handle(self.envelope('repo_run', other_scope, '#ai', 'irc.perl.org') | {
             'action':'repo_run', 'snapshot_id':other_snapshot['snapshot_id'], 'changes':{'lib/other.py':'print(1)'},
             'delete':[], 'argv':['/bin/sh','-c','true'], 'title':'other project candidate'})
-        selected = self.b.direct_repository_publication_job(self.b.capability_envelope(
+        selected = self.b.direct_repository_publication_job(self.envelope(
             'repo_publish', 'd' * 64, '#ai', 'irc.perl.org') | {'action':'repo_publish', 'requester':'mateu'})
         self.assertEqual(selected['id'], pending['id'])
 
@@ -325,14 +339,14 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
                           (later_scope, later_scope, 'mateu', '#ai', 'irc.perl.org', time.time()))
         self.b.db.commit()
-        snapshot = self.b.handle(self.b.capability_envelope('repo_read', later_scope, '#ai', 'irc.perl.org') | {
+        snapshot = self.b.handle(self.envelope('repo_read', later_scope, '#ai', 'irc.perl.org') | {
             'action':'repo_read', 'branch':'burt/dictionary', 'project':'dictionary'})
-        newest = self.b.handle(self.b.capability_envelope('repo_run', later_scope, '#ai', 'irc.perl.org') | {
+        newest = self.b.handle(self.envelope('repo_run', later_scope, '#ai', 'irc.perl.org') | {
             'action':'repo_run', 'snapshot_id':snapshot['snapshot_id'], 'changes':{'lib/main.py':'print("new")'},
             'delete':[], 'argv':['/bin/sh','-c','true'], 'title':'newest candidate'})
         self.b.db.execute('UPDATE jobs SET state="uncertain" WHERE id=?', (newest['id'],))
         self.b.db.commit()
-        request = self.b.capability_envelope('repo_publish', 'd' * 64, '#ai', 'irc.perl.org') | {
+        request = self.envelope('repo_publish', 'd' * 64, '#ai', 'irc.perl.org') | {
             'action':'repo_publish', 'requester':'mateu'}
         with self.assertRaisesRegex(ValueError, 'operator reconciliation'):
             self.b.direct_repository_publication_job(request)
@@ -358,13 +372,13 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
                           (other_scope, other_scope, 'mateu', '#ai', 'irc.perl.org', time.time()))
         self.b.db.commit()
-        snapshot = self.b.handle(self.b.capability_envelope('repo_read', other_scope, '#ai', 'irc.perl.org') | {
+        snapshot = self.b.handle(self.envelope('repo_read', other_scope, '#ai', 'irc.perl.org') | {
             'action':'repo_read', 'branch':'burt/other-project', 'project':'other-project'})
-        self.b.handle(self.b.capability_envelope('repo_run', other_scope, '#ai', 'irc.perl.org') | {
+        self.b.handle(self.envelope('repo_run', other_scope, '#ai', 'irc.perl.org') | {
             'action':'repo_run', 'snapshot_id':snapshot['snapshot_id'],
             'changes':{'lib/other.py':'print(1)'}, 'delete':[], 'argv':['/bin/sh','-c','true'],
             'title':'other project candidate'})
-        request = self.b.capability_envelope('repo_publish', 'd' * 64, '#ai', 'irc.perl.org') | {
+        request = self.envelope('repo_publish', 'd' * 64, '#ai', 'irc.perl.org') | {
             'action':'repo_publish', 'requester':'mateu'}
         with self.assertRaisesRegex(ValueError, 'one unambiguous saved project candidate'):
             self.b.direct_repository_publication_job(request)
@@ -408,13 +422,13 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         self.b.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
                           (other_scope, other_scope, 'mateu', '#ai', 'irc.perl.org', time.time()))
         self.b.db.commit()
-        snapshot = self.b.handle(self.b.capability_envelope('repo_read', other_scope, '#ai', 'irc.perl.org') | {
+        snapshot = self.b.handle(self.envelope('repo_read', other_scope, '#ai', 'irc.perl.org') | {
             'action':'repo_read', 'branch':'burt/other-project', 'project':'other-project'})
-        pending = self.b.handle(self.b.capability_envelope('repo_run', other_scope, '#ai', 'irc.perl.org') | {
+        pending = self.b.handle(self.envelope('repo_run', other_scope, '#ai', 'irc.perl.org') | {
             'action':'repo_run', 'snapshot_id': snapshot['snapshot_id'],
             'changes': {'lib/other.py':'print(1)'}, 'delete': [], 'argv': ['/bin/sh','-c','true'],
             'title':'other project candidate'})
-        request = self.b.capability_envelope('repo_publish', 'd' * 64, '#ai', 'irc.perl.org') | {
+        request = self.envelope('repo_publish', 'd' * 64, '#ai', 'irc.perl.org') | {
             'action':'repo_publish', 'requester':'mateu'}
         selected = self.b.direct_repository_publication_job(request)
         self.assertEqual((selected['id'], selected['state']), (pending['id'], 'passed'))
@@ -424,7 +438,7 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
                           (self.req['scope'], self.req['scope'], 'mateu', '#ai', 'irc.perl.org', time.time()))
         self.b.db.commit()
         self.b.handle(self.repo_req)
-        snapshot = self.b.handle(self.b.capability_envelope('repo_read', self.req['scope'], '#ai', 'irc.perl.org') | {
+        snapshot = self.b.handle(self.envelope('repo_read', self.req['scope'], '#ai', 'irc.perl.org') | {
             'action':'repo_read', 'branch':'burt/other-project', 'project':'other-project'})
         self.b.handle(self.repo_req | {
             'snapshot_id': snapshot['snapshot_id'],
@@ -435,7 +449,7 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         self.assertFalse(any(payload is not None for _, payload, _ in self.repo.calls))
 
     def test_edit_authority_can_read_its_required_snapshot(self):
-        req=self.b.capability_envelope('repo_run', self.req['scope'], self.req['channel'], self.req['network']) | {
+        req=self.envelope('repo_run', self.req['scope'], self.req['channel'], self.req['network']) | {
             'action':'repo_read', 'branch':'burt/dictionary', 'project':'dictionary'}
         snapshot=self.b.handle(req)
         self.assertIn('snapshot_id', snapshot)
@@ -449,11 +463,12 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         # Publisher returns stored URL even after restart, without networking.
         from broker import Broker
         second=Broker(self.tmp.name,self.token);self.addCleanup(second.db.close)
-        result=second._handle(second.capability_envelope('repo_publish',self.req['scope'],self.req['channel'],self.req['network'])|{'action':'repo_publish','id':r['id']}, _confirmed_publication=True)
+        result=second.handle(self.envelope('repo_publish',self.req['scope'],self.req['channel'],self.req['network']))
         self.assertEqual(result['state'],'published')
+        second.db.close()
         self.assertEqual(self.repo_publish(r)['url'],result['url'])
         self.assertEqual(len([1 for _,p,_ in self.repo.calls if p is not None]),3)
-        gist=self.b.handle(self.b.capability_envelope('run','f'*64,self.req['channel'],self.req['network']) | {k:v for k,v in self.req.items() if k not in ('scope','capability','grant')})
+        gist=self.b.handle(self.envelope('run','f'*64,self.req['channel'],self.req['network']) | {k:v for k,v in self.req.items() if k not in ('scope',)})
         self.req['scope']='f'*64
         with self.assertRaises(ValueError): self.repo_publish(gist)
 
@@ -470,18 +485,15 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         with self.assertRaises(ValueError): self.repo_publish(r)
         self.assertEqual(count,len(self.repo.calls))
 
-    def test_failed_scope_and_substituted_destination(self):
+    def test_direct_publish_uses_current_scope_without_substituted_destination(self):
         r=self.b.handle(self.repo_req)
-        with self.assertRaises(ValueError): self.b.handle(self.repo_req|{'action':'repo_publish','id':r['id']})
+        with self.assertRaisesRegex(ValueError, 'selects its job'):
+            self.b.handle(self.envelope('repo_publish') | {'id':r['id']})
         self.req['scope']='b'*64
-        with self.assertRaises(ValueError): self.repo_publish(r)
-        self.req['scope']='a'*64
-        self.b.execute=lambda job:{'reason':'output_limit','exit_code':0}
-        failed=self.b.handle(self.repo_req|{'title':'truncated'})
-        with self.assertRaises(ValueError): self.repo_publish(failed)
+        self.assertEqual(self.repo_publish(r)['id'], r['id'])
 
     def repair(self, job, **changes):
-        return self.b.handle(self.b.capability_envelope('repo_repair', self.req['scope'], self.req['channel'], self.req['network'])
+        return self.b.handle(self.envelope('repo_repair', self.req['scope'], self.req['channel'], self.req['network'])
                              | dict(action='repo_repair',id=job['id'],changes={'lib/main.py':'print(43)'},
                                     delete=[],argv=self.repo_req['argv'],title='repair') | changes)
 
@@ -492,7 +504,7 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         replayed = self.b.handle(self.repo_req | {'title': 'first passing execution'})
         self.assertEqual(replayed['id'], first['id'])
         self.b.execute = lambda job: {'reason': 'exited', 'exit_code': 0, 'output': 'diagnostic passed'}
-        diagnostic = self.b.handle(self.b.capability_envelope('repo_diagnose', self.req['scope'], '#ai', 'irc.perl.org') | {
+        diagnostic = self.b.handle(self.envelope('repo_diagnose', self.req['scope'], '#ai', 'irc.perl.org') | {
             'action': 'repo_diagnose', 'id': failed['id'], 'argv': ['/bin/sh', '-c', 'true'],
             'title': 'diagnose later failure'})
         self.assertEqual(diagnostic['state'], 'passed')
@@ -500,7 +512,7 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         self.assertEqual(checkpoint['latest_execution_job'], {'id': first['id'], 'state': 'passed'})
         self.assertNotEqual(checkpoint['latest_execution_job']['id'], failed['id'])
         resumed_scope = 'b' * 64
-        resume = self.b.capability_envelope('task_resume', resumed_scope, '#ai', 'irc.perl.org')
+        resume = self.envelope('task_resume', resumed_scope, '#ai', 'irc.perl.org')
         resumed = self.b.handle(resume | {'action': 'task_resume', 'checkpoint_id': checkpoint['checkpoint_id'],
                                           'requester': 'mateu'})
         self.assertEqual(resumed['latest_execution_job'], {'id': first['id'], 'state': 'passed'})
@@ -512,7 +524,7 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         self.assertEqual(checkpoint['latest_repository_job'], {'id': tested['id'], 'state': 'published'})
         self.assertEqual(checkpoint['latest_execution_job'], {'id': tested['id'], 'state': 'passed'})
         resumed_scope = 'b' * 64
-        resume = self.b.capability_envelope('task_resume', resumed_scope, '#ai', 'irc.perl.org')
+        resume = self.envelope('task_resume', resumed_scope, '#ai', 'irc.perl.org')
         resumed = self.b.handle(resume | {'action': 'task_resume', 'checkpoint_id': checkpoint['checkpoint_id'],
                                           'requester': 'mateu'})
         self.assertEqual(resumed['latest_execution_job'], {'id': tested['id'], 'state': 'passed'})
@@ -521,7 +533,7 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         self.b.execute = lambda job: {'reason':'exited', 'exit_code':1, 'output':'failed'}
         failed = self.b.handle(self.repo_req)
         self.b.execute = lambda job: {'reason':'exited', 'exit_code':0, 'output':'diagnostic passed'}
-        diagnostic = self.b.handle(self.b.capability_envelope('repo_diagnose', self.req['scope'], '#ai', 'irc.perl.org') | {
+        diagnostic = self.b.handle(self.envelope('repo_diagnose', self.req['scope'], '#ai', 'irc.perl.org') | {
             'action':'repo_diagnose', 'id':failed['id'], 'argv':['/bin/sh','-c','true'], 'title':'diagnose failure'})
         self.assertEqual(diagnostic['state'], 'passed')
         checkpoint = self.checkpoint()
@@ -532,14 +544,14 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         original = self.b.handle(self.repo_req)
         checkpoint = self.checkpoint()
         resumed_scope = 'b' * 64
-        resume = self.b.capability_envelope('task_resume', resumed_scope, '#ai', 'irc.perl.org')
+        resume = self.envelope('task_resume', resumed_scope, '#ai', 'irc.perl.org')
         resumed_task = self.b.handle(resume | {'action': 'task_resume', 'checkpoint_id': checkpoint['checkpoint_id'],
                                                'requester': 'mateu'})
         self.assertEqual(resumed_task['latest_repository_job'],
                          {'id': original['id'], 'state': 'passed'})
 
         def resumed(action):
-            return self.b.capability_envelope(action, resumed_scope, '#ai', 'irc.perl.org')
+            return self.envelope(action, resumed_scope, '#ai', 'irc.perl.org')
 
         inspected = self.b.handle(resumed('repo_inspect') | {'action': 'repo_inspect', 'id': original['id']})
         self.assertEqual(inspected['id'], original['id'])
@@ -548,14 +560,14 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
             'changes': {'lib/main.py': 'print(43)'}, 'delete': [],
             'argv': self.repo_req['argv'], 'title': 'resumed repair'})
         self.assertEqual(repaired['state'], 'passed')
-        published = self.b._handle(resumed('repo_publish') | {'action': 'repo_publish', 'id': repaired['id']}, _confirmed_publication=True)
+        published = self.b.handle(resumed('repo_publish'))
         self.assertEqual(published['state'], 'published')
         self.assertGreaterEqual(self.b.db.execute(
             "SELECT COUNT(*) FROM resource_checkpoints WHERE resource_id=?", (repaired['id'],)).fetchone()[0], 3)
 
         other_scope = 'c' * 64
         self.checkpoint(other_scope)
-        denied = self.b.capability_envelope('repo_inspect', other_scope, '#ai', 'irc.perl.org')
+        denied = self.envelope('repo_inspect', other_scope, '#ai', 'irc.perl.org')
         with self.assertRaisesRegex(ValueError, 'repository job not found'):
             self.b.handle(denied | {'action': 'repo_inspect', 'id': original['id']})
 
@@ -582,7 +594,7 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         self.b.db.execute('UPDATE jobs SET created=0 WHERE id=?', (original['id'],))
         self.b.db.execute('UPDATE repo_snapshots SET created=0,expires=0 WHERE id=?', (snapshot_id,))
         self.b.db.commit()
-        other=self.b.capability_envelope('run', 'b'*64, '#ai', 'irc.perl.org') | {k:v for k,v in self.req.items() if k not in ('scope','capability','grant')} | {'title':'unrelated retention trigger'}
+        other=self.envelope('run', 'b'*64, '#ai', 'irc.perl.org') | {k:v for k,v in self.req.items() if k not in ('scope',)} | {'title':'unrelated retention trigger'}
         self.b.handle(other)
         self.checkpoint()
         self.assertIsNotNone(self.b.db.execute('SELECT id FROM repo_snapshots WHERE id=?', (snapshot_id,)).fetchone())
@@ -600,8 +612,9 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         self.assertEqual(self.b.db.execute('SELECT files FROM jobs WHERE id=?',(original['id'],)).fetchone()[0],json.dumps(self.repo_req['changes']))
         self.assertEqual(self.repair(original)['id'],fixed['id'])
         self.assertEqual(len(self.runs),1)
-        with self.assertRaises(ValueError): self.repo_publish(original)
-        self.repo_publish(fixed)
+        with self.assertRaisesRegex(ValueError, 'selects its job'):
+            self.b.handle(self.envelope('repo_publish') | {'id': original['id']})
+        self.assertEqual(self.repo_publish(fixed)['id'], fixed['id'])
         tree=next(p['tree'] for _,p,_ in self.repo.calls if p is not None and 'tree' in p)
         self.assertEqual({x['path'].removeprefix('projects/dictionary/'):x['content'] for x in tree},expected)
 
@@ -651,11 +664,12 @@ $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         self.assertEqual(self.runs[-1]['files'],self.repo_req['changes'])
         self.assertEqual(diagnostic['attempts_remaining'],11)
         self.assertEqual(diagnostic['state'],'passed')
-        with self.assertRaisesRegex(ValueError,'diagnostic jobs cannot be published'): self.repo_publish(diagnostic)
+        with self.assertRaisesRegex(ValueError, 'selects its job'):
+            self.b.handle(self.envelope('repo_publish') | {'id': diagnostic['id']})
         with self.assertRaisesRegex(ValueError,'original repository test job'): self.repair(diagnostic)
         from broker import Broker
         second=Broker(self.tmp.name,self.token);self.addCleanup(second.db.close)
-        with self.assertRaisesRegex(ValueError,'diagnostic jobs cannot be published'):
-            second._handle(second.capability_envelope('repo_publish',self.req['scope'],self.req['channel'],self.req['network']) | dict(action='repo_publish',id=diagnostic['id']), _confirmed_publication=True)
+        with self.assertRaisesRegex(ValueError, 'selects its job'):
+            second.handle(self.envelope('repo_publish',self.req['scope'],self.req['channel'],self.req['network']) | {'id': diagnostic['id']})
         with self.assertRaises(ValueError): self.b.handle(request | {'scope':'b'*64})
         self.assertFalse(any(p is not None for _,p,_ in self.repo.calls))

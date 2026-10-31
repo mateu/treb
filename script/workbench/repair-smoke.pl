@@ -36,14 +36,13 @@ my $request='burt_bot: read the saved dictionary project and inspect its reposit
 my $bot=bless {pending=>{channel=>'#ai',expires_at=>time+300,messages=>[
   {source_kind=>'conversation',nick=>'operator',msg=>$request}]}},'RepairSmoke';
 Bot::Runtime::Workbench::admit_task($bot);
-my ($read_scope,$read_capability,$read_grant)=Bot::Runtime::Workbench::capability_grant($bot,'repo_read');
-my %read_envelope=(scope=>$read_scope,capability=>$read_capability,grant=>$read_grant,channel=>'#ai',network=>'irc.perl.org');
-my ($test_scope,$test_capability,$test_grant)=Bot::Runtime::Workbench::capability_grant($bot,'repo_run');
-my %test_envelope=(scope=>$test_scope,capability=>$test_capability,grant=>$test_grant,channel=>'#ai',network=>'irc.perl.org');
-my $snapshot=decode_json(Bot::Runtime::Workbench::broker_call({%read_envelope,action=>'repo_read',
+my $scope=Bot::Runtime::Workbench::request_scope($bot);
+my $requester=Bot::Runtime::Workbench::trusted_requester($bot);
+my %envelope=(scope=>$scope,requester=>$requester,channel=>'#ai',network=>'irc.perl.org');
+my $snapshot=decode_json(Bot::Runtime::Workbench::broker_call({%envelope,action=>'repo_read',
   branch=>'burt/dictionary',project=>'dictionary'}));
 die encode_json($snapshot) unless $snapshot->{base_sha};
-my $seed=Bot::Runtime::Workbench::broker_call({%test_envelope,action=>'repo_run',
+my $seed=Bot::Runtime::Workbench::broker_call({%envelope,action=>'repo_run',
   snapshot_id=>$snapshot->{snapshot_id},changes=>$fixture->{files},delete=>[],
   argv=>['/usr/bin/perl','-Ilib','t/dictionary.t'],title=>'Replay original failed dictionary bundle'});
 my $job=decode_json($seed);

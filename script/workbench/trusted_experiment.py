@@ -85,7 +85,7 @@ def score(task, bundle, acceptance):
 
 def req(task, files, snapshot_id, title='control'):
     baseline = task['files']
-    return (r.Broker.capability_envelope('repo_run', 'a'*64, '#ai', 'irc.perl.org')
+    return (dict(scope='a'*64, requester='experiment', channel='#ai', network='irc.perl.org')
             | dict(action='repo_run', snapshot_id=snapshot_id,
                    changes={n:c for n,c in files.items() if baseline.get(n) != c},
                    delete=sorted(set(baseline) - set(files)),
@@ -102,8 +102,8 @@ def preflight(repo, output, env_file, perl_root):
         directory.mkdir()
         b = TrialBroker(directory, task, time.time()+180)
         good = task['files'] | {spec['editable'][0]: solutions()[name]}
-        snapshot = b.handle(r.Broker.capability_envelope('repo_read', 'a'*64, '#ai', 'irc.perl.org')
-                            | dict(action='repo_read', branch=task['branch'], project=task['project']))
+        snapshot = b.handle(dict(scope='a'*64, requester='experiment', channel='#ai', network='irc.perl.org',
+                                 action='repo_read', branch=task['branch'], project=task['project']))
         for label, files, expected in [('original',task['files'],False), ('gold',good,True)]:
             job = b.handle(req(task,files,snapshot['snapshot_id'],label))
             verdict = job['state']=='passed'

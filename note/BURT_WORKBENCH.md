@@ -43,13 +43,12 @@ Every gist is **public**, with a flat filename set supplied to `run_code`.
 No package installs, secret access or arbitrary HTTP tool. Repository publishing
 uses a separate fine-grained credential as described below.
 
-Authorization is derived from the active runtime envelope: Burt identity,
-irc.perl.org, #ai, unexpired directly addressed human coding request. Publication
-also requires the word “gist” in that request. Model arguments cannot change
-network/channel/request scope. Any human in #ai can ask; nick matching is **not
-authenticated owner identity**. Reminder/bot/ambient/history-only turns cannot
-publish. No independent external-source instructions can create authority,
-although this is not a semantic intent or prompt-injection proof.
+The runtime derives structured provenance from the active human conversation
+envelope: Burt identity, `irc.perl.org`, an allowed public channel, an unexpired
+request scope, and a canonical requester identity. It does not parse prose for
+magic words, nickname addressing, or publication intent. Model arguments cannot
+change network, channel, requester, or scope. Reminder/bot/ambient/history-only
+turns cannot dispatch because they have no active human envelope.
 
 Repository tools are fixed to public `burt-agent/workspace`. The separate
 `~/.config/burt-publisher/github.token` must authenticate as `burt-agent`, with
@@ -65,10 +64,10 @@ checkout, and refuses redirects/proxies.
   nested paths are supported. 32 files/128 KiB aggregate UTF-8 source; no hidden files, symlinks,
   submodules or binary files. Omitted existing project files are deleted upon
   publication; everything outside the selected project is preserved.
-* `publish_repo(id)`: publishes only that stored successful bundle. Requires a
-  current addressed human coding request containing `repo`/`repository` and
-  `publish`/`push`/`commit`. It cannot change destination or publish gist jobs.
-  Rechecks branch head; stale bases require rereading and retesting. Creates
+* `publish_repo()`: mechanically selects the one eligible stored successful
+  repository candidate for the active provenance tuple. It cannot change
+  destination or publish gist jobs. Rechecks branch head; stale bases require
+  rereading and retesting. Creates
   `burt/*` branches or non-force updates them; never writes `main`, opens PRs,
   merges or executes repository content. Returns an actual commit URL.
 
@@ -103,7 +102,16 @@ expire after seven days; ambiguous publication records are retained.
 ## Installation / verification
 
 Source: `lib/Bot/Runtime/Workbench.pm`, `script/workbench/`, and the isolation
-launcher. Install broker files into `~/.local/share/burt-workbench/`, its unit
+launcher.
+
+The runtime is a thin mechanical IPC proxy. It forwards only its active trusted
+requester, channel, network, and request scope with fixed tool arguments; it does
+not parse prose for capabilities, nickname authority, grants, proposals, or
+confirmations. The broker remains the enforcement point for schema limits, fixed
+destinations, offline execution, credentials, lifecycle/resource budgets,
+immutable candidate selection, idempotent receipts, and uncertain publications.
+Its bounded dispatch/rejection audit stores provenance and action metadata only,
+never source, arguments, output, or secrets. Install broker files into `~/.local/share/burt-workbench/`, its unit
 into `~/.config/systemd/user/`, then enable `burt-workbench.service`.
 Prepare a private `~/.local/share/burt-irc/burt.env` and data directory. Stop the
 existing Burt service and use SQLite backup to migrate its DB into
@@ -269,12 +277,12 @@ failed jobs are untouched. The temporary acceptance broker has been stopped.
 
 ### Isolated channel retry (2026-10-27)
 
-Coding and explicit publication requests are now accepted in exactly `#ai` and
-`#mateu-test` on irc.perl.org. The bot forwards the actual current request channel
-to the broker; channel remains part of the request scope. Fresh directly addressed
-human envelopes, publication wording, deadlines, attempt limits, offline execution
-and fixed publication destinations are unchanged. This authorizes any human in
-either channel under the existing nick classification, not authenticated ownership.
+Workbench dispatch is accepted in exactly `#ai` and `#mateu-test` on
+irc.perl.org. The bot forwards the actual current request channel to the broker;
+channel remains part of the request scope. A fresh active human envelope, deadlines,
+attempt limits, offline execution, fixed publication destinations, immutable
+candidates, and truthful receipts remain required. No prose wording or nickname
+addressing is an authorization prerequisite.
 
 Deploy this commit as a new pinned release, update the existing `80-workbench.conf`
 source paths, and replace only host broker.py from the same commit. Stop Burt and

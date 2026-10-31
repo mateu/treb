@@ -20,7 +20,7 @@ class RejectionAuditTests(unittest.TestCase):
         scope = kw.pop('scope', self.req['scope'])
         channel = kw.pop('channel', self.req['channel'])
         network = kw.pop('network', self.req['network'])
-        envelope = self.b.capability_envelope('task_status', scope, channel, network)
+        envelope = {'action': 'task_status', 'scope': scope, 'requester': self.req['requester'], 'channel': channel, 'network': network}
         return self.b.handle(envelope | dict(action='task_status', phase=phase, reason=reason) | kw)
 
     def test_rejections_survive_restart_without_jobs_or_quota_cost(self):
@@ -140,7 +140,7 @@ class RejectionAuditTests(unittest.TestCase):
 
     def test_recursive_repair_records_original_rejection_only_once(self):
         job = self.b.handle(self.req)
-        req = {k: self.req[k] for k in ('scope', 'capability', 'grant', 'channel', 'network')}
+        req = {k: self.req[k] for k in ('scope', 'requester', 'channel', 'network')}
         req |= dict(action='repo_repair', id=job['id'], changes={'data.txt': 'SECRET'},
                     delete=[], argv=self.req['argv'], title='repair')
         with self.assertRaises(ValueError): self.b.handle(req)
