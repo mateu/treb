@@ -71,6 +71,22 @@ for my $case (
   ok($@, "$case->[0] cannot supply an active trusted envelope");
 }
 $bot->{pending} = pending();
+{
+  local $ENV{IRC_SERVER} = 'irc.example.net';
+  eval { Bot::Runtime::Workbench::request_scope($bot) };
+  ok($@, 'another IRC network cannot supply Workbench provenance');
+}
+{
+  local $ENV{BURT_WORKBENCH_SOCKET} = '';
+  my $disabled = bless {bot => 'burt', pending => pending()}, 'WorkbenchBot';
+  Bot::Runtime::Workbench::admit_task($disabled);
+  ok(!$disabled->{pending}{coding_task}, 'disabled Workbench does not admit a task');
+}
+{
+  my $other_bot = bless {bot => 'bert', pending => pending()}, 'WorkbenchBot';
+  Bot::Runtime::Workbench::admit_task($other_bot);
+  ok(!$other_bot->{pending}{coding_task}, 'non-Burt runtime does not admit a task');
+}
 $bot->{pending}{messages}[0]{msg} = 'write a resume parser';
 Bot::Runtime::Workbench::admit_task($bot);
 ok($bot->{pending}{coding_task}, 'ordinary work mentioning resume is not diverted to recovery');

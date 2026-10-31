@@ -23,6 +23,8 @@ sub _active_envelope {
   my ($self)=@_;
   my $pending=$self->_pending_raid or die "No active request\n";
   my $channel=lc($pending->{channel}//'');
+  die "Workbench is restricted to irc.perl.org\n"
+    unless lc($ENV{IRC_SERVER}//'irc.perl.org') eq 'irc.perl.org';
   die "No active #ai or #mateu-test request\n"
     unless $channel eq '#ai' || $channel eq '#mateu-test';
   die "No active #ai or #mateu-test request\n"
@@ -55,6 +57,7 @@ sub resume_requested {
 # renew this deadline on retries/tool calls; scope remains stable for all jobs.
 sub admit_task {
   my ($self)=@_;
+  return unless ($ENV{BURT_WORKBENCH_SOCKET}//'') ne '' && $self->_bot_name_slug eq 'burt';
   my $pending=$self->_pending_raid or return;
   return if $pending->{coding_task};
   # A fresh explicit resume request must reach the resume tool with an unbound
