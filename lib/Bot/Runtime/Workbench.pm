@@ -50,7 +50,7 @@ sub resume_requested {
   my ($self)=@_;
   my (undef,$message)=eval { _active_envelope($self) };
   return 0 unless $message;
-  return ($message->{msg}//'') =~ /\bresume\s+(?:a\s+)?checkpoint\b/i;
+  return ($message->{msg}//'') =~ /\bresume(?:\s+(?:the|a|work|from)){0,3}\s+checkpoint\b/i;
 }
 
 # Admission is once, while the original human envelope is still fresh. Never

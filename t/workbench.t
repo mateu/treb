@@ -87,6 +87,8 @@ $bot->{pending} = pending();
   Bot::Runtime::Workbench::admit_task($other_bot);
   ok(!$other_bot->{pending}{coding_task}, 'non-Burt runtime does not admit a task');
 }
+$bot->{pending}{messages}[0]{msg} = 'Burt, resume the checkpoint abc';
+ok(Bot::Runtime::Workbench::resume_requested($bot), 'natural resume-the-checkpoint form defers task admission');
 $bot->{pending}{messages}[0]{msg} = 'write a resume parser';
 Bot::Runtime::Workbench::admit_task($bot);
 ok($bot->{pending}{coding_task}, 'ordinary work mentioning resume is not diverted to recovery');
