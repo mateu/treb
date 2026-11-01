@@ -1,11 +1,12 @@
 import base64
+import io
 import json
 from pathlib import Path
 import subprocess
 import time
 import unittest
 from urllib.error import HTTPError
-from repository import Repository, validate_destination, validate_files
+from repository import GitHubHTTPRejected, Repository, validate_destination, validate_files
 import test_broker
 
 A, B, C, D = (c*40 for c in 'abcd')
@@ -28,6 +29,8 @@ class FakeRepository(Repository):
         self.lose_merge_response = False
         self.fail_merge_readback = False
         self.fail_reconciliation = False
+        self.pr_http_status = None
+        self.merge_http_status = None
 
     def api(self, path, payload=None, method=None):
         self.calls.append((path, payload, method))
@@ -36,6 +39,10 @@ class FakeRepository(Repository):
             return {'full_name':'burt-agent/workspace','private':False,'permissions':{'push':True}}
         if path.startswith('/repos/burt-agent/workspace/pulls'):
             if path.endswith('/merge') and payload is not None:
+                if self.merge_http_status:
+                    raise HTTPError(path, self.merge_http_status, 'rejected',
+                                    {'X-GitHub-Request-Id': 'merge-request-id'},
+                                    io.BytesIO(b'{"message":"merge denied\\nwith details"}'))
                 if self.fail_merge: raise TimeoutError()
                 number = int(path.split('/')[-2]); pull = self.pulls[number]
                 if pull['head']['sha'] != payload['sha']: return {'merged':False,'sha':''}
@@ -48,6 +55,10 @@ class FakeRepository(Repository):
                     self.fail_reconciliation = True
                 return {'merged':True,'sha':D}
             if path == '/repos/burt-agent/workspace/pulls' and payload is not None:
+                if self.pr_http_status:
+                    raise HTTPError(path, self.pr_http_status, 'rejected',
+                                    {'X-GitHub-Request-Id': 'create-request-id'},
+                                    io.BytesIO(b'{"message":"pull creation denied\\nwith details"}'))
                 if self.fail_pr_write: raise TimeoutError()
                 number = max(self.pulls, default=0) + 1
                 if self.advance_before_create: self.head = B
@@ -157,6 +168,18 @@ class RepositoryTests(unittest.TestCase):
         merged=r.merge_pull_request(1, A)
         self.assertEqual((merged['merged'], merged['merged_now'], merged['merge_sha']), (True, True, D))
 
+    def test_pull_request_http_rejections_are_deterministic_and_bounded(self):
+        r=FakeRepository(); r.exists=True; r.pr_http_status=403
+        with self.assertRaises(GitHubHTTPRejected) as create:
+            r.create_pull_request('burt/dictionary', A, 'Dictionary feature')
+        self.assertEqual((create.exception.status, create.exception.message, create.exception.request_id),
+                         (403, 'pull creation denied with details', 'create-request-id'))
+        r=FakeRepository(); r.pulls[1]=r.pull(1, 'burt/dictionary', A); r.merge_http_status=422
+        with self.assertRaises(GitHubHTTPRejected) as merge:
+            r.merge_pull_request(1, A)
+        self.assertEqual((merge.exception.status, merge.exception.message, merge.exception.request_id),
+                         (422, 'merge denied with details', 'merge-request-id'))
+
     def test_pull_request_rejects_changed_or_foreign_state(self):
         r=FakeRepository(); r.exists=True; r.head=B
         with self.assertRaisesRegex(ValueError, 'head changed'):
@@ -259,6 +282,37 @@ class RepositoryBrokerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'task is terminal'):
             self.b.handle(create)
         self.assertFalse(self.repo.pulls)
+
+    def test_pr_http_rejections_are_retryable_and_receipted(self):
+        self.repo.exists=True
+        create=self.request('repo_pr_create') | {'branch':'burt/dictionary','expected_head_sha':A,'title':'Dictionary feature'}
+        self.repo.pr_http_status=403
+        with self.assertRaises(GitHubHTTPRejected) as rejected:
+            self.b.handle(create)
+        self.assertEqual(rejected.exception.rejection['github_http'],
+                         {'status':403, 'message':'pull creation denied with details', 'request_id':'create-request-id'})
+        self.assertEqual((rejected.exception.rejection['code'], rejected.exception.rejection['disposition']),
+                         ('github_http_rejected', 'retryable'))
+        self.assertEqual(dict(self.b.db.execute('SELECT state FROM repository_pull_requests').fetchone()),
+                         {'state':'create_rejected'})
+        task_id=self.b.task_binding(self.req['scope'])['task_id']
+        self.assertIsNone(self.b.task_budget_status(task_id)['terminal_reason'])
+        self.assertIsNone(self.b.pending_pull_request(task_id))
+        self.assertIn('GitHub HTTP 403: pull creation denied with details [request create-request-id]',
+                      self.b.db.execute('SELECT reason FROM rejections ORDER BY seq DESC').fetchone()['reason'])
+
+        self.repo.pr_http_status=None
+        self.b.handle(create)
+        self.repo.merge_http_status=422
+        merge=self.request('repo_pr_merge') | {'number':1,'expected_head_sha':A}
+        with self.assertRaises(GitHubHTTPRejected) as rejected:
+            self.b.handle(merge)
+        self.assertEqual(rejected.exception.rejection['github_http'],
+                         {'status':422, 'message':'merge denied with details', 'request_id':'merge-request-id'})
+        self.assertEqual(dict(self.b.db.execute('SELECT state FROM repository_pull_requests').fetchone()),
+                         {'state':'merge_rejected'})
+        self.assertIsNone(self.b.task_budget_status(task_id)['terminal_reason'])
+        self.assertIsNone(self.b.pending_pull_request(task_id))
 
     def test_uncertain_pr_writes_terminally_require_reconciliation(self):
         self.repo.exists=True
