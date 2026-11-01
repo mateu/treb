@@ -101,6 +101,21 @@ class ConfirmAbsentTests(unittest.TestCase):
                 self.b.db.execute('DELETE FROM task_phase_budgets WHERE task_id=?', (task_id,))
                 self.b.db.commit()
 
+    def test_retargeted_pr_on_any_base_blocks_absence(self):
+        task_id = self.absent_pending()
+        repo = PagedRepository()
+        repo.exists = True
+        repo.head = A
+        retargeted = repo.pull(7, 'burt/dictionary', A)
+        retargeted['base'] = dict(retargeted['base'], ref='develop')
+        repo.pages[1] = [retargeted]
+        with self.assertRaisesRegex(ValueError, 'pull request exists'):
+            confirm_absent_pending_pull_request(self.b.db, repo, task_id, 'hunter', commit=True)
+        self.assertIsNotNone(self.b.pending_pull_request(task_id))
+        pulls_queries = [path for path, _, _ in repo.calls if '/pulls?' in path]
+        self.assertTrue(pulls_queries)
+        self.assertTrue(all('base=' not in path for path in pulls_queries))
+
     def test_paginated_list_is_read_and_blocks_later_page(self):
         task_id = self.absent_pending()
         repo = PagedRepository()

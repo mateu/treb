@@ -177,18 +177,17 @@ class Repository:
         head = self.api(prefix + '/git/ref/heads/' + branch).get('object', {}).get('sha', '')
         if head != expected_head_sha:
             raise ValueError('branch head changed or is missing; record remains pending')
+        # Absence must cover every base: a PR created against main can later be
+        # retargeted, so filter only by head and treat any listed PR as present.
+        # Items are not identity-validated here; an unexpected shape or base is
+        # still a PR for this head and must fail closed, never count as absent.
         pulls = []
         for page in range(1, 101):
             data = self.api(prefix + '/pulls?state=all&head=burt-agent:' + branch
-                            + '&base=main&per_page=100&page=' + str(page))
+                            + '&per_page=100&page=' + str(page))
             if not isinstance(data, list) or len(data) > 100:
                 raise ValueError('invalid pull request list response')
-            validated = [self._validated_pull(item) for item in data]
-            # GitHub's head filter is not itself evidence: reject a malformed or
-            # unexpected result rather than silently treating it as absence.
-            if any(item['branch'] != branch for item in validated):
-                raise ValueError('unexpected pull request list response')
-            pulls.extend(validated)
+            pulls.extend(data)
             if len(data) < 100:
                 break
         else:
