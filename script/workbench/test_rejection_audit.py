@@ -113,6 +113,14 @@ class RejectionAuditTests(unittest.TestCase):
         self.assertEqual(self.b.db.execute('SELECT code FROM rejections ORDER BY seq DESC').fetchone()[0],
                          'publication_uncertain')
 
+    def test_pull_request_uncertainty_is_terminal_and_tracks_retries(self):
+        req=self.req | {'action':'repo_pr_create','branch':'burt/dictionary','expected_head_sha':'a'*40,'title':'Dictionary feature'}
+        response=self.b.record_rejection(req, ValueError('pull request submission outcome is uncertain; inspect before retrying'))
+        self.assertEqual((response['action'], response['code'], response['disposition'], response['reconciliation']),
+                         ('repo_pr_create', 'publication_uncertain', 'terminal', 'required'))
+        record=self.b.db.execute('SELECT action,code FROM rejections ORDER BY seq DESC').fetchone()
+        self.assertEqual((record['action'], record['code']), ('repo_pr_create', 'publication_uncertain'))
+
     def test_reserved_final_verification_attempt_remains_retryable(self):
         response = self.b.record_rejection(
             self.req, ValueError('last execution reserved for trusted project verification'))

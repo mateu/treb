@@ -19,12 +19,49 @@ class FakeRepository(Repository):
         self.files = {}
         self.entries = None
         self.fail_write = False
+        self.pulls = {}
+        self.fail_pr_write = False
+        self.fail_merge = False
+        self.lose_pr_response = False
+        self.advance_before_create = False
+        self.advance_merge_head = False
+        self.lose_merge_response = False
+        self.fail_merge_readback = False
+        self.fail_reconciliation = False
 
     def api(self, path, payload=None, method=None):
         self.calls.append((path, payload, method))
         if path == '/user': return {'login':'burt-agent'}
         if path == '/repos/burt-agent/workspace':
             return {'full_name':'burt-agent/workspace','private':False,'permissions':{'push':True}}
+        if path.startswith('/repos/burt-agent/workspace/pulls'):
+            if path.endswith('/merge') and payload is not None:
+                if self.fail_merge: raise TimeoutError()
+                number = int(path.split('/')[-2]); pull = self.pulls[number]
+                if pull['head']['sha'] != payload['sha']: return {'merged':False,'sha':''}
+                pull['merged'], pull['state'] = True, 'closed'
+                if self.advance_merge_head: pull['head']['sha'] = B
+                if self.lose_merge_response:
+                    self.fail_reconciliation = True
+                    raise TimeoutError()
+                if self.fail_merge_readback:
+                    self.fail_reconciliation = True
+                return {'merged':True,'sha':D}
+            if path == '/repos/burt-agent/workspace/pulls' and payload is not None:
+                if self.fail_pr_write: raise TimeoutError()
+                number = max(self.pulls, default=0) + 1
+                if self.advance_before_create: self.head = B
+                pull = self.pull(number, payload['head'], self.head)
+                self.pulls[number] = pull
+                if self.lose_pr_response:
+                    self.fail_reconciliation = True
+                    raise TimeoutError()
+                return pull
+            if '?' in path:
+                if self.fail_reconciliation: raise TimeoutError()
+                return list(self.pulls.values())
+            if self.fail_reconciliation: raise TimeoutError()
+            return self.pulls[int(path.rsplit('/',1)[1])]
         if payload is not None:
             if self.fail_write: raise TimeoutError()
             if path.endswith('/git/trees'): return {'sha':C}
@@ -47,6 +84,14 @@ class FakeRepository(Repository):
             idx = int(path.rsplit('/',1)[1][0])-1
             return {'encoding':'base64','content':base64.b64encode(list(self.files.values())[idx].encode()).decode()}
         raise AssertionError(path)
+
+    @staticmethod
+    def pull(number, branch, head, *, foreign=False):
+        repo = 'evil/workspace' if foreign else 'burt-agent/workspace'
+        return {'number':number, 'state':'open', 'merged':False, 'mergeable':True,
+                'html_url':'https://github.com/burt-agent/workspace/pull/'+str(number),
+                'head':{'ref':branch,'sha':head,'repo':{'full_name':repo}},
+                'base':{'ref':'main','repo':{'full_name':'burt-agent/workspace'}}}
 
 
 class RepositoryTests(unittest.TestCase):
@@ -76,6 +121,54 @@ class RepositoryTests(unittest.TestCase):
         with self.assertRaises(ValueError): r.snapshot('burt/dictionary','dictionary')
         r=FakeRepository();r.files={'bad.txt':'\x00'}
         with self.assertRaises(ValueError): r.snapshot('burt/dictionary','dictionary')
+
+    def test_pull_request_create_duplicate_merge_and_reconciliation(self):
+        r=FakeRepository(); r.exists=True
+        created=r.create_pull_request('burt/dictionary', A, 'Dictionary feature')
+        self.assertEqual((created['number'], created['base'], created['head_sha'], created['created']), (1, 'main', A, True))
+        duplicate=r.create_pull_request('burt/dictionary', A, 'Dictionary feature')
+        self.assertFalse(duplicate['created'])
+        self.assertEqual(len(r.pulls), 1)
+        merged=r.merge_pull_request(1, A)
+        self.assertTrue(merged['merged_now'])
+        self.assertTrue(merged['merged'])
+        self.assertFalse(r.merge_pull_request(1, A)['merged_now'])
+        r=FakeRepository(); r.pulls[1]=r.pull(1, 'burt/dictionary', A); r.fail_merge=True
+        with self.assertRaisesRegex(ValueError, 'merge outcome is uncertain'):
+            r.merge_pull_request(1, A)
+        r=FakeRepository(); r.exists=True; r.fail_pr_write=True
+        with self.assertRaisesRegex(ValueError, 'uncertain'):
+            r.create_pull_request('burt/dictionary', A, 'Dictionary feature')
+        r=FakeRepository(); r.exists=True; r.fail_pr_write=True; r.pulls[1]=r.pull(1, 'burt/dictionary', A)
+        self.assertFalse(r.create_pull_request('burt/dictionary', A, 'Dictionary feature')['created'])
+        r=FakeRepository(); r.exists=True; r.lose_pr_response=True
+        with self.assertRaisesRegex(ValueError, 'submission outcome is uncertain'):
+            r.create_pull_request('burt/dictionary', A, 'Dictionary feature')
+        r=FakeRepository(); r.exists=True; r.advance_before_create=True
+        with self.assertRaisesRegex(ValueError, 'submission outcome is uncertain'):
+            r.create_pull_request('burt/dictionary', A, 'Dictionary feature')
+        r=FakeRepository(); r.pulls[1]=r.pull(1, 'burt/dictionary', A); r.lose_merge_response=True
+        with self.assertRaisesRegex(ValueError, 'merge outcome is uncertain'):
+            r.merge_pull_request(1, A)
+        r=FakeRepository(); r.pulls[1]=r.pull(1, 'burt/dictionary', A); r.advance_merge_head=True; r.lose_merge_response=True
+        with self.assertRaisesRegex(ValueError, 'merge outcome is uncertain'):
+            r.merge_pull_request(1, A)
+        r=FakeRepository(); r.pulls[1]=r.pull(1, 'burt/dictionary', A); r.fail_merge_readback=True
+        merged=r.merge_pull_request(1, A)
+        self.assertEqual((merged['merged'], merged['merged_now'], merged['merge_sha']), (True, True, D))
+
+    def test_pull_request_rejects_changed_or_foreign_state(self):
+        r=FakeRepository(); r.exists=True; r.head=B
+        with self.assertRaisesRegex(ValueError, 'head changed'):
+            r.create_pull_request('burt/dictionary', A, 'Dictionary feature')
+        r=FakeRepository(); r.pulls[1]=r.pull(1, 'burt/dictionary', A, foreign=True)
+        with self.assertRaisesRegex(ValueError, 'unexpected'):
+            r.pull_request(1)
+        r=FakeRepository(); r.pulls[1]=r.pull(1, 'burt/dictionary', A); r.pulls[1]['mergeable']=False
+        with self.assertRaisesRegex(ValueError, 'not mergeable'):
+            r.merge_pull_request(1, A)
+        with self.assertRaisesRegex(ValueError, 'head'):
+            r.merge_pull_request(1, B)
 
     def test_only_project_changes_and_no_force_push(self):
         for exists in (False,True):
@@ -136,6 +229,152 @@ class RepositoryBrokerTests(unittest.TestCase):
     def direct_repo_publish(self, scope='b' * 64):
         return self.b.handle(self.envelope('repo_publish', scope, self.req['channel'], self.req['network'])
                              | {'action':'repo_publish', 'requester':'mateu'})
+
+    def test_broker_pr_receipts_reconcile_create_merge_and_reject_bad_fields(self):
+        self.repo.exists=True
+        create=self.b.handle(self.request('repo_pr_create') | {'branch':'burt/dictionary','expected_head_sha':A,'title':'Dictionary feature'})
+        self.assertEqual(create['number'], 1)
+        self.assertFalse(self.b.handle(self.request('repo_pr_create') | {'branch':'burt/dictionary','expected_head_sha':A,'title':'Again'})['created'])
+        inspected=self.b.handle(self.request('repo_pr_inspect') | {'number':1})
+        self.assertEqual(inspected['base'], 'main')
+        merged=self.b.handle(self.request('repo_pr_merge') | {'number':1,'expected_head_sha':A})
+        self.assertTrue(merged['merged'])
+        self.assertEqual(self.b.db.execute('SELECT state FROM repository_pull_requests').fetchone()['state'], 'merged')
+        with self.assertRaisesRegex(ValueError, 'head branch'):
+            self.b.handle(self.request('repo_pr_create') | {'branch':'main','expected_head_sha':A,'title':'bad'})
+
+    def test_pr_writes_respect_expired_and_terminal_task_lifecycle(self):
+        self.repo.exists=True
+        status=self.envelope('task_status') | {'action':'task_status','phase':'started','reason':'admitted'}
+        self.b.handle(status)
+        self.b.db.execute('UPDATE task_phase_budgets SET deadline=0 WHERE task_id=?', (self.req['scope'],))
+        self.b.db.commit()
+        create=self.request('repo_pr_create') | {'branch':'burt/dictionary','expected_head_sha':A,'title':'Dictionary feature'}
+        with self.assertRaisesRegex(ValueError, 'deadline reached'):
+            self.b.handle(create)
+        self.assertFalse(self.repo.pulls)
+        self.b.db.execute('UPDATE task_phase_budgets SET deadline=?,terminal_reason=? WHERE task_id=?',
+                          (time.time()+60, 'publication_uncertain', self.req['scope']))
+        self.b.db.commit()
+        with self.assertRaisesRegex(ValueError, 'task is terminal'):
+            self.b.handle(create)
+        self.assertFalse(self.repo.pulls)
+
+    def test_uncertain_pr_writes_terminally_require_reconciliation(self):
+        self.repo.exists=True
+        create=self.request('repo_pr_create') | {'branch':'burt/dictionary','expected_head_sha':A,'title':'Dictionary feature'}
+        self.repo.fail_pr_write=True
+        with self.assertRaisesRegex(ValueError, 'outcome is uncertain'):
+            self.b.handle(create)
+        task_id=self.b.task_binding(self.req['scope'])['task_id']
+        self.assertEqual(self.b.task_budget_status(task_id)['terminal_reason'], 'publication_uncertain')
+        with self.assertRaisesRegex(ValueError, 'task is terminal'):
+            self.b.handle(create)
+
+        self.b.db.execute('UPDATE task_phase_budgets SET terminal_reason=NULL,phase=? WHERE task_id=?',
+                          ('started', task_id))
+        self.b.db.execute('DELETE FROM pending_pull_request_operations WHERE task_id=?', (task_id,))
+        self.b.db.commit()
+        self.repo.fail_pr_write=False
+        self.b.handle(create)
+        self.repo.fail_merge=True
+        merge=self.request('repo_pr_merge') | {'number':1,'expected_head_sha':A}
+        with self.assertRaisesRegex(ValueError, 'merge outcome is uncertain'):
+            self.b.handle(merge)
+        self.assertEqual(self.b.task_budget_status(task_id)['terminal_reason'], 'publication_uncertain')
+        with self.assertRaisesRegex(ValueError, 'task is terminal'):
+            self.b.handle(merge)
+        checkpoint=self.checkpoint()
+        resume=self.envelope('task_resume', 'b' * 64, '#ai', 'irc.perl.org')
+        with self.assertRaisesRegex(ValueError, 'operator reconciliation'):
+            self.b.handle(resume | {'action':'task_resume', 'checkpoint_id':checkpoint['checkpoint_id'],
+                                    'requester':'mateu', 'deadline':time.time()+60})
+
+    def test_changed_head_after_create_is_a_terminal_receipt(self):
+        self.repo.exists=True
+        self.repo.advance_before_create=True
+        create=self.request('repo_pr_create') | {'branch':'burt/dictionary','expected_head_sha':A,'title':'Dictionary feature'}
+        with self.assertRaisesRegex(ValueError, 'outcome is uncertain'):
+            self.b.handle(create)
+        receipt=self.b.db.execute('SELECT branch,head_sha,number,url,state FROM repository_pull_requests').fetchone()
+        self.assertEqual(dict(receipt), {'branch':'burt/dictionary','head_sha':B,'number':1,
+                                         'url':'https://github.com/burt-agent/workspace/pull/1',
+                                         'state':'create_uncertain'})
+        task_id=self.b.task_binding(self.req['scope'])['task_id']
+        self.assertEqual(self.b.task_budget_status(task_id)['terminal_reason'], 'publication_uncertain')
+        with self.assertRaisesRegex(ValueError, 'task is terminal'):
+            self.b.handle(create)
+
+    def test_restart_blocks_unrecorded_pull_request_create(self):
+        self.repo.exists=True
+        checkpoint=self.checkpoint()
+        create=self.request('repo_pr_create') | {'branch':'burt/dictionary','expected_head_sha':A,'title':'Dictionary feature'}
+        original=self.repo.create_pull_request
+        def crash_after_create(*args):
+            original(*args)
+            raise SystemExit('simulated broker crash')
+        self.repo.create_pull_request=crash_after_create
+        with self.assertRaises(SystemExit):
+            self.b.handle(create)
+        self.assertEqual(len(self.repo.pulls), 1)
+        receipt=self.b.db.execute('SELECT state FROM repository_pull_requests').fetchone()
+        self.assertEqual(receipt['state'], 'pending')
+        from broker import Broker
+        restarted=Broker(self.tmp.name,self.token);self.addCleanup(restarted.db.close)
+        restarted.repository=self.repo
+        with self.assertRaisesRegex(ValueError, 'operator reconciliation'):
+            restarted.handle(create)
+        resume=self.envelope('task_resume', 'b' * 64, '#ai', 'irc.perl.org')
+        with self.assertRaisesRegex(ValueError, 'operator reconciliation'):
+            restarted.handle(resume | {'action':'task_resume','checkpoint_id':checkpoint['checkpoint_id'],
+                                       'requester':'mateu','deadline':time.time()+60})
+
+    def test_pending_pull_request_survives_audit_pruning(self):
+        self.repo.exists=True
+        create=self.request('repo_pr_create') | {'branch':'burt/dictionary','expected_head_sha':A,'title':'Dictionary feature'}
+        original=self.repo.create_pull_request
+        def crash_after_create(*args):
+            original(*args)
+            raise SystemExit('simulated broker crash')
+        self.repo.create_pull_request=crash_after_create
+        with self.assertRaises(SystemExit):
+            self.b.handle(create)
+        for number in range(512):
+            self.b.resource_checkpoint('snapshot', str(number), self.req, 'active')
+        self.b.prune_audit()
+        self.b.db.commit()
+        self.assertIsNotNone(self.b.pending_pull_request(self.req['scope']))
+        from broker import Broker
+        restarted=Broker(self.tmp.name,self.token);self.addCleanup(restarted.db.close)
+        restarted.repository=self.repo
+        with self.assertRaisesRegex(ValueError, 'operator reconciliation'):
+            restarted.handle(create)
+
+    def test_restart_blocks_unrecorded_pull_request_merge(self):
+        self.repo.exists=True
+        self.b.handle(self.request('repo_pr_create') | {'branch':'burt/dictionary','expected_head_sha':A,
+                                                         'title':'Dictionary feature'})
+        checkpoint=self.checkpoint()
+        merge=self.request('repo_pr_merge') | {'number':1,'expected_head_sha':A}
+        original=self.repo.merge_pull_request
+        def crash_after_merge(*args):
+            original(*args)
+            raise SystemExit('simulated broker crash')
+        self.repo.merge_pull_request=crash_after_merge
+        with self.assertRaises(SystemExit):
+            self.b.handle(merge)
+        self.assertTrue(self.repo.pulls[1]['merged'])
+        receipt=self.b.db.execute('SELECT state FROM repository_pull_requests').fetchone()
+        self.assertEqual(receipt['state'], 'pending')
+        from broker import Broker
+        restarted=Broker(self.tmp.name,self.token);self.addCleanup(restarted.db.close)
+        restarted.repository=self.repo
+        with self.assertRaisesRegex(ValueError, 'operator reconciliation'):
+            restarted.handle(merge)
+        resume=self.envelope('task_resume', 'b' * 64, '#ai', 'irc.perl.org')
+        with self.assertRaisesRegex(ValueError, 'operator reconciliation'):
+            restarted.handle(resume | {'action':'task_resume','checkpoint_id':checkpoint['checkpoint_id'],
+                                       'requester':'mateu','deadline':time.time()+60})
 
     def test_exact_transcript_crosses_runtime_proxy_to_broker_fake_publication_boundary(self):
         # The Perl runtime is the producer.  Capture its actual no-ID envelope,
