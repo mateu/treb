@@ -95,12 +95,24 @@ ok($bot->{pending}{coding_task}, 'ordinary work mentioning resume is not diverte
 $bot->{pending} = pending();
 {
   no warnings 'redefine';
-  my $called = 0;
-  local *Bot::Runtime::Workbench::broker_call = sub { $called++; return '{}'; };
+  my @called;
+  local *Bot::Runtime::Workbench::broker_call = sub {
+    my ($request) = @_; push @called, $request;
+    return JSON::PP::encode_json({jobs => []}) if $request->{action} eq 'task_status';
+    return JSON::PP::encode_json({checkpoint_id => 'a'x32, jobs => [], attempts_remaining => 13})
+      if $request->{action} eq 'task_checkpoint';
+    return JSON::PP::encode_json({}) if $request->{action} eq 'task_progress';
+    return JSON::PP::encode_json({id => 'b'x32, state => 'passed', attempts_remaining => 12,
+      result => {exit_code => 0}});
+  };
   like($defs{run_code}{code}->($tool, {
     files => {'main.pl' => '1;'}, argv => ['/usr/bin/perl', '/work/main.pl'], title => 'probe',
-  }), qr/No admitted coding task for run/, 'execution requires task lifecycle admission');
-  is($called, 0, 'unadmitted execution does not reach the broker');
+  }), qr/"state":"passed"/, 'first Workbench invocation admits and dispatches execution');
+  ok($bot->{pending}{coding_task}, 'first Workbench invocation marks the task admitted');
+  is(scalar(grep { $_->{action} eq 'task_status' && $_->{phase} eq 'started' } @called), 1,
+    'first invocation reports exactly one task start');
+  my @scopes = map { $_->{scope} } grep { exists $_->{scope} } @called;
+  is_deeply([grep { $_ ne $scopes[0] } @scopes], [], 'lifecycle and run calls share the admitted scope');
 }
 
 my @requests;
@@ -240,6 +252,7 @@ my @resume;
   no warnings 'redefine';
   local *Bot::Runtime::Workbench::broker_call = sub {
     my ($request) = @_; push @resume, $request;
+    return JSON::PP::encode_json({jobs => []}) if $request->{action} eq 'checkpoint_status';
     return JSON::PP::encode_json({
       resumed_scope => $request->{scope}, jobs => [], attempts_remaining => 4,
       latest_execution_job => {id => 'd'x32, state => 'passed'},
@@ -251,6 +264,9 @@ my @resume;
       if $request->{action} eq 'task_checkpoint';
     return JSON::PP::encode_json({});
   };
+  like($defs{coding_checkpoint_status}{code}->($tool, {checkpoint_id => 'a'x32}),
+    qr/jobs/, 'checkpoint status remains available for an explicit resume envelope');
+  ok(!$bot->{pending}{coding_task}, 'checkpoint status does not accidentally admit an explicit resume request');
   like($defs{resume_coding_task}{code}->($tool, {checkpoint_id => 'a'x32}),
     qr/resumed_scope/, 'resume restores a checkpoint using a fresh envelope');
 }
