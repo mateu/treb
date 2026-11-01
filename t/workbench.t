@@ -210,6 +210,15 @@ unlike($bot->{sent}[-1], qr/success unconfirmed|operator reconciliation|do not r
   'safe publication preflight is not misreported as an uncertain write');
 ok(!$bot->{pending}{coding_stop_reason},
   'safe publication preflight does not terminally stop the task');
+for my $pr_result (
+  ['repo_pr_create', {state => 'open', url => 'https://github.com/burt-agent/workspace/pull/7'}],
+  ['repo_pr_merge', {state => 'closed', merged => JSON::PP::true,
+    url => 'https://github.com/burt-agent/workspace/pull/7'}],
+) {
+  Bot::Runtime::Workbench::report_result($bot, $pr_result->[0], JSON::PP::encode_json($pr_result->[1]));
+  unlike($bot->{sent}[-1], qr/success unconfirmed|operator reconciliation|do not retry/,
+    "$pr_result->[0] confirmed receipt is not misreported as uncertain");
+}
 Bot::Runtime::Workbench::report_result($bot, 'repo_run',
   JSON::PP::encode_json({id => 'f'x32, state => 'failed', attempts_remaining => 0,
     result => {exit_code => 1, output => 'INJECTED'}}));

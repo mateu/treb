@@ -203,7 +203,10 @@ sub report_result {
   my $uncertain_write = !$structured_rejection
     || ($r->{code}//'') eq 'publication_uncertain'
     || ($state//'') eq 'publishing' || ($state//'') eq 'uncertain';
-  if ($publication && $state ne 'published' && $uncertain_write) {
+  my $confirmed_publication = $state eq 'published'
+    || ($action eq 'repo_pr_create' && $state eq 'open')
+    || ($action eq 'repo_pr_merge' && $state eq 'closed' && $r->{merged});
+  if ($publication && !$confirmed_publication && $uncertain_write) {
     $notice.='; success unconfirmed; the public write may already have succeeded; operator reconciliation required before retrying; do not retry';
   }
   my $url=$r->{url}//'';
