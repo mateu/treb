@@ -227,6 +227,30 @@ class RepositoryBrokerTests(unittest.TestCase):
             self.b.handle(create)
         self.assertFalse(self.repo.pulls)
 
+    def test_uncertain_pr_writes_terminally_require_reconciliation(self):
+        self.repo.exists=True
+        create=self.request('repo_pr_create') | {'branch':'burt/dictionary','expected_head_sha':A,'title':'Dictionary feature'}
+        self.repo.fail_pr_write=True
+        with self.assertRaisesRegex(ValueError, 'outcome is uncertain'):
+            self.b.handle(create)
+        task_id=self.b.task_binding(self.req['scope'])['task_id']
+        self.assertEqual(self.b.task_budget_status(task_id)['terminal_reason'], 'publication_uncertain')
+        with self.assertRaisesRegex(ValueError, 'task is terminal'):
+            self.b.handle(create)
+
+        self.b.db.execute('UPDATE task_phase_budgets SET terminal_reason=NULL,phase=? WHERE task_id=?',
+                          ('started', task_id))
+        self.b.db.commit()
+        self.repo.fail_pr_write=False
+        self.b.handle(create)
+        self.repo.fail_merge=True
+        merge=self.request('repo_pr_merge') | {'number':1,'expected_head_sha':A}
+        with self.assertRaisesRegex(ValueError, 'merge outcome is uncertain'):
+            self.b.handle(merge)
+        self.assertEqual(self.b.task_budget_status(task_id)['terminal_reason'], 'publication_uncertain')
+        with self.assertRaisesRegex(ValueError, 'task is terminal'):
+            self.b.handle(merge)
+
     def test_exact_transcript_crosses_runtime_proxy_to_broker_fake_publication_boundary(self):
         # The Perl runtime is the producer.  Capture its actual no-ID envelope,
         # then feed it to the Python broker with a fake repository write edge.

@@ -1014,10 +1014,12 @@ class Broker:
             self.admit_transition(binding['task_id'], 'pull_request_write')
             try:
                 pull = self.repository.create_pull_request(req['branch'], req['expected_head_sha'], req['title'])
-            except Exception:
+            except Exception as exc:
                 self.db.execute('''INSERT INTO repository_pull_requests VALUES (?,?,?,?,?,?,?,?)
                     ON CONFLICT(branch,head_sha) DO UPDATE SET state=excluded.state,updated=excluded.updated''',
                     (req['branch'], req['expected_head_sha'], None, None, 'create_uncertain', None, time.time(), time.time()))
+                if 'pull request submission outcome is uncertain' in str(exc):
+                    self.admit_transition(binding['task_id'], 'terminal', terminal_reason='publication_uncertain')
                 self.db.commit()
                 raise
             self.record_pull_request(pull)
@@ -1036,10 +1038,12 @@ class Broker:
                 raise ValueError('pull request head changed; inspect and retest before merging')
             try:
                 pull = self.repository.merge_pull_request(req['number'], req['expected_head_sha'])
-            except Exception:
+            except Exception as exc:
                 self.db.execute('''INSERT INTO repository_pull_requests VALUES (?,?,?,?,?,?,?,?)
                     ON CONFLICT(branch,head_sha) DO UPDATE SET state=excluded.state,updated=excluded.updated''',
                     (current['branch'], current['head_sha'], req['number'], current['url'], 'merge_uncertain', None, time.time(), time.time()))
+                if 'pull request merge outcome is uncertain' in str(exc):
+                    self.admit_transition(binding['task_id'], 'terminal', terminal_reason='publication_uncertain')
                 self.db.commit()
                 raise
             self.record_pull_request(pull)
