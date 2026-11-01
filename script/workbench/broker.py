@@ -34,6 +34,7 @@ SNAPSHOT_TTL = 300
 REJECTION_SCHEMA_VERSION = 1
 REPEAT_REJECTION_LIMIT = 3
 ACTIONS = frozenset(('run', 'publish', 'repo_read', 'repo_run', 'repo_publish',
+                     'repo_pr_create', 'repo_pr_inspect', 'repo_pr_merge',
                      'repo_inspect', 'job_inspect', 'repo_repair', 'repo_diagnose', 'reference', 'task_status',
                      'task_progress', 'task_checkpoint', 'checkpoint_status', 'task_resume'))
 # `irc_fold` on the Perl side emits the rfc1459 canonical alphabet. Do not
@@ -97,6 +98,10 @@ SAFE_REASONS = frozenset({
     'repository response exceeds bound',
     'repository submission failed or response lost; operator reconciliation required; do not retry',
     'repository tree exceeds bound',
+    'pull request submission outcome is uncertain; inspect before retrying',
+    'pull request merge outcome is uncertain; inspect before retrying',
+    'pull request head changed; inspect and retest before merging',
+    'pull request is not mergeable under normal GitHub protections',
     'task channel mismatch',
     'trusted verification receipt missing or stale; retest',
     'unexpected gist owner or URL',
@@ -346,7 +351,9 @@ class Broker:
         message = str(exc)
         uncertain = ('submission failed or response lost' in message
                      or 'submission failed or response was lost' in message
-                     or 'publication outcome requires operator reconciliation' in message)
+                     or 'publication outcome requires operator reconciliation' in message
+                     or 'pull request submission outcome is uncertain' in message
+                     or 'pull request merge outcome is uncertain' in message)
         stale = message.startswith('branch changed') or 'snapshot expired' in message
         budget = message.startswith(('limit:', 'global limit:'))
         code, public, disposition = (
@@ -654,6 +661,11 @@ class Broker:
             if row['sandbox_attempts'] >= self.max_attempts():
                 raise ValueError(f'limit: {self.max_attempts()} sandbox attempts per IRC request')
             updates['sandbox_attempts'] = row['sandbox_attempts'] + 1
+        elif operation == 'pull_request_write':
+            # PR creation/merge is separately bounded by GitHub's normal
+            # protection and expected-head checks, but must still honor the
+            # durable task deadline and terminal lifecycle before side effects.
+            pass
         elif operation == 'public_write':
             if row['public_writes'] >= MAX_PUBLIC_WRITES:
                 raise ValueError(limit_message or 'limit: one submission per IRC request')
@@ -999,6 +1011,7 @@ class Broker:
             self.db.commit()
             return self.result(self.db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())
         if action == 'repo_pr_create':
+            self.admit_transition(binding['task_id'], 'pull_request_write')
             try:
                 pull = self.repository.create_pull_request(req['branch'], req['expected_head_sha'], req['title'])
             except Exception:
@@ -1014,6 +1027,7 @@ class Broker:
             self.record_pull_request(pull)
             return pull
         if action == 'repo_pr_merge':
+            self.admit_transition(binding['task_id'], 'pull_request_write')
             # Read the immutable target identity before the merge side effect so
             # an uncertain response is durably tied to the real branch, never a
             # caller-provided or placeholder destination.

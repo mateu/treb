@@ -210,6 +210,23 @@ class RepositoryBrokerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'head branch'):
             self.b.handle(self.request('repo_pr_create') | {'branch':'main','expected_head_sha':A,'title':'bad'})
 
+    def test_pr_writes_respect_expired_and_terminal_task_lifecycle(self):
+        self.repo.exists=True
+        status=self.envelope('task_status') | {'action':'task_status','phase':'started','reason':'admitted'}
+        self.b.handle(status)
+        self.b.db.execute('UPDATE task_phase_budgets SET deadline=0 WHERE task_id=?', (self.req['scope'],))
+        self.b.db.commit()
+        create=self.request('repo_pr_create') | {'branch':'burt/dictionary','expected_head_sha':A,'title':'Dictionary feature'}
+        with self.assertRaisesRegex(ValueError, 'deadline reached'):
+            self.b.handle(create)
+        self.assertFalse(self.repo.pulls)
+        self.b.db.execute('UPDATE task_phase_budgets SET deadline=?,terminal_reason=? WHERE task_id=?',
+                          (time.time()+60, 'publication_uncertain', self.req['scope']))
+        self.b.db.commit()
+        with self.assertRaisesRegex(ValueError, 'task is terminal'):
+            self.b.handle(create)
+        self.assertFalse(self.repo.pulls)
+
     def test_exact_transcript_crosses_runtime_proxy_to_broker_fake_publication_boundary(self):
         # The Perl runtime is the producer.  Capture its actual no-ID envelope,
         # then feed it to the Python broker with a fake repository write edge.
