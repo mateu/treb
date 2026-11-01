@@ -173,7 +173,7 @@ class Repository:
                 reconciled = self.pull_request(number)
             except Exception:
                 reconciled = None
-            if reconciled and reconciled['merged']:
+            if reconciled and reconciled['merged'] and reconciled['head_sha'] == expected_head_sha:
                 return reconciled | {'merged_now': False}
             raise ValueError('pull request merge outcome is uncertain; inspect before retrying') from None
         if not isinstance(merged, dict) or merged.get('merged') is not True or not re.fullmatch(SHA, merged.get('sha', '')):

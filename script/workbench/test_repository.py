@@ -24,6 +24,7 @@ class FakeRepository(Repository):
         self.fail_merge = False
         self.lose_pr_response = False
         self.advance_before_create = False
+        self.advance_merge_head = False
         self.lose_merge_response = False
         self.fail_merge_readback = False
         self.fail_reconciliation = False
@@ -39,6 +40,7 @@ class FakeRepository(Repository):
                 number = int(path.split('/')[-2]); pull = self.pulls[number]
                 if pull['head']['sha'] != payload['sha']: return {'merged':False,'sha':''}
                 pull['merged'], pull['state'] = True, 'closed'
+                if self.advance_merge_head: pull['head']['sha'] = B
                 if self.lose_merge_response:
                     self.fail_reconciliation = True
                     raise TimeoutError()
@@ -146,6 +148,9 @@ class RepositoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'submission outcome is uncertain'):
             r.create_pull_request('burt/dictionary', A, 'Dictionary feature')
         r=FakeRepository(); r.pulls[1]=r.pull(1, 'burt/dictionary', A); r.lose_merge_response=True
+        with self.assertRaisesRegex(ValueError, 'merge outcome is uncertain'):
+            r.merge_pull_request(1, A)
+        r=FakeRepository(); r.pulls[1]=r.pull(1, 'burt/dictionary', A); r.advance_merge_head=True; r.lose_merge_response=True
         with self.assertRaisesRegex(ValueError, 'merge outcome is uncertain'):
             r.merge_pull_request(1, A)
         r=FakeRepository(); r.pulls[1]=r.pull(1, 'burt/dictionary', A); r.fail_merge_readback=True
