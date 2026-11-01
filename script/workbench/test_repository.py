@@ -304,6 +304,56 @@ class RepositoryBrokerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'task is terminal'):
             self.b.handle(create)
 
+    def test_restart_blocks_unrecorded_pull_request_create(self):
+        self.repo.exists=True
+        checkpoint=self.checkpoint()
+        create=self.request('repo_pr_create') | {'branch':'burt/dictionary','expected_head_sha':A,'title':'Dictionary feature'}
+        original=self.repo.create_pull_request
+        def crash_after_create(*args):
+            original(*args)
+            raise SystemExit('simulated broker crash')
+        self.repo.create_pull_request=crash_after_create
+        with self.assertRaises(SystemExit):
+            self.b.handle(create)
+        self.assertEqual(len(self.repo.pulls), 1)
+        receipt=self.b.db.execute('SELECT state FROM repository_pull_requests').fetchone()
+        self.assertEqual(receipt['state'], 'pending')
+        from broker import Broker
+        restarted=Broker(self.tmp.name,self.token);self.addCleanup(restarted.db.close)
+        restarted.repository=self.repo
+        with self.assertRaisesRegex(ValueError, 'operator reconciliation'):
+            restarted.handle(create)
+        resume=self.envelope('task_resume', 'b' * 64, '#ai', 'irc.perl.org')
+        with self.assertRaisesRegex(ValueError, 'operator reconciliation'):
+            restarted.handle(resume | {'action':'task_resume','checkpoint_id':checkpoint['checkpoint_id'],
+                                       'requester':'mateu','deadline':time.time()+60})
+
+    def test_restart_blocks_unrecorded_pull_request_merge(self):
+        self.repo.exists=True
+        self.b.handle(self.request('repo_pr_create') | {'branch':'burt/dictionary','expected_head_sha':A,
+                                                         'title':'Dictionary feature'})
+        checkpoint=self.checkpoint()
+        merge=self.request('repo_pr_merge') | {'number':1,'expected_head_sha':A}
+        original=self.repo.merge_pull_request
+        def crash_after_merge(*args):
+            original(*args)
+            raise SystemExit('simulated broker crash')
+        self.repo.merge_pull_request=crash_after_merge
+        with self.assertRaises(SystemExit):
+            self.b.handle(merge)
+        self.assertTrue(self.repo.pulls[1]['merged'])
+        receipt=self.b.db.execute('SELECT state FROM repository_pull_requests').fetchone()
+        self.assertEqual(receipt['state'], 'pending')
+        from broker import Broker
+        restarted=Broker(self.tmp.name,self.token);self.addCleanup(restarted.db.close)
+        restarted.repository=self.repo
+        with self.assertRaisesRegex(ValueError, 'operator reconciliation'):
+            restarted.handle(merge)
+        resume=self.envelope('task_resume', 'b' * 64, '#ai', 'irc.perl.org')
+        with self.assertRaisesRegex(ValueError, 'operator reconciliation'):
+            restarted.handle(resume | {'action':'task_resume','checkpoint_id':checkpoint['checkpoint_id'],
+                                       'requester':'mateu','deadline':time.time()+60})
+
     def test_exact_transcript_crosses_runtime_proxy_to_broker_fake_publication_boundary(self):
         # The Perl runtime is the producer.  Capture its actual no-ID envelope,
         # then feed it to the Python broker with a fake repository write edge.
