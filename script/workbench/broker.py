@@ -1017,9 +1017,13 @@ class Broker:
             try:
                 pull = self.repository.create_pull_request(req['branch'], req['expected_head_sha'], req['title'])
             except Exception as exc:
+                uncertain_pull = getattr(exc, 'pull', None) or {
+                    'branch': req['branch'], 'head_sha': req['expected_head_sha'], 'number': None, 'url': None}
                 self.db.execute('''INSERT INTO repository_pull_requests VALUES (?,?,?,?,?,?,?,?)
-                    ON CONFLICT(branch,head_sha) DO UPDATE SET state=excluded.state,updated=excluded.updated''',
-                    (req['branch'], req['expected_head_sha'], None, None, 'create_uncertain', None, time.time(), time.time()))
+                    ON CONFLICT(branch,head_sha) DO UPDATE SET number=excluded.number,url=excluded.url,
+                    state=excluded.state,updated=excluded.updated''',
+                    (uncertain_pull['branch'], uncertain_pull['head_sha'], uncertain_pull['number'],
+                     uncertain_pull['url'], 'create_uncertain', None, time.time(), time.time()))
                 if 'pull request submission outcome is uncertain' in str(exc):
                     self.admit_transition(binding['task_id'], 'terminal', terminal_reason='publication_uncertain')
                 self.db.commit()

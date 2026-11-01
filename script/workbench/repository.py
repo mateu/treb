@@ -14,6 +14,12 @@ TOKEN = Path.home() / '.config/burt-publisher/github.token'
 SHA = r'[a-f0-9]{40}'
 
 
+class PullRequestUncertain(ValueError):
+    def __init__(self, pull):
+        super().__init__('pull request submission outcome is uncertain; inspect before retrying')
+        self.pull = pull
+
+
 def validate_pull_request(branch, expected_head_sha=None):
     if not isinstance(branch, str) or not re.fullmatch(r'burt/[a-z0-9][a-z0-9-]{0,59}', branch):
         raise ValueError('use a burt/<lowercase-slug> head branch for a pull request')
@@ -142,7 +148,10 @@ class Repository:
             raise ValueError('pull request submission outcome is uncertain; inspect before retrying') from None
         result = self._validated_pull(created)
         if result['branch'] != branch or result['head_sha'] != expected_head_sha:
-            raise ValueError('unexpected created pull request')
+            # GitHub accepted the write, but its resource no longer matches the
+            # precondition we checked. Carry the actual identity so the broker
+            # can durably reconcile it and stop further writes.
+            raise PullRequestUncertain(result)
         return result | {'created': True}
 
     def merge_pull_request(self, number, expected_head_sha):

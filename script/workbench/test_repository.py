@@ -23,6 +23,7 @@ class FakeRepository(Repository):
         self.fail_pr_write = False
         self.fail_merge = False
         self.lose_pr_response = False
+        self.advance_before_create = False
         self.lose_merge_response = False
         self.fail_merge_readback = False
         self.fail_reconciliation = False
@@ -47,6 +48,7 @@ class FakeRepository(Repository):
             if path == '/repos/burt-agent/workspace/pulls' and payload is not None:
                 if self.fail_pr_write: raise TimeoutError()
                 number = max(self.pulls, default=0) + 1
+                if self.advance_before_create: self.head = B
                 pull = self.pull(number, payload['head'], self.head)
                 self.pulls[number] = pull
                 if self.lose_pr_response:
@@ -138,6 +140,9 @@ class RepositoryTests(unittest.TestCase):
         r=FakeRepository(); r.exists=True; r.fail_pr_write=True; r.pulls[1]=r.pull(1, 'burt/dictionary', A)
         self.assertFalse(r.create_pull_request('burt/dictionary', A, 'Dictionary feature')['created'])
         r=FakeRepository(); r.exists=True; r.lose_pr_response=True
+        with self.assertRaisesRegex(ValueError, 'submission outcome is uncertain'):
+            r.create_pull_request('burt/dictionary', A, 'Dictionary feature')
+        r=FakeRepository(); r.exists=True; r.advance_before_create=True
         with self.assertRaisesRegex(ValueError, 'submission outcome is uncertain'):
             r.create_pull_request('burt/dictionary', A, 'Dictionary feature')
         r=FakeRepository(); r.pulls[1]=r.pull(1, 'burt/dictionary', A); r.lose_merge_response=True
@@ -278,6 +283,21 @@ class RepositoryBrokerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'operator reconciliation'):
             self.b.handle(resume | {'action':'task_resume', 'checkpoint_id':checkpoint['checkpoint_id'],
                                     'requester':'mateu', 'deadline':time.time()+60})
+
+    def test_changed_head_after_create_is_a_terminal_receipt(self):
+        self.repo.exists=True
+        self.repo.advance_before_create=True
+        create=self.request('repo_pr_create') | {'branch':'burt/dictionary','expected_head_sha':A,'title':'Dictionary feature'}
+        with self.assertRaisesRegex(ValueError, 'outcome is uncertain'):
+            self.b.handle(create)
+        receipt=self.b.db.execute('SELECT branch,head_sha,number,url,state FROM repository_pull_requests').fetchone()
+        self.assertEqual(dict(receipt), {'branch':'burt/dictionary','head_sha':B,'number':1,
+                                         'url':'https://github.com/burt-agent/workspace/pull/1',
+                                         'state':'create_uncertain'})
+        task_id=self.b.task_binding(self.req['scope'])['task_id']
+        self.assertEqual(self.b.task_budget_status(task_id)['terminal_reason'], 'publication_uncertain')
+        with self.assertRaisesRegex(ValueError, 'task is terminal'):
+            self.b.handle(create)
 
     def test_exact_transcript_crosses_runtime_proxy_to_broker_fake_publication_boundary(self):
         # The Perl runtime is the producer.  Capture its actual no-ID envelope,
