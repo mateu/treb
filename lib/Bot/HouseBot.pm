@@ -123,6 +123,12 @@ has memory => (
 
 has _mcp => ( is => 'rw', traits => ['NoGetopt'] );
 has _raider => ( is => 'rw', traits => ['NoGetopt'] );
+# Raider instances are shared for engine/MCP setup, while their conversation
+# state is isolated per IRC target by RaidFlow.
+has _raider_channel_histories => (
+  is => 'rw', traits => ['NoGetopt'],
+  default => sub { { entries => {}, tick => 0 } },
+);
 has _msg_buffer => (
   is => 'rw', traits => ['NoGetopt'],
   default => sub { {} },  # { channel => [messages] }

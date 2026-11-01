@@ -26,7 +26,7 @@ $ENV{BURT_WORKBENCH_SOCKET}='/not/a/socket'; $ENV{IRC_SERVER}='irc.perl.org';
 my $bot=bless {pending=>{channel=>'#ai',expires_at=>time+60,messages=>[
   {nick=>'mateu',source_kind=>'conversation',msg=>$ENV{WORKBENCH_TRANSCRIPT}}]}},'ProxyBot';
 my %tools=map {$_->{name}=>$_} @{Bot::Runtime::Workbench::tool_specs($bot)};
-no warnings 'redefine'; local *Bot::Runtime::Workbench::broker_call=sub { print encode_json($_[0]); return '{"state":"passed"}' };
+no warnings 'redefine'; local *Bot::Runtime::Workbench::broker_call=sub { my $r=$_[0]; return '{"jobs":[]}' if $r->{action} eq 'task_status'; return '{"checkpoint_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","jobs":[],"attempts_remaining":13}' if $r->{action} eq 'task_checkpoint'; return '{}' if $r->{action} eq 'task_progress'; print encode_json($r); return '{"state":"passed"}' };
 $tools{publish_repo}{code}->(bless({},'ProxyTool'),{});'''
         result = subprocess.run(
             ['script/with-burt-env.sh', 'perl', '-Ilib', '-e', perl],
@@ -55,7 +55,7 @@ $tools{publish_repo}{code}->(bless({},'ProxyTool'),{});'''
 $ENV{BURT_WORKBENCH_SOCKET}='/not/a/socket'; $ENV{IRC_SERVER}='irc.perl.org';
 my $bot=bless {pending=>{channel=>'#ai',expires_at=>time+60,messages=>[{nick=>'mateu',source_kind=>'conversation',msg=>'open the PR'}]}},'ProxyBot';
 my %tools=map {$_->{name}=>$_} @{Bot::Runtime::Workbench::tool_specs($bot)};
-no warnings 'redefine'; local *Bot::Runtime::Workbench::broker_call=sub { print encode_json($_[0]); return '{"state":"open"}' };
+no warnings 'redefine'; local *Bot::Runtime::Workbench::broker_call=sub { my $r=$_[0]; return '{"jobs":[]}' if $r->{action} eq 'task_status'; return '{"checkpoint_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","jobs":[],"attempts_remaining":13}' if $r->{action} eq 'task_checkpoint'; return '{}' if $r->{action} eq 'task_progress'; print encode_json($r); return '{"state":"open"}' };
 $tools{create_repo_pull_request}{code}->(bless({},'ProxyTool'),{branch=>'burt/dictionary',expected_head_sha=>('a'x40),title=>'Dictionary feature'});'''
         result = subprocess.run(['script/with-burt-env.sh','perl','-Ilib','-e',perl], cwd=root, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)

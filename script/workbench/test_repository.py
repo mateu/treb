@@ -452,7 +452,7 @@ my $bot = bless { pending => { channel => '#ai', expires_at => time + 60, messag
   { nick => 'mateu', source_kind => 'conversation', queued_at => time,
     msg => 'burt_bot: read burt-agent/workspace project dictionary on branch burt/dictionary, run the tests, and push if they pass.' } ] } }, 'BoundaryBot';
 my %defs = map { $_->{name} => $_ } @{ Bot::Runtime::Workbench::tool_specs($bot) };
-no warnings 'redefine'; local *Bot::Runtime::Workbench::broker_call = sub { print JSON::PP::encode_json($_[0]); return '{"state":"passed"}' };
+no warnings 'redefine'; local *Bot::Runtime::Workbench::broker_call = sub { my $r=$_[0]; return '{"jobs":[]}' if $r->{action} eq 'task_status'; return '{"checkpoint_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","jobs":[],"attempts_remaining":13}' if $r->{action} eq 'task_checkpoint'; return '{}' if $r->{action} eq 'task_progress'; print JSON::PP::encode_json($r); return '{"state":"passed"}' };
 $defs{publish_repo}{code}->(bless({}, 'BoundaryTool'), {});'''
         produced = subprocess.run(['script/with-burt-env.sh', 'perl', '-Ilib', '-e', perl], cwd=root,
                                   text=True, capture_output=True)

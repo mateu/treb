@@ -8,6 +8,7 @@ use POE::Kernel ();
 use Bot::Runtime::Workbench ();
 use Bot::Runtime::Limits qw(runtime_limit now);
 use Bot::Runtime::OutputPipeline 'clean_ai_output';
+use Bot::IRCIdentity qw(irc_fold);
 
 our @EXPORT_OK = qw(do_raid);
 
@@ -48,6 +49,86 @@ sub _raid_with_fallback {
   return $result;
 }
 
+sub _channel_history_key {
+  my ($self, $pending) = @_;
+  my $network = lc($ENV{IRC_SERVER} // 'irc.perl.org');
+  my $target = $pending->{channel} // $pending->{target} // $self->_default_channel;
+  return join "\0", $network, irc_fold($target);
+}
+
+# One Raider owns engines and MCP wiring, but never a cross-channel transcript.
+# Langertha exposes a writable working history and mutable session arrays; save
+# both arrays (and their matching embedding slots when available) per IRC target.
+# Test doubles without those accessors deliberately retain the prior behavior.
+sub _with_channel_history {
+  my ($self, $raider, $pending, $code) = @_;
+  return $code->() unless $self->can('_raider_channel_histories')
+    && $raider->can('history') && $raider->can('session_history');
+
+  my $store = $self->_raider_channel_histories;
+  $store = { entries => {}, tick => 0 } unless ref($store) eq 'HASH';
+  $store->{entries} //= {};
+  $store->{tick} //= 0;
+  $self->_raider_channel_histories($store);
+
+  my $key = _channel_history_key($self, $pending);
+  my $entry = $store->{entries}{$key} //= {
+    history => [], session_history => [], session_embeddings => [],
+  };
+  $entry->{touched} = ++$store->{tick};
+
+  my $previous = {
+    history => $raider->history,
+    session_history => [ @{$raider->session_history} ],
+  };
+  $previous->{session_embeddings} = [ @{$raider->_session_embeddings} ]
+    if $raider->can('_session_embeddings');
+
+  $raider->history($entry->{history});
+  splice @{$raider->session_history}, 0, scalar(@{$raider->session_history}),
+    @{$entry->{session_history}};
+  if ($raider->can('_session_embeddings')) {
+    splice @{$raider->_session_embeddings}, 0, scalar(@{$raider->_session_embeddings}),
+      @{$entry->{session_embeddings}};
+  }
+
+  my ($ok, $err, @result, $result);
+  if (wantarray) {
+    $ok = eval { @result = $code->(); 1 };
+  } elsif (defined wantarray) {
+    $ok = eval { $result = $code->(); 1 };
+  } else {
+    $ok = eval { $code->(); 1 };
+  }
+  $err = $@;
+
+  $entry->{history} = $raider->history;
+  $entry->{session_history} = [ @{$raider->session_history} ];
+  $entry->{session_embeddings} = [ @{$raider->_session_embeddings} ]
+    if $raider->can('_session_embeddings');
+
+  $raider->history($previous->{history});
+  splice @{$raider->session_history}, 0, scalar(@{$raider->session_history}),
+    @{$previous->{session_history}};
+  if ($raider->can('_session_embeddings')) {
+    splice @{$raider->_session_embeddings}, 0, scalar(@{$raider->_session_embeddings}),
+      @{$previous->{session_embeddings}};
+  }
+
+  # Keep the most recently used target histories; a deterministic key tie-break
+  # avoids unbounded idle-channel memory and makes eviction testable.
+  while (keys(%{$store->{entries}}) > 16) {
+    my ($evict) = sort {
+      ($store->{entries}{$a}{touched} // 0) <=> ($store->{entries}{$b}{touched} // 0)
+        || $a cmp $b
+    } keys %{$store->{entries}};
+    delete $store->{entries}{$evict};
+  }
+
+  die $err unless $ok;
+  return wantarray ? @result : $result;
+}
+
 sub _expire_raid {
   my ($self, $reason, $pending) = @_;
   $self->info("Abandoning pending raid: $reason");
@@ -83,8 +164,6 @@ sub do_raid {
     _expire_raid($self, 'reply/retry deadline reached');
     return;
   }
-
-  Bot::Runtime::Workbench::admit_task($self);
 
   my $input    = $pending->{input};
   my $channel  = $pending->{channel};
@@ -153,8 +232,10 @@ sub do_raid {
   }
 
   my $answer = eval {
-    my $result = _raid_with_fallback($self, $raider, $input);
-    _terminal_silence_cancelled($raider, $result) ? '__SILENT__' : "$result";
+    _with_channel_history($self, $raider, $pending, sub {
+      my $result = _raid_with_fallback($self, $raider, $input);
+      _terminal_silence_cancelled($raider, $result) ? '__SILENT__' : "$result";
+    });
   };
   my $raid_error = $@;
   if ($self->can('_raid_in_progress')) {
@@ -239,8 +320,10 @@ sub do_raid {
     $self->info('Retrying empty output for warm human conversation lane');
     my $retry = eval {
       my $prompt = $input . "\n\nA human directly addressed you and your previous output was empty. Answer that human directly and promptly now. This overrides your default quietness. Be brief, useful, and natural. Answer the actual question first. Use any tool results you already have. Do not use stage directions, faux silence, ambient observation, withdrawn asides, roleplay garnish, or any text about staying quiet. Output plain IRC-ready text only.";
-      my $result = $raider->raid($prompt);
-      "$result";
+      _with_channel_history($self, $raider, $pending, sub {
+        my $result = $raider->raid($prompt);
+        "$result";
+      });
     };
     if (!$@ && defined $retry) {
       my $retry_raw = $retry;
@@ -273,8 +356,10 @@ sub do_raid {
       $self->info('Retrying non-substantive output for warm human conversation lane');
       my $retry = eval {
         my $prompt = $input . "\n\nA human directly addressed you. Answer that human directly and promptly now. This overrides your default quietness. Be brief, useful, and natural. Answer the actual question first. Do not use stage directions, faux silence, ambient observation, withdrawn asides, roleplay garnish, or any text about staying quiet. If silence would be appropriate, output nothing instead of narrating silence.";
-        my $result = $raider->raid($prompt);
-        "$result";
+        _with_channel_history($self, $raider, $pending, sub {
+          my $result = $raider->raid($prompt);
+          "$result";
+        });
       };
       if (!$@ && defined $retry) {
         my $retry_raw = $retry;

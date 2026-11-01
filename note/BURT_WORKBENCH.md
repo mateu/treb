@@ -187,12 +187,18 @@ project or evidence of a real channel user's task succeeding.
 
 ## Coding task visibility and lifetime
 
-Fresh admitted human coding envelopes get `BOT_CODING_TASK_TTL_SECONDS`
-(default 1800 seconds, hard configuration ceiling 3600) when processing starts,
-not the five-minute conversational output TTL. Admission uses the existing
-Workbench gate; stale queued messages, ambient chat, other bots/channels and
-reminder wakes gain no authority. This fixed deadline is never extended by a
-tool or retry, so the job scope is stable. Burt's 13-attempt broker quota and 26 model-iteration limit apply only to
+A fresh trusted human envelope becomes a coding task only when its first
+Workbench tool invocation occurs; ordinary addressed chat remains on the normal
+conversational TTL and sends no Workbench lifecycle traffic. This deliberately
+uses tool use rather than prose intent parsing. Explicit checkpoint status and
+resume retain their existing recovery path. An admitted envelope gets
+`BOT_CODING_TASK_TTL_SECONDS` (default 1800 seconds, hard configuration ceiling
+3600), replacing rather than extending the five-minute conversational output
+TTL. Stale queued messages, ambient chat, other bots/channels and reminder wakes
+gain no authority. This fixed deadline is never extended by a tool or retry, so
+the job scope is stable. Raider working and session history are isolated by IRC
+server plus IRC-casefolded channel (or PM target), with a bounded LRU store, so
+one channel's tool results and task details are not model context in another. Burt's 13-attempt broker quota and 26 model-iteration limit apply only to
 admitted Burt coding tasks; other bots retain 13 model iterations. The final
 verification reserve, job freshness and publishing gates remain unchanged.
 This is an admission/tool/output deadline, not cancellation of an in-flight

@@ -46,11 +46,21 @@ use Bot::Runtime::RaidFlow qw(do_raid);
       replies => $args{replies} || [],
       engine  => Local::RaidFlowEngine->new,
       plugins => $args{plugins} || [],
+      history => $args{history} || [],
+      session_history => $args{session_history} || [],
+      session_embeddings => $args{session_embeddings} || [],
     }, $class;
   }
 
+  sub history { $_[0]{history} = $_[1] if @_ > 1; return $_[0]{history} }
+  sub session_history { return $_[0]{session_history} }
+  sub _session_embeddings { return $_[0]{session_embeddings} }
+
   sub raid {
     my ($self, $prompt) = @_;
+    push @{$self->{history}}, { role => 'user', content => $prompt };
+    push @{$self->{session_history}}, { role => 'user', content => $prompt };
+    push @{$self->{session_embeddings}}, undef;
     my $next = shift @{$self->{replies}};
     die "No queued raid response for prompt: $prompt" unless defined $next;
     die $next->{die} if ref($next) eq 'HASH' && exists $next->{die};
@@ -90,6 +100,7 @@ use Bot::Runtime::RaidFlow qw(do_raid);
       setup_calls                   => 0,
       setup_fail                    => $args{setup_fail},
       setup_replies                 => $args{setup_replies} || [],
+      raider_channel_histories       => { entries => {}, tick => 0 },
     }, $class;
   }
 
@@ -121,6 +132,12 @@ use Bot::Runtime::RaidFlow qw(do_raid);
     my ($self, $value) = @_;
     $self->{raider} = $value if @_ > 1;
     return $self->{raider};
+  }
+
+  sub _raider_channel_histories {
+    my ($self, $value) = @_;
+    $self->{raider_channel_histories} = $value if @_ > 1;
+    return $self->{raider_channel_histories};
   }
 
   sub _setup_raider {
@@ -219,6 +236,74 @@ use Bot::Runtime::RaidFlow qw(do_raid);
   package Local::TerminalSilencePlugin;
   sub new { bless {}, shift }
   sub terminal_silence_requested { 1 }
+}
+
+{
+  my $raider;
+  $raider = Local::RaidFlowRaider->new(
+    history => [{ role => 'system', content => 'outside baseline' }],
+    replies => [
+      sub { is(scalar(@{$raider->history}), 1, 'first target starts with isolated history'); 'mateu-test first' },
+      sub { is(scalar(@{$raider->history}), 1, '#ai does not receive #mateu-test history'); 'ai first' },
+      sub { like($raider->history->[0]{content}, qr/mateu-test first/, '#mateu-test retains its own continuity'); 'mateu-test second' },
+      sub { die '429 rate limit' },
+      sub { like($raider->history->[0]{content}, qr/ai first/, '429 retry restores the originating channel history'); 'ai retry' },
+    ],
+  );
+  my $bot = Local::RaidFlowBot->new(
+    raider => $raider,
+    pending => { input => 'mateu-test first', channel => '#mateu-test', messages => [
+      { nick => 'mateu', channel => '#mateu-test', msg => 'one', source_kind => 'conversation' },
+    ] },
+  );
+  do_raid(self => $bot);
+  is($raider->history->[0]{content}, 'outside baseline', 'normal return restores caller history');
+
+  $bot->_pending_raid({ input => 'ai first', channel => '#ai', messages => [
+    { nick => 'mateu', channel => '#ai', msg => 'two', source_kind => 'conversation' },
+  ] });
+  $bot->_processing(1);
+  do_raid(self => $bot);
+  $bot->_pending_raid({ input => 'mateu-test second', channel => '#mateu-test', messages => [
+    { nick => 'mateu', channel => '#mateu-test', msg => 'three', source_kind => 'conversation' },
+  ] });
+  $bot->_processing(1);
+  do_raid(self => $bot);
+
+  $bot->_pending_raid({ input => 'ai rate limit', channel => '#ai', messages => [
+    { nick => 'mateu', channel => '#ai', msg => 'four', source_kind => 'conversation' },
+  ] });
+  $bot->_processing(1);
+  do_raid(self => $bot);
+  is($raider->history->[0]{content}, 'outside baseline', '429 return restores caller history');
+  $bot->_processing(1);
+  do_raid(self => $bot);
+
+  for my $n (1..17) {
+    my $many = Local::RaidFlowRaider->new(replies => ['ok']);
+    my $many_bot = Local::RaidFlowBot->new(raider => $many, pending => {
+      input => "target $n", channel => "#target$n", messages => [
+        { nick => 'mateu', channel => "#target$n", msg => 'chat', source_kind => 'conversation' },
+      ],
+    });
+    $many_bot->{raider_channel_histories} = $bot->{raider_channel_histories};
+    do_raid(self => $many_bot);
+  }
+  my $entries = $bot->{raider_channel_histories}{entries};
+  ok(keys(%$entries) <= 16, 'channel history store is bounded by LRU');
+  ok(!grep(/#mateu-test\z/, keys %$entries), 'least-recently-used channel history is evicted deterministically');
+
+  my $error_raider = Local::RaidFlowRaider->new(
+    history => [{ role => 'system', content => 'exception baseline' }],
+    replies => [{ die => 'ordinary raider exception' }],
+  );
+  my $error_bot = Local::RaidFlowBot->new(raider => $error_raider, pending => {
+    input => 'explode', channel => '#error', messages => [
+      { nick => 'mateu', channel => '#error', msg => 'explode', source_kind => 'conversation' },
+    ],
+  });
+  do_raid(self => $error_bot);
+  is($error_raider->history->[0]{content}, 'exception baseline', 'raider exception restores caller history');
 }
 
 {
@@ -616,13 +701,19 @@ use Bot::Runtime::RaidFlow qw(do_raid);
   local $ENV{IRC_SERVER}='irc.perl.org';
   my $clock=time;
   local *Bot::Runtime::RaidFlow::now=sub {$clock};
-  my $pending={channel=>'#ai',expires_at=>$clock+100,input=>'coding task',messages=>[
-    {nick=>'mateu',msg=>'burt_bot: write code and publish a gist',source_kind=>'conversation',channel=>'#ai'}]};
-  my $bot=Local::RaidFlowBot->new(pending=>$pending,replies=>[sub {$clock+=400;return 'Tests passed; here is the result.'}]);
+  my $pending={channel=>'#ai',expires_at=>$clock+100,input=>'ordinary chat',messages=>[
+    {nick=>'mateu',msg=>'burt_bot: are you in debug mode?',source_kind=>'conversation',channel=>'#ai'}]};
+  my @broker;
+  no warnings 'redefine';
+  local *Bot::Runtime::Workbench::broker_call=sub { push @broker, $_[0]; return '{}'; };
+  my $bot=Local::RaidFlowBot->new(pending=>$pending,replies=>['No, just chatting.']);
   do_raid(self=>$bot);
-  like($bot->{sent}[0]{msg},qr/Started coding task/,'start reported before generation');
-  like($bot->{sent}[-1]{msg},qr/report withheld.*no matching broker receipt/,'unreceipted coding success claim is withheld after normal chat TTL');
-  ok(!$bot->_processing,'coding lane released after final answer');
+  ok(!$pending->{coding_task}, 'chat-only raid does not admit a coding task');
+  is($pending->{expires_at}, $clock + 100, 'chat-only raid does not extend the conversational TTL');
+  is(scalar(@broker), 0, 'chat-only raid sends no Workbench lifecycle or checkpoint traffic');
+  unlike(join("\n", map { $_->{msg} } @{$bot->{sent}}), qr/Started coding task/, 'chat-only raid sends no coding start notice');
+  is($bot->{sent}[-1]{msg}, 'No, just chatting.', 'chat-only raid still replies normally');
+  ok(!$bot->_processing,'chat lane released after final answer');
 }
 
 # Publication uncertainty must reach IRC even when the model cannot report it.

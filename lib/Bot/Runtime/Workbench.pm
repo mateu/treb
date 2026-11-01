@@ -374,6 +374,11 @@ sub tool_specs {
             && !(grep {!exists $args->{$_}} @$required);
           die "Repository diagnostics must use diagnose_repo_job with the saved repository job id; do not copy project files into run_code.\n"
             if $action eq 'run' && ($self->_pending_raid||{})->{coding_last_repo_job};
+          # Tool use, rather than prose, starts a fresh task. Admission must
+          # precede any scope derivation so every later broker call shares the
+          # deadline and provenance frozen by this first invocation. Explicit
+          # resume owns its separate fresh-envelope path below.
+          admit_task($self) unless $action eq 'task_resume';
           if ($action eq 'task_checkpoint') {
             die "No admitted coding task to checkpoint\n" unless ($self->_pending_raid||{})->{coding_task};
             my $r=task_checkpoint($self->_pending_raid,'started','admitted');
@@ -381,9 +386,11 @@ sub tool_specs {
             return $tool->text_result(JSON::PP::encode_json($r));
           }
           if ($action eq 'checkpoint_status') {
-            my $scope=request_scope($self); my $requester=trusted_requester($self);
-            my $raw=broker_call({%$args,action=>$action,requester=>trusted_requester($self),scope=>$scope,
-              channel=>lc($self->_pending_raid->{channel}),network=>'irc.perl.org'});
+            my $pending=$self->_pending_raid;
+            my $scope=$pending->{coding_scope}//request_scope($self);
+            my $requester=$pending->{coding_requester}//trusted_requester($self);
+            my $raw=broker_call({%$args,action=>$action,requester=>$requester,scope=>$scope,
+              channel=>lc($pending->{channel}),network=>'irc.perl.org'});
             return $tool->text_result($raw);
           }
           if ($action eq 'task_resume') {
@@ -464,14 +471,16 @@ sub tool_specs {
             task_notice($self,$pending,"Resumed coding task (up to ${ttl}s; bounded test/tool attempts). I will report test results and publication status.");
             return $tool->text_result($raw);
           }
-          my $scope=request_scope($self); my $requester=trusted_requester($self);
+          my $pending=$self->_pending_raid;
+          my $scope=$pending->{coding_scope}//request_scope($self);
+          my $requester=$pending->{coding_requester}//trusted_requester($self);
           # Execution must remain inside the lifecycle that froze the trusted
           # requester, scope, deadline, checkpoint, and terminal reporting.
           require_admitted_task($self,$action) if $action =~ /\A(?:run|repo_(?:run|repair|diagnose))\z/;
           task_notice($self,$self->_pending_raid,"$action started.") unless $action =~ /\A(?:repo_(?:read|inspect)|reference)\z/;
           $publication_attempted=1 if $action eq 'publish' || $action eq 'repo_publish' || $action eq 'repo_pr_create' || $action eq 'repo_pr_merge';
-          my $raw=broker_call({%$args,action=>$action,scope=>$scope,requester=>$requester,channel=>lc($self->_pending_raid->{channel}),network=>'irc.perl.org',
-            ($action eq 'repo_publish' ? (requester=>trusted_requester($self)) : ())});
+          my $raw=broker_call({%$args,action=>$action,scope=>$scope,requester=>$requester,channel=>lc($pending->{channel}),network=>'irc.perl.org',
+            ($action eq 'repo_publish' ? (requester=>$requester) : ())});
           report_result($self,$action,$raw,
             $action =~ /\A(?:repo_(?:read|inspect)|reference)\z/);
           $raw;
