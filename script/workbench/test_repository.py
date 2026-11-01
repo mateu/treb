@@ -24,6 +24,7 @@ class FakeRepository(Repository):
         self.fail_merge = False
         self.lose_pr_response = False
         self.lose_merge_response = False
+        self.fail_merge_readback = False
         self.fail_reconciliation = False
 
     def api(self, path, payload=None, method=None):
@@ -40,6 +41,8 @@ class FakeRepository(Repository):
                 if self.lose_merge_response:
                     self.fail_reconciliation = True
                     raise TimeoutError()
+                if self.fail_merge_readback:
+                    self.fail_reconciliation = True
                 return {'merged':True,'sha':D}
             if path == '/repos/burt-agent/workspace/pulls' and payload is not None:
                 if self.fail_pr_write: raise TimeoutError()
@@ -140,6 +143,9 @@ class RepositoryTests(unittest.TestCase):
         r=FakeRepository(); r.pulls[1]=r.pull(1, 'burt/dictionary', A); r.lose_merge_response=True
         with self.assertRaisesRegex(ValueError, 'merge outcome is uncertain'):
             r.merge_pull_request(1, A)
+        r=FakeRepository(); r.pulls[1]=r.pull(1, 'burt/dictionary', A); r.fail_merge_readback=True
+        merged=r.merge_pull_request(1, A)
+        self.assertEqual((merged['merged'], merged['merged_now'], merged['merge_sha']), (True, True, D))
 
     def test_pull_request_rejects_changed_or_foreign_state(self):
         r=FakeRepository(); r.exists=True; r.head=B

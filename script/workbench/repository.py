@@ -169,7 +169,10 @@ class Repository:
             raise ValueError('pull request merge outcome is uncertain; inspect before retrying') from None
         if not isinstance(merged, dict) or merged.get('merged') is not True or not re.fullmatch(SHA, merged.get('sha', '')):
             raise ValueError('pull request was not merged under normal GitHub protections')
-        return self.pull_request(number) | {'merged_now': True, 'merge_sha': merged['sha']}
+        # A validated merge response is authoritative even if the optional
+        # readback is unavailable. Preserve it rather than losing a confirmed
+        # outcome to a later transport error.
+        return current | {'state': 'closed', 'merged': True, 'merged_now': True, 'merge_sha': merged['sha']}
 
     def snapshot(self, branch, project):
         validate_destination(branch, project)
