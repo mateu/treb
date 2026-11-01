@@ -85,6 +85,8 @@ and pull-request APIs, not a shell or Git checkout, and refuses redirects/proxie
   recovered receipt is never authority to retry or continue an old task. No
   result, malformed/foreign/mismatched identity, API failure, or concurrent
   replay remains blocked and leaves the pending evidence intact.
+* `script/workbench/reconcile_pending_pull_request.py --task-id <task-id> --confirm-absent --operator <name>`:
+  a CLI-only operator preview for the exceptional case where the operator has independently established that no PR was created. It performs only GitHub GETs and prints evidence (all-state, paginated PR search; exact branch SHA; request IDs when available), but never changes the database. Add `--yes` only after reviewing that evidence to atomically audit and retire exactly that pending `repo_pr_create` row. The commit path repeats the remote checks immediately before its transaction; any PR, branch/SHA change, API/auth/rate/pagination error, malformed evidence, changed row, or ambiguity leaves the row pending. The bounded operator identifier is required and is never accepted from IRC/model input. The normal command without `--confirm-absent` still requires an identity-matching PR.
 * `merge_repo_pull_request(number, expected_head_sha)`: merges that verified PR
   to `main` only through GitHub's normal expected-SHA squash merge. It has no
   force or administrator bypass; normal repository protections remain effective.

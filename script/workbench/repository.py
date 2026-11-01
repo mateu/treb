@@ -97,6 +97,7 @@ class Repository:
     def __init__(self, token=TOKEN):
         self.token = Path(token)
         self.deadline = None
+        self.request_ids = []
 
     def api(self, path, payload=None, method=None):
         if (not self.token.is_file() or self.token.is_symlink()
@@ -113,6 +114,9 @@ class Repository:
             raise ValueError('repository operation deadline exceeded')
         with opener.open(request, timeout=remaining) as response:
             raw = response.read(1500001)
+            request_id = response.headers.get('X-GitHub-Request-Id')
+        if isinstance(request_id, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,128}', request_id):
+            self.request_ids.append(request_id)
         if len(raw) > 1500000:
             raise ValueError('repository response exceeds bound')
         return json.loads(raw)
@@ -162,6 +166,37 @@ class Repository:
         self.deadline = time.monotonic() + 14
         self.verify()
         return self._find_pull(branch, expected_head_sha)
+
+    def absent_pull_request_evidence(self, branch, expected_head_sha):
+        """Prove, using GETs only, that this fixed-repository head has no PR."""
+        validate_pull_request(branch, expected_head_sha)
+        self.deadline = time.monotonic() + 14
+        self.request_ids = []
+        self.verify()
+        prefix = '/repos/' + REPO
+        head = self.api(prefix + '/git/ref/heads/' + branch).get('object', {}).get('sha', '')
+        if head != expected_head_sha:
+            raise ValueError('branch head changed or is missing; record remains pending')
+        pulls = []
+        for page in range(1, 101):
+            data = self.api(prefix + '/pulls?state=all&head=burt-agent:' + branch
+                            + '&base=main&per_page=100&page=' + str(page))
+            if not isinstance(data, list) or len(data) > 100:
+                raise ValueError('invalid pull request list response')
+            validated = [self._validated_pull(item) for item in data]
+            # GitHub's head filter is not itself evidence: reject a malformed or
+            # unexpected result rather than silently treating it as absence.
+            if any(item['branch'] != branch for item in validated):
+                raise ValueError('unexpected pull request list response')
+            pulls.extend(validated)
+            if len(data) < 100:
+                break
+        else:
+            raise ValueError('pull request pagination exceeds bound')
+        if pulls:
+            raise ValueError('pull request exists for branch; record remains pending')
+        return {'branch': branch, 'head_sha': expected_head_sha, 'branch_sha': head,
+                'pr_count': 0, 'request_ids': list(self.request_ids)}
 
     def create_pull_request(self, branch, expected_head_sha, title):
         validate_pull_request(branch, expected_head_sha)
