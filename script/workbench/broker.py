@@ -209,6 +209,11 @@ class Broker:
             (branch TEXT NOT NULL, head_sha TEXT NOT NULL, number INTEGER,
              url TEXT, state TEXT NOT NULL, merge_sha TEXT, created REAL NOT NULL,
              updated REAL NOT NULL, PRIMARY KEY(branch,head_sha))''')
+        # This table is operational state, unlike the bounded audit journal
+        # below: an in-flight external write must survive audit pruning.
+        self.db.execute('''CREATE TABLE IF NOT EXISTS pending_pull_request_operations
+            (task_id TEXT PRIMARY KEY, branch TEXT NOT NULL, head_sha TEXT NOT NULL,
+             number INTEGER, url TEXT, operation TEXT NOT NULL, created REAL NOT NULL)''')
         # State tables above are mutable operational indexes. Keep an append-only
         # receipt for every resource transition for recovery and audit.
         self.db.execute('''CREATE TABLE IF NOT EXISTS resource_checkpoints
@@ -425,26 +430,25 @@ class Broker:
                                'ORDER BY e.job_id IS NOT NULL,j.created,j.id', (task_id,)).fetchall()
 
     def pending_pull_request(self, task_id):
-        return self.db.execute('''SELECT resource_id FROM resource_checkpoints current
-            WHERE task_id=? AND resource_kind='pull_request' AND state='pending'
-              AND NOT EXISTS (SELECT 1 FROM resource_checkpoints later
-                              WHERE later.task_id=current.task_id
-                                AND later.resource_kind=current.resource_kind
-                                AND later.resource_id=current.resource_id
-                                AND (later.created>current.created
-                                     OR (later.created=current.created AND later.id>current.id)))''',
+        return self.db.execute('SELECT * FROM pending_pull_request_operations WHERE task_id=?',
                                (task_id,)).fetchone()
 
     def admit_pull_request_write(self, req, branch, head_sha, number=None, url=None):
         task_id = self.task_binding(req['scope'])['task_id']
         if self.pending_pull_request(task_id):
             raise ValueError('publication outcome requires operator reconciliation')
+        self.db.execute('''INSERT INTO pending_pull_request_operations VALUES (?,?,?,?,?,?,?)
+                           ''', (task_id, branch, head_sha, number, url, req['action'], time.time()))
         self.db.execute('''INSERT INTO repository_pull_requests VALUES (?,?,?,?,?,?,?,?)
             ON CONFLICT(branch,head_sha) DO UPDATE SET number=excluded.number,url=excluded.url,
             state=excluded.state,updated=excluded.updated''',
                         (branch, head_sha, number, url, 'pending', None, time.time(), time.time()))
         self.resource_checkpoint('pull_request', branch + ':' + head_sha, req, 'pending')
         self.db.commit()
+
+    def clear_pending_pull_request(self, req):
+        self.db.execute('DELETE FROM pending_pull_request_operations WHERE task_id=?',
+                        (self.task_binding(req['scope'])['task_id'],))
 
     def remember_task_execution_selection(self, req, job_id, state, now=None):
         """Persist the latest non-diagnostic execution verdict for recovery."""
@@ -1057,6 +1061,8 @@ class Broker:
                                          'uncertain' if uncertain else 'rejected')
                 if uncertain:
                     self.admit_transition(binding['task_id'], 'terminal', terminal_reason='publication_uncertain')
+                else:
+                    self.clear_pending_pull_request(req)
                 self.db.commit()
                 raise
             self.record_pull_request(pull, req)
@@ -1086,6 +1092,8 @@ class Broker:
                                          'uncertain' if uncertain else 'rejected')
                 if uncertain:
                     self.admit_transition(binding['task_id'], 'terminal', terminal_reason='publication_uncertain')
+                else:
+                    self.clear_pending_pull_request(req)
                 self.db.commit()
                 raise
             self.record_pull_request(pull, req)
@@ -1153,6 +1161,7 @@ class Broker:
              pull.get('merge_sha'), time.time(), time.time()))
         if req is not None:
             self.resource_checkpoint('pull_request', pull['branch'] + ':' + pull['head_sha'], req, state)
+            self.clear_pending_pull_request(req)
         self.db.commit()
 
     def publish_repository(self, req, job, destination, allow_after_final_report=False):

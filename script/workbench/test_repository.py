@@ -273,6 +273,7 @@ class RepositoryBrokerTests(unittest.TestCase):
 
         self.b.db.execute('UPDATE task_phase_budgets SET terminal_reason=NULL,phase=? WHERE task_id=?',
                           ('started', task_id))
+        self.b.db.execute('DELETE FROM pending_pull_request_operations WHERE task_id=?', (task_id,))
         self.b.db.commit()
         self.repo.fail_pr_write=False
         self.b.handle(create)
@@ -327,6 +328,27 @@ class RepositoryBrokerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'operator reconciliation'):
             restarted.handle(resume | {'action':'task_resume','checkpoint_id':checkpoint['checkpoint_id'],
                                        'requester':'mateu','deadline':time.time()+60})
+
+    def test_pending_pull_request_survives_audit_pruning(self):
+        self.repo.exists=True
+        create=self.request('repo_pr_create') | {'branch':'burt/dictionary','expected_head_sha':A,'title':'Dictionary feature'}
+        original=self.repo.create_pull_request
+        def crash_after_create(*args):
+            original(*args)
+            raise SystemExit('simulated broker crash')
+        self.repo.create_pull_request=crash_after_create
+        with self.assertRaises(SystemExit):
+            self.b.handle(create)
+        for number in range(512):
+            self.b.resource_checkpoint('snapshot', str(number), self.req, 'active')
+        self.b.prune_audit()
+        self.b.db.commit()
+        self.assertIsNotNone(self.b.pending_pull_request(self.req['scope']))
+        from broker import Broker
+        restarted=Broker(self.tmp.name,self.token);self.addCleanup(restarted.db.close)
+        restarted.repository=self.repo
+        with self.assertRaisesRegex(ValueError, 'operator reconciliation'):
+            restarted.handle(create)
 
     def test_restart_blocks_unrecorded_pull_request_merge(self):
         self.repo.exists=True
