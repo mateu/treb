@@ -76,6 +76,15 @@ and pull-request APIs, not a shell or Git checkout, and refuses redirects/proxie
   checking the live branch head. Duplicate requests return the same PR.
 * `inspect_repo_pull_request(number)`: returns bounded fixed-repository PR
   head/base/state data for reconciliation without writing.
+* `script/workbench/reconcile_pending_pull_request.py --task-id <task-id>`:
+  operator-only recovery for one durable **PR-create** uncertainty. It is not a
+  runtime/model tool and makes GitHub GET requests only. It accepts a result only
+  when the stored task, `burt/*` branch, exact head SHA, fixed repository, and
+  `main` base all match; then it writes a local reconciliation receipt and
+  clears that task's pending row. It retains the task's terminal state, so a
+  recovered receipt is never authority to retry or continue an old task. No
+  result, malformed/foreign/mismatched identity, API failure, or concurrent
+  replay remains blocked and leaves the pending evidence intact.
 * `merge_repo_pull_request(number, expected_head_sha)`: merges that verified PR
   to `main` only through GitHub's normal expected-SHA squash merge. It has no
   force or administrator bypass; normal repository protections remain effective.
@@ -104,9 +113,12 @@ Exact bundles/results survive service restart. Up to 5 attempts and 1 submission
 per turn, 30 executions/hour, 10 submissions/day globally. Runs/publications are
 idempotent per request and exact bundle. Jobs must pass and be <15 minutes old.
 Failed/resource-killed/output-truncated jobs cannot publish. Lost GitHub replies
-leave an uncertain record: reconcile manually, never blindly retry. Broker
-restart during a POST leaves `publishing`, also fail-closed. Ordinary records
-expire after seven days; ambiguous publication records are retained.
+leave an uncertain record: reconcile manually, never blindly retry. For an
+uncertain PR create with no known number, the operator-only reconciliation command
+above may resolve only an exact GitHub identity; a no-result read is not proof
+that retrying is safe. Broker restart during a POST leaves `publishing`, also
+fail-closed. Ordinary records expire after seven days; ambiguous publication
+records are retained.
 
 ## Installation / verification
 
