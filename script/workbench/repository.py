@@ -130,7 +130,13 @@ class Repository:
         try:
             created = self.api(prefix + '/pulls', {'title': title, 'head': branch, 'base': 'main'}, 'POST')
         except Exception:
-            existing = self._find_pull(branch, expected_head_sha)
+            # The write crossed GitHub's irreversible boundary. A second
+            # outage while reconciling must remain an uncertainty, never turn
+            # into a retryable transport failure that permits another write.
+            try:
+                existing = self._find_pull(branch, expected_head_sha)
+            except Exception:
+                existing = None
             if existing:
                 return existing | {'created': False}
             raise ValueError('pull request submission outcome is uncertain; inspect before retrying') from None
@@ -152,8 +158,13 @@ class Repository:
             merged = self.api('/repos/' + REPO + '/pulls/' + str(number) + '/merge',
                               {'sha': expected_head_sha, 'merge_method': 'squash'}, 'PUT')
         except Exception:
-            reconciled = self.pull_request(number)
-            if reconciled['merged']:
+            # As above, preserve the uncertain write receipt if the readback
+            # cannot be reached; the caller must inspect before retrying.
+            try:
+                reconciled = self.pull_request(number)
+            except Exception:
+                reconciled = None
+            if reconciled and reconciled['merged']:
                 return reconciled | {'merged_now': False}
             raise ValueError('pull request merge outcome is uncertain; inspect before retrying') from None
         if not isinstance(merged, dict) or merged.get('merged') is not True or not re.fullmatch(SHA, merged.get('sha', '')):

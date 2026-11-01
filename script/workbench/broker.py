@@ -791,6 +791,8 @@ class Broker:
                 # absorbing terminal state until an operator reconciles it.
                 if req['scope'] == checkpoint['scope']:
                     raise ValueError('resume requires a fresh task scope')
+                if self.task_budget_status(checkpoint['task_id'])['terminal_reason'] == 'publication_uncertain':
+                    raise ValueError('publication outcome requires operator reconciliation')
                 if any(job['state'] in ('publishing', 'uncertain') for job in self.task_job_rows(checkpoint['task_id'])):
                     raise ValueError('publication outcome requires operator reconciliation')
                 existing = self.db.execute('SELECT * FROM task_scopes WHERE scope=?', (req['scope'],)).fetchone()

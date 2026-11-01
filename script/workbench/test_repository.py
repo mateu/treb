@@ -22,6 +22,9 @@ class FakeRepository(Repository):
         self.pulls = {}
         self.fail_pr_write = False
         self.fail_merge = False
+        self.lose_pr_response = False
+        self.lose_merge_response = False
+        self.fail_reconciliation = False
 
     def api(self, path, payload=None, method=None):
         self.calls.append((path, payload, method))
@@ -34,15 +37,23 @@ class FakeRepository(Repository):
                 number = int(path.split('/')[-2]); pull = self.pulls[number]
                 if pull['head']['sha'] != payload['sha']: return {'merged':False,'sha':''}
                 pull['merged'], pull['state'] = True, 'closed'
+                if self.lose_merge_response:
+                    self.fail_reconciliation = True
+                    raise TimeoutError()
                 return {'merged':True,'sha':D}
             if path == '/repos/burt-agent/workspace/pulls' and payload is not None:
                 if self.fail_pr_write: raise TimeoutError()
                 number = max(self.pulls, default=0) + 1
                 pull = self.pull(number, payload['head'], self.head)
                 self.pulls[number] = pull
+                if self.lose_pr_response:
+                    self.fail_reconciliation = True
+                    raise TimeoutError()
                 return pull
             if '?' in path:
+                if self.fail_reconciliation: raise TimeoutError()
                 return list(self.pulls.values())
+            if self.fail_reconciliation: raise TimeoutError()
             return self.pulls[int(path.rsplit('/',1)[1])]
         if payload is not None:
             if self.fail_write: raise TimeoutError()
@@ -123,6 +134,12 @@ class RepositoryTests(unittest.TestCase):
             r.create_pull_request('burt/dictionary', A, 'Dictionary feature')
         r=FakeRepository(); r.exists=True; r.fail_pr_write=True; r.pulls[1]=r.pull(1, 'burt/dictionary', A)
         self.assertFalse(r.create_pull_request('burt/dictionary', A, 'Dictionary feature')['created'])
+        r=FakeRepository(); r.exists=True; r.lose_pr_response=True
+        with self.assertRaisesRegex(ValueError, 'submission outcome is uncertain'):
+            r.create_pull_request('burt/dictionary', A, 'Dictionary feature')
+        r=FakeRepository(); r.pulls[1]=r.pull(1, 'burt/dictionary', A); r.lose_merge_response=True
+        with self.assertRaisesRegex(ValueError, 'merge outcome is uncertain'):
+            r.merge_pull_request(1, A)
 
     def test_pull_request_rejects_changed_or_foreign_state(self):
         r=FakeRepository(); r.exists=True; r.head=B
@@ -250,6 +267,11 @@ class RepositoryBrokerTests(unittest.TestCase):
         self.assertEqual(self.b.task_budget_status(task_id)['terminal_reason'], 'publication_uncertain')
         with self.assertRaisesRegex(ValueError, 'task is terminal'):
             self.b.handle(merge)
+        checkpoint=self.checkpoint()
+        resume=self.envelope('task_resume', 'b' * 64, '#ai', 'irc.perl.org')
+        with self.assertRaisesRegex(ValueError, 'operator reconciliation'):
+            self.b.handle(resume | {'action':'task_resume', 'checkpoint_id':checkpoint['checkpoint_id'],
+                                    'requester':'mateu', 'deadline':time.time()+60})
 
     def test_exact_transcript_crosses_runtime_proxy_to_broker_fake_publication_boundary(self):
         # The Perl runtime is the producer.  Capture its actual no-ID envelope,
