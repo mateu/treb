@@ -191,8 +191,20 @@ sub report_result {
   my $notice="$action: $state" . ($id ? " (job $id)" : '');
   if ($state eq 'error' && ($r->{rejection_schema}//'') eq '1') {
     my $code=$r->{code}//'';
-    $code='' unless $code =~ /\A(?:invalid_request|stale_base|budget_exhausted|transport_unavailable|publication_uncertain)\z/;
+    $code='' unless $code =~ /\A(?:invalid_request|stale_base|budget_exhausted|transport_unavailable|publication_uncertain|github_http_rejected)\z/;
     $notice.="; $code" if $code;
+    if ($code eq 'github_http_rejected' && ref($r->{github_http}) eq 'HASH') {
+      my $status=$r->{github_http}{status};
+      my $message=$r->{github_http}{message}//'';
+      my $request_id=$r->{github_http}{request_id}//'';
+      $message =~ s/\s+/ /g;
+      $message =~ s/[^[:print:]]//g;
+      $message=substr($message,0,240);
+      $request_id='' unless $request_id =~ /\A[A-Za-z0-9_.:-]{1,128}\z/;
+      if (defined($status) && $status =~ /\A4\d\d\z/ && length $message) {
+        $notice.="; GitHub HTTP $status: $message" . (length($request_id) ? " [request $request_id]" : '');
+      }
+    }
     if (($r->{disposition}//'') eq 'terminal') {
       $pending->{coding_stop_reason}='Workbench request cannot be retried in this task';
     }

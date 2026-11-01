@@ -210,6 +210,12 @@ unlike($bot->{sent}[-1], qr/success unconfirmed|operator reconciliation|do not r
   'safe publication preflight is not misreported as an uncertain write');
 ok(!$bot->{pending}{coding_stop_reason},
   'safe publication preflight does not terminally stop the task');
+Bot::Runtime::Workbench::report_result($bot, 'repo_pr_create', JSON::PP::encode_json({
+  rejection_schema => 1, code => 'github_http_rejected', disposition => 'retryable',
+  github_http => {status => 403, message => "Resource not accessible\nby integration", request_id => 'abc:123'},
+}));
+like($bot->{sent}[-1], qr/repo_pr_create: error; github_http_rejected; GitHub HTTP 403: Resource not accessible by integration \[request abc:123\]/,
+  'runtime reports bounded broker-sanitized GitHub rejection metadata');
 for my $pr_result (
   ['repo_pr_create', {state => 'open', url => 'https://github.com/burt-agent/workspace/pull/7'}],
   ['repo_pr_merge', {state => 'closed', merged => JSON::PP::true,

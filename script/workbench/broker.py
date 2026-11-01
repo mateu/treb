@@ -14,7 +14,7 @@ import urllib.request
 import uuid
 
 from runner import run, validate, MAX_JSON_BYTES, MAX_INPUT_BYTES, MAX_GIST_INPUT_BYTES, InputSizeError
-from repository import Repository, validate_destination, validate_files
+from repository import GitHubHTTPRejected, Repository, validate_destination, validate_files
 from verification import Verification
 from references import References, CATALOG
 
@@ -362,17 +362,20 @@ class Broker:
                      or 'pull request merge outcome is uncertain' in message)
         stale = message.startswith('branch changed') or 'snapshot expired' in message
         budget = message.startswith(('limit:', 'global limit:'))
+        github_http = isinstance(exc, GitHubHTTPRejected)
         code, public, disposition = (
             ('publication_uncertain', 'publication outcome requires operator reconciliation', 'terminal') if uncertain else
+            ('github_http_rejected', 'GitHub rejected the pull request operation', 'retryable') if github_http else
             ('stale_base', 'repository base changed; read and retest', 'retryable') if stale else
             ('budget_exhausted', 'request budget exhausted', 'terminal') if budget else
             ('transport_unavailable', 'broker unavailable; operator inspection required', 'retryable') if isinstance(exc, (TimeoutError, OSError)) else
             ('invalid_request', 'request rejected by Workbench policy', 'retryable'))
-        reason = message if message in SAFE_REASONS or isinstance(exc, InputSizeError) else 'unclassified broker error'
+        reason = (exc.audit_reason() if github_http else
+                  message if message in SAFE_REASONS or isinstance(exc, InputSizeError) else 'unclassified broker error')
         for prefix in ('baseline files cannot be deleted: ', 'protected baseline file changed: ',
                        'new files restricted to approved regression directories: ', 'unknown reference; available: '):
             if message.startswith(prefix): reason = prefix.rstrip(': ')
-        kind = ('validation' if isinstance(exc, ValueError) else 'type' if isinstance(exc, TypeError) else
+        kind = ('github_http' if github_http else 'validation' if isinstance(exc, ValueError) else 'type' if isinstance(exc, TypeError) else
                 'missing_field' if isinstance(exc, KeyError) else 'transport' if isinstance(exc, (TimeoutError, OSError)) else 'internal')
         repeated = 0
         if scope and action:
@@ -386,10 +389,14 @@ class Broker:
                         'VALUES (?,?,?,?,?,?,?,?,?,?)',
                         (time.time(), scope, channel, network, action, digest, reason, kind, code, REJECTION_SCHEMA_VERSION))
         self.prune_audit(); self.db.commit()
-        return {'rejection_schema': REJECTION_SCHEMA_VERSION, 'code': code, 'message': public,
-                'action': action, 'disposition': disposition,
-                'reconciliation': 'required' if uncertain else None,
-                'repeat_count': min(repeated, REPEAT_REJECTION_LIMIT)}
+        result = {'rejection_schema': REJECTION_SCHEMA_VERSION, 'code': code, 'message': public,
+                  'action': action, 'disposition': disposition,
+                  'reconciliation': 'required' if uncertain else None,
+                  'repeat_count': min(repeated, REPEAT_REJECTION_LIMIT)}
+        if github_http:
+            result['github_http'] = {'status': exc.status, 'message': exc.message,
+                                     'request_id': exc.request_id}
+        return result
 
     def task_binding(self, scope):
         row = self.db.execute('SELECT * FROM task_scopes WHERE scope=?', (scope,)).fetchone()

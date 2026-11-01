@@ -14,6 +14,41 @@ TOKEN = Path.home() / '.config/burt-publisher/github.token'
 SHA = r'[a-f0-9]{40}'
 
 
+class GitHubHTTPRejected(ValueError):
+    """A bounded, safe-to-report GitHub 4xx response after a write attempt."""
+    def __init__(self, status, message, request_id):
+        super().__init__('GitHub rejected the pull request operation')
+        self.status = status
+        self.message = message
+        self.request_id = request_id
+
+    @classmethod
+    def from_http_error(cls, error):
+        status = error.code
+        if not isinstance(status, int) or not 400 <= status < 500:
+            raise ValueError('not a deterministic GitHub HTTP rejection')
+        try:
+            body = error.read(8193)
+            data = json.loads(body.decode('utf-8'))
+            message = data.get('message') if isinstance(data, dict) else None
+        except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
+            message = None
+        if not isinstance(message, str):
+            message = 'GitHub rejected the request'
+        message = re.sub(r'\s+', ' ', message).strip()
+        message = ''.join(char for char in message if char.isprintable())[:240]
+        if not message:
+            message = 'GitHub rejected the request'
+        headers = error.headers or {}
+        request_id = headers.get('X-GitHub-Request-Id', '')
+        request_id = request_id if isinstance(request_id, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,128}', request_id) else None
+        return cls(status, message, request_id)
+
+    def audit_reason(self):
+        suffix = ' [request ' + self.request_id + ']' if self.request_id else ''
+        return 'GitHub HTTP ' + str(self.status) + ': ' + self.message + suffix
+
+
 class PullRequestUncertain(ValueError):
     def __init__(self, pull):
         super().__init__('pull request submission outcome is uncertain; inspect before retrying')
@@ -135,7 +170,13 @@ class Repository:
             return existing | {'created': False}
         try:
             created = self.api(prefix + '/pulls', {'title': title, 'head': branch, 'base': 'main'}, 'POST')
+        except urllib.error.HTTPError as exc:
+            if 400 <= exc.code < 500:
+                raise GitHubHTTPRejected.from_http_error(exc) from None
+            created = None
         except Exception:
+            created = None
+        if created is None:
             # The write crossed GitHub's irreversible boundary. A second
             # outage while reconciling must remain an uncertainty, never turn
             # into a retryable transport failure that permits another write.
@@ -166,7 +207,13 @@ class Repository:
         try:
             merged = self.api('/repos/' + REPO + '/pulls/' + str(number) + '/merge',
                               {'sha': expected_head_sha, 'merge_method': 'squash'}, 'PUT')
+        except urllib.error.HTTPError as exc:
+            if 400 <= exc.code < 500:
+                raise GitHubHTTPRejected.from_http_error(exc) from None
+            merged = None
         except Exception:
+            merged = None
+        if merged is None:
             # As above, preserve the uncertain write receipt if the readback
             # cannot be reached; the caller must inspect before retrying.
             try:
