@@ -46,6 +46,7 @@ SAFE_REASONS = frozenset({
     'branch changed; read project and retest before publishing',
     'delete only existing files, without also replacing them',
     'diagnostic jobs cannot be published; rerun the complete project suite',
+    'direct repository publication needs one unambiguous saved project candidate',
     'encoded project response exceeds transport bound',
     'expected public writable burt-agent/workspace',
     'file/directory collision',

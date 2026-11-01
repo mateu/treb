@@ -93,6 +93,41 @@ $tools{create_repo_pull_request}{code}->(bless({},'ProxyTool'),{branch=>'burt/di
             self.assertEqual(published['state'], 'published')
             self.assertEqual(len([call for call in repo.calls if call[1] is not None]), 3)
 
+    def test_existing_branch_pr_transcript_keeps_preflights_safe_then_creates_inspects_and_merges(self):
+        # Real runtime envelope plus the broker's mocked fixed GitHub remote:
+        # mirror the live transcript's stale job inspection and no-candidate
+        # publication before following the intended existing-branch PR flow.
+        envelope = self.runtime_publish_envelope()
+        with tempfile.TemporaryDirectory() as tmp:
+            token = Path(tmp) / 'token'; token.write_text('offline-only'); token.chmod(0o600)
+            broker = Broker(tmp, token, execute=lambda job: {'reason': 'exited', 'exit_code': 0, 'output': 'PASS'})
+            self.addCleanup(broker.db.close)
+            repo = FakeRepository(); repo.exists = True; repo.files = {'main.py': 'print(1)'}; broker.repository = repo
+            broker.db.execute('INSERT INTO task_scopes VALUES (?,?,?,?,?,?)',
+                              (envelope['scope'], envelope['scope'], envelope['requester'],
+                               envelope['channel'], envelope['network'], time.time()))
+            broker.db.commit()
+            with self.assertRaisesRegex(ValueError, 'one unambiguous saved project candidate') as rejected:
+                broker.handle(envelope)
+            self.assertEqual((rejected.exception.rejection['code'], rejected.exception.rejection['disposition']),
+                             ('invalid_request', 'retryable'))
+            self.assertFalse(any('/git/trees' in path or '/git/commits' in path or '/git/refs' in path
+                                 for path, payload, method in repo.calls if payload is not None))
+            with self.assertRaisesRegex(ValueError, 'repository job not found'):
+                broker.handle(envelope | {'action': 'repo_inspect', 'id': 'f' * 32})
+            snapshot = broker.handle(envelope | {'action': 'repo_read', 'branch': 'burt/dictionary', 'project': 'dictionary'})
+            checked = broker.handle(envelope | {'action': 'repo_run', 'snapshot_id': snapshot['snapshot_id'],
+                'changes': {}, 'delete': [], 'argv': ['/bin/sh', '-c', 'true'], 'title': 'check existing branch'})
+            self.assertEqual(checked['state'], 'passed')
+            pull = broker.handle(envelope | {'action': 'repo_pr_create', 'branch': 'burt/dictionary',
+                'expected_head_sha': snapshot['base_sha'], 'title': 'Dictionary feature'})
+            inspected = broker.handle(envelope | {'action': 'repo_pr_inspect', 'number': pull['number']})
+            merged = broker.handle(envelope | {'action': 'repo_pr_merge', 'number': pull['number'],
+                'expected_head_sha': inspected['head_sha']})
+            self.assertEqual((pull['state'], inspected['base'], merged['merged']), ('open', 'main', True))
+            self.assertFalse(any('/git/trees' in path or '/git/commits' in path or '/git/refs' in path
+                                 for path, payload, method in repo.calls if payload is not None))
+
 
 if __name__ == '__main__':
     unittest.main()
