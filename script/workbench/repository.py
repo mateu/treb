@@ -138,12 +138,13 @@ class Repository:
         number, head, base, url = data.get('number'), data.get('head', {}), data.get('base', {}), data.get('html_url', '')
         if (not isinstance(number, int) or not isinstance(head, dict) or not isinstance(base, dict)
                 or not re.fullmatch(r'burt/[a-z0-9][a-z0-9-]{0,59}', head.get('ref', ''))
-                or not re.fullmatch(SHA, head.get('sha', '')) or base.get('ref') != 'main'
-                or base.get('repo', {}).get('full_name') != REPO or head.get('repo', {}).get('full_name') != REPO
+                or not re.fullmatch(SHA, head.get('sha', '')) or data.get('state') not in ('open', 'closed')
+                or base.get('ref') != 'main' or base.get('repo', {}).get('full_name') != REPO
+                or head.get('repo', {}).get('full_name') != REPO
                 or not re.fullmatch(r'https://github\.com/burt-agent/workspace/pull/[1-9][0-9]*', url)):
             raise ValueError('unexpected pull request response')
         return {'number': number, 'branch': head['ref'], 'head_sha': head['sha'], 'base': 'main',
-                'state': data.get('state'), 'merged': bool(data.get('merged')), 'mergeable': data.get('mergeable'), 'url': url}
+                'state': data['state'], 'merged': bool(data.get('merged')), 'mergeable': data.get('mergeable'), 'url': url}
 
     def _find_pull(self, branch, expected_head_sha):
         data = self.api('/repos/' + REPO + '/pulls?state=all&head=burt-agent:' + branch + '&base=main')
@@ -154,6 +155,13 @@ class Repository:
         if len(matches) > 1:
             raise ValueError('ambiguous pull request response')
         return matches[0] if matches else None
+
+    def find_pull_request(self, branch, expected_head_sha):
+        """Read exactly one fixed-repository PR identity without a mutation."""
+        validate_pull_request(branch, expected_head_sha)
+        self.deadline = time.monotonic() + 14
+        self.verify()
+        return self._find_pull(branch, expected_head_sha)
 
     def create_pull_request(self, branch, expected_head_sha, title):
         validate_pull_request(branch, expected_head_sha)

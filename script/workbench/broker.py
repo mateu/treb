@@ -119,6 +119,87 @@ SAFE_REASONS = frozenset({
 })
 
 
+def reconcile_pending_pull_request(db, repository, task_id):
+    """Reconcile one persisted PR-create operation without issuing a GitHub write."""
+    if not isinstance(task_id, str) or not re.fullmatch(r'[a-f0-9]{64}', task_id):
+        raise ValueError('invalid pull request reconciliation task id')
+
+    receipt = db.execute('SELECT * FROM reconciled_pull_request_operations WHERE task_id=?',
+                         (task_id,)).fetchone()
+    if receipt:
+        return dict(receipt) | {'reconciled': True, 'replayed': True}
+
+    pending = db.execute('SELECT * FROM pending_pull_request_operations WHERE task_id=?',
+                         (task_id,)).fetchone()
+    if not pending:
+        raise ValueError('pending pull request operation not found')
+    if pending['operation'] != 'repo_pr_create':
+        raise ValueError('only pending pull request creation can be reconciled')
+
+    # The lookup validates the fixed repository, main base, burt/* branch and
+    # exact stored SHA. It performs only GET requests; absence is not evidence
+    # that the original POST did not succeed and therefore remains blocked.
+    pull = repository.find_pull_request(pending['branch'], pending['head_sha'])
+    if pull is None:
+        raise ValueError('no identity-matching pull request found; record remains pending; do not retry')
+
+    db.execute('BEGIN IMMEDIATE')
+    try:
+        receipt = db.execute('SELECT * FROM reconciled_pull_request_operations WHERE task_id=?',
+                             (task_id,)).fetchone()
+        if receipt:
+            db.commit()
+            return dict(receipt) | {'reconciled': True, 'replayed': True}
+
+        current = db.execute('SELECT * FROM pending_pull_request_operations WHERE task_id=?',
+                             (task_id,)).fetchone()
+        if (not current or current['operation'] != 'repo_pr_create'
+                or (current['branch'], current['head_sha']) != (pull['branch'], pull['head_sha'])):
+            raise ValueError('pending pull request operation changed; inspect before reconciling')
+
+        budget = db.execute('SELECT terminal_reason FROM task_phase_budgets WHERE task_id=?',
+                            (task_id,)).fetchone()
+        # A process can crash after durable write admission but before the
+        # uncertain-result handler sets terminal state. Every reconciliation
+        # outcome must establish the absorbing uncertainty reason: a normal
+        # no-report/final-report reason can otherwise permit task resume, and
+        # retention may have pruned the lifecycle row while preserving pending
+        # external-write evidence.
+        now = time.time()
+        if budget:
+            db.execute('''UPDATE task_phase_budgets
+                          SET phase='stopped',terminal_reason='publication_uncertain',updated=?
+                          WHERE task_id=?''', (now, task_id))
+        else:
+            db.execute('''INSERT INTO task_phase_budgets
+                          (task_id,deadline,phase,model_iterations,sandbox_attempts,public_writes,
+                           progress_notices,terminal_reports,terminal_reason,updated)
+                          VALUES (?,?,?,?,?,?,?,?,?,?)''',
+                       (task_id, now, 'stopped', 0, 0, 0, 0, 0, 'publication_uncertain', now))
+
+        state = 'merged' if pull['merged'] else pull['state']
+        db.execute('''INSERT INTO repository_pull_requests VALUES (?,?,?,?,?,?,?,?)
+                      ON CONFLICT(branch,head_sha) DO UPDATE SET number=excluded.number,url=excluded.url,
+                      state=excluded.state,merge_sha=excluded.merge_sha,updated=excluded.updated''',
+                   (pull['branch'], pull['head_sha'], pull['number'], pull['url'], state,
+                    pull.get('merge_sha'), time.time(), time.time()))
+        db.execute('''INSERT INTO reconciled_pull_request_operations
+                      VALUES (?,?,?,?,?,?,?)''',
+                   (task_id, pull['branch'], pull['head_sha'], pull['number'], pull['url'], state, time.time()))
+        cleared = db.execute('''DELETE FROM pending_pull_request_operations
+                                WHERE task_id=? AND branch=? AND head_sha=? AND operation='repo_pr_create' ''',
+                             (task_id, pull['branch'], pull['head_sha']))
+        if cleared.rowcount != 1:
+            raise ValueError('pending pull request operation changed; inspect before reconciling')
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return {'task_id': task_id, 'branch': pull['branch'], 'head_sha': pull['head_sha'],
+            'number': pull['number'], 'url': pull['url'], 'state': state,
+            'reconciled': True, 'replayed': False}
+
+
 class Broker:
     def max_attempts(self):
         return MAX_ATTEMPTS
@@ -215,6 +296,13 @@ class Broker:
         self.db.execute('''CREATE TABLE IF NOT EXISTS pending_pull_request_operations
             (task_id TEXT PRIMARY KEY, branch TEXT NOT NULL, head_sha TEXT NOT NULL,
              number INTEGER, url TEXT, operation TEXT NOT NULL, created REAL NOT NULL)''')
+        # A local operator reconciliation is a distinct durable receipt. It
+        # preserves the original task identity after the pending row is gone,
+        # so repeats can converge without re-querying or retrying GitHub.
+        self.db.execute('''CREATE TABLE IF NOT EXISTS reconciled_pull_request_operations
+            (task_id TEXT PRIMARY KEY, branch TEXT NOT NULL, head_sha TEXT NOT NULL,
+             number INTEGER NOT NULL, url TEXT NOT NULL, state TEXT NOT NULL,
+             reconciled REAL NOT NULL)''')
         # State tables above are mutable operational indexes. Keep an append-only
         # receipt for every resource transition for recovery and audit.
         self.db.execute('''CREATE TABLE IF NOT EXISTS resource_checkpoints
@@ -252,7 +340,9 @@ class Broker:
                         'AND updated<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM publication_attempts WHERE attempted<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM task_phase_budgets WHERE task_id NOT IN (SELECT DISTINCT task_id FROM task_checkpoints) '
-                        'AND updated<?', (now - AUDIT_TTL,))
+                        'AND task_id NOT IN (SELECT task_id FROM pending_pull_request_operations) '
+                        'AND task_id NOT IN (SELECT task_id FROM reconciled_pull_request_operations) AND updated<?',
+                        (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM task_execution_selections WHERE task_id NOT IN (SELECT DISTINCT task_id FROM task_checkpoints) '
                         'AND selected<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM direct_repo_publications WHERE created<?', (now - AUDIT_TTL,))
@@ -457,6 +547,10 @@ class Broker:
     def clear_pending_pull_request(self, req):
         self.db.execute('DELETE FROM pending_pull_request_operations WHERE task_id=?',
                         (self.task_binding(req['scope'])['task_id'],))
+
+    def reconcile_pending_pull_request(self, task_id):
+        """Operator-only recovery; this is deliberately not a runtime action."""
+        return reconcile_pending_pull_request(self.db, self.repository, task_id)
 
     def remember_task_execution_selection(self, req, job_id, state, now=None):
         """Persist the latest non-diagnostic execution verdict for recovery."""

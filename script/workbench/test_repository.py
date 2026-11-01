@@ -1,11 +1,15 @@
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import io
 import json
 from pathlib import Path
+import sqlite3
 import subprocess
+import threading
 import time
 import unittest
 from urllib.error import HTTPError
+from broker import reconcile_pending_pull_request
 from repository import GitHubHTTPRejected, Repository, validate_destination, validate_files
 import test_broker
 
@@ -252,6 +256,190 @@ class RepositoryBrokerTests(unittest.TestCase):
     def direct_repo_publish(self, scope='b' * 64):
         return self.b.handle(self.envelope('repo_publish', scope, self.req['channel'], self.req['network'])
                              | {'action':'repo_publish', 'requester':'mateu'})
+
+    def uncertain_pr_create(self):
+        self.repo.exists = True
+        create = self.request('repo_pr_create') | {
+            'branch': 'burt/dictionary', 'expected_head_sha': A, 'title': 'Dictionary feature'}
+        self.repo.lose_pr_response = True
+        with self.assertRaisesRegex(ValueError, 'outcome is uncertain'):
+            self.b.handle(create)
+        self.repo.lose_pr_response = False
+        self.repo.fail_reconciliation = False
+        task_id = self.b.task_binding(self.req['scope'])['task_id']
+        self.assertEqual(self.b.pending_pull_request(task_id)['operation'], 'repo_pr_create')
+        self.assertEqual(self.b.db.execute(
+            'SELECT state FROM repository_pull_requests WHERE branch=? AND head_sha=?',
+            ('burt/dictionary', A)).fetchone()['state'], 'create_uncertain')
+        return task_id
+
+    def assert_pending_uncertain(self, task_id):
+        self.assertIsNotNone(self.b.pending_pull_request(task_id))
+        self.assertEqual(self.b.db.execute(
+            'SELECT state FROM repository_pull_requests WHERE branch=? AND head_sha=?',
+            ('burt/dictionary', A)).fetchone()['state'], 'create_uncertain')
+        self.assertIsNone(self.b.db.execute(
+            'SELECT 1 FROM reconciled_pull_request_operations WHERE task_id=?', (task_id,)).fetchone())
+
+    def test_operator_reconciles_existing_uncertain_create_without_write(self):
+        task_id = self.uncertain_pr_create()
+        calls_before = len(self.repo.calls)
+        result = self.b.reconcile_pending_pull_request(task_id)
+        self.assertEqual((result['number'], result['branch'], result['head_sha'], result['state']),
+                         (1, 'burt/dictionary', A, 'open'))
+        self.assertFalse(result['replayed'])
+        self.assertIsNone(self.b.pending_pull_request(task_id))
+        receipt = self.b.db.execute(
+            'SELECT state,number FROM repository_pull_requests WHERE branch=? AND head_sha=?',
+            ('burt/dictionary', A)).fetchone()
+        self.assertEqual((receipt['state'], receipt['number']), ('open', 1))
+        self.assertEqual(self.b.task_budget_status(task_id)['terminal_reason'], 'publication_uncertain')
+        self.assertTrue(all(method is None for _, _, method in self.repo.calls[calls_before:]))
+
+    def test_operator_reconciliation_terminalizes_crash_interrupted_create(self):
+        self.repo.exists = True
+        create = self.request('repo_pr_create') | {
+            'branch': 'burt/dictionary', 'expected_head_sha': A, 'title': 'Dictionary feature'}
+        original = self.repo.create_pull_request
+
+        def crash_after_create(*args):
+            original(*args)
+            raise SystemExit('simulated broker crash')
+
+        self.repo.create_pull_request = crash_after_create
+        with self.assertRaises(SystemExit):
+            self.b.handle(create)
+        task_id = self.b.task_binding(self.req['scope'])['task_id']
+        self.assertIsNone(self.b.task_budget_status(task_id)['terminal_reason'])
+        self.repo.create_pull_request = original
+        result = self.b.reconcile_pending_pull_request(task_id)
+        self.assertEqual(result['number'], 1)
+        self.assertEqual(self.b.task_budget_status(task_id)['terminal_reason'], 'publication_uncertain')
+        with self.assertRaisesRegex(ValueError, 'task is terminal'):
+            self.b.handle(create)
+
+    def test_operator_reconciliation_overrides_nonabsorbing_terminal_reason(self):
+        self.repo.exists = True
+        create = self.request('repo_pr_create') | {
+            'branch': 'burt/dictionary', 'expected_head_sha': A, 'title': 'Dictionary feature'}
+        original = self.repo.create_pull_request
+
+        def crash_after_create(*args):
+            original(*args)
+            raise SystemExit('simulated broker crash')
+
+        self.repo.create_pull_request = crash_after_create
+        with self.assertRaises(SystemExit):
+            self.b.handle(create)
+        self.repo.create_pull_request = original
+        task_id = self.b.task_binding(self.req['scope'])['task_id']
+        self.b.handle(self.envelope('task_status') | {
+            'action': 'task_status', 'phase': 'reported', 'reason': 'no_report'})
+        self.assertEqual(self.b.task_budget_status(task_id)['terminal_reason'], 'no_report')
+        self.b.reconcile_pending_pull_request(task_id)
+        self.assertEqual(self.b.task_budget_status(task_id)['terminal_reason'], 'publication_uncertain')
+        checkpoint = self.checkpoint()
+        with self.assertRaisesRegex(ValueError, 'operator reconciliation'):
+            self.b.handle(self.envelope('task_resume', 'b' * 64, '#ai', 'irc.perl.org') | {
+                'action': 'task_resume', 'checkpoint_id': checkpoint['checkpoint_id'],
+                'requester': 'mateu', 'deadline': time.time() + 60})
+
+    def test_operator_reconciliation_rebuilds_pruned_lifecycle_receipt(self):
+        task_id = self.uncertain_pr_create()
+        self.b.db.execute('DELETE FROM task_phase_budgets WHERE task_id=?', (task_id,))
+        self.b.db.commit()
+        self.b.reconcile_pending_pull_request(task_id)
+        self.assertEqual(self.b.task_budget_status(task_id)['terminal_reason'], 'publication_uncertain')
+
+    def test_pending_pr_lifecycle_survives_audit_retention(self):
+        task_id = self.uncertain_pr_create()
+        self.b.db.execute('UPDATE task_phase_budgets SET updated=? WHERE task_id=?',
+                          (time.time() - 8 * 86400, task_id))
+        self.b.prune_audit()
+        self.b.db.commit()
+        self.assertIsNotNone(self.b.db.execute(
+            'SELECT 1 FROM task_phase_budgets WHERE task_id=?', (task_id,)).fetchone())
+
+    def test_reconciled_pr_lifecycle_survives_audit_retention(self):
+        task_id = self.uncertain_pr_create()
+        self.b.reconcile_pending_pull_request(task_id)
+        self.b.db.execute('UPDATE task_phase_budgets SET updated=? WHERE task_id=?',
+                          (time.time() - 8 * 86400, task_id))
+        self.b.prune_audit()
+        self.b.db.commit()
+        self.assertEqual(self.b.task_budget_status(task_id)['terminal_reason'], 'publication_uncertain')
+
+    def test_operator_reconciliation_rebuilds_pruned_receipt(self):
+        task_id = self.uncertain_pr_create()
+        self.b.db.execute('DELETE FROM repository_pull_requests WHERE branch=? AND head_sha=?',
+                          ('burt/dictionary', A))
+        self.b.db.commit()
+        result = self.b.reconcile_pending_pull_request(task_id)
+        self.assertEqual(result['number'], 1)
+        receipt = self.b.db.execute(
+            'SELECT state,number FROM repository_pull_requests WHERE branch=? AND head_sha=?',
+            ('burt/dictionary', A)).fetchone()
+        self.assertEqual((receipt['state'], receipt['number']), ('open', 1))
+
+    def test_operator_reconciliation_no_matching_pr_remains_blocked(self):
+        task_id = self.uncertain_pr_create()
+        self.repo.pulls.clear()
+        with self.assertRaisesRegex(ValueError, 'no identity-matching'):
+            self.b.reconcile_pending_pull_request(task_id)
+        self.assert_pending_uncertain(task_id)
+
+    def test_operator_reconciliation_rejects_mismatched_branch_head_and_repository(self):
+        for kind in ('branch', 'head', 'repository'):
+            with self.subTest(kind=kind):
+                task_id = self.uncertain_pr_create()
+                pull = self.repo.pulls[1]
+                if kind == 'branch':
+                    pull['head']['ref'] = 'burt/other'
+                elif kind == 'head':
+                    pull['head']['sha'] = B
+                else:
+                    pull['head']['repo']['full_name'] = 'evil/workspace'
+                with self.assertRaises(ValueError):
+                    self.b.reconcile_pending_pull_request(task_id)
+                self.assert_pending_uncertain(task_id)
+                self.repo.pulls.clear()
+                self.b.db.execute('DELETE FROM pending_pull_request_operations WHERE task_id=?', (task_id,))
+                self.b.db.execute('DELETE FROM repository_pull_requests WHERE branch=? AND head_sha=?',
+                                  ('burt/dictionary', A))
+                self.b.db.execute('DELETE FROM task_phase_budgets WHERE task_id=?', (task_id,))
+                self.b.db.commit()
+
+    def test_operator_reconciliation_api_failure_remains_blocked(self):
+        task_id = self.uncertain_pr_create()
+        self.repo.fail_reconciliation = True
+        with self.assertRaises(TimeoutError):
+            self.b.reconcile_pending_pull_request(task_id)
+        self.assert_pending_uncertain(task_id)
+
+    def test_operator_reconciliation_replay_and_concurrency_are_idempotent(self):
+        task_id = self.uncertain_pr_create()
+        barrier = threading.Barrier(2)
+
+        def reconcile():
+            db = sqlite3.connect(Path(self.tmp.name) / 'jobs.sqlite', timeout=5)
+            db.row_factory = sqlite3.Row
+            try:
+                barrier.wait()
+                return reconcile_pending_pull_request(db, self.repo, task_id)
+            finally:
+                db.close()
+
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            results = list(workers.map(lambda _: reconcile(), range(2)))
+        self.assertTrue(all(result['reconciled'] for result in results))
+        self.assertEqual(sum(bool(result['replayed']) for result in results), 1)
+        self.assertEqual(self.b.db.execute(
+            'SELECT COUNT(*) FROM reconciled_pull_request_operations WHERE task_id=?', (task_id,)).fetchone()[0], 1)
+        self.assertIsNone(self.b.pending_pull_request(task_id))
+        calls_before = len(self.repo.calls)
+        replay = self.b.reconcile_pending_pull_request(task_id)
+        self.assertTrue(replay['replayed'])
+        self.assertEqual(len(self.repo.calls), calls_before)
 
     def test_broker_pr_receipts_reconcile_create_merge_and_reject_bad_fields(self):
         self.repo.exists=True
