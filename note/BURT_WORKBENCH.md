@@ -1,7 +1,8 @@
 # Burt coding and public publishing on clawd
 
 Opt-in tools: `run_code`, `publish_gist`, `read_repo_project`,
-`run_repo_project`, and `publish_repo`. Disabled unless
+`run_repo_project`, `publish_repo`, `create_repo_pull_request`,
+`inspect_repo_pull_request`, and `merge_repo_pull_request`. Disabled unless
 `BURT_WORKBENCH_SOCKET` is set, and never registered for another bot profile.
 Example in irc.perl.org `#ai`:
 
@@ -52,9 +53,9 @@ turns cannot dispatch because they have no active human envelope.
 
 Repository tools are fixed to public `burt-agent/workspace`. The separate
 `~/.config/burt-publisher/github.token` must authenticate as `burt-agent`, with
-push access to this repository; parent 0700/file 0600. It never enters either
-namespace. The publisher uses GitHub's tree/commit/ref API, not a shell or Git
-checkout, and refuses redirects/proxies.
+ordinary pull/push access to this repository; parent 0700/file 0600. It never
+enters either namespace. The publisher uses fixed GitHub REST tree/commit/ref
+and pull-request APIs, not a shell or Git checkout, and refuses redirects/proxies.
 
 * `read_repo_project(branch, project)`: only `burt/<lowercase-slug>` branches;
   missing branches read from `main`. Returns the current `base_sha` and complete
@@ -68,8 +69,16 @@ checkout, and refuses redirects/proxies.
   repository candidate for the active provenance tuple. It cannot change
   destination or publish gist jobs. Rechecks branch head; stale bases require
   rereading and retesting. Creates
-  `burt/*` branches or non-force updates them; never writes `main`, opens PRs,
-  merges or executes repository content. Returns an actual commit URL.
+  `burt/*` branches or non-force updates them; it never directly writes `main`,
+  opens PRs, merges, or executes repository content. Returns an actual commit URL.
+* `create_repo_pull_request(branch, expected_head_sha, title)`: creates or
+  reconciles exactly one `burt/*` to `main` PR in `burt-agent/workspace` after
+  checking the live branch head. Duplicate requests return the same PR.
+* `inspect_repo_pull_request(number)`: returns bounded fixed-repository PR
+  head/base/state data for reconciliation without writing.
+* `merge_repo_pull_request(number, expected_head_sha)`: merges that verified PR
+  to `main` only through GitHub's normal expected-SHA squash merge. It has no
+  force or administrator bypass; normal repository protections remain effective.
 
 Example initial request (after recovering API details):
 

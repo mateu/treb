@@ -197,6 +197,13 @@ class Broker:
              branch TEXT NOT NULL, project TEXT NOT NULL, job_id TEXT NOT NULL,
              created REAL NOT NULL,
              PRIMARY KEY(requester,channel,network,branch,project))''')
+        # A PR is a separate GitHub resource from branch publication. Keep its
+        # fixed branch/head identity and latest reconciled state so a lost API
+        # response cannot make a retry create or merge a different resource.
+        self.db.execute('''CREATE TABLE IF NOT EXISTS repository_pull_requests
+            (branch TEXT NOT NULL, head_sha TEXT NOT NULL, number INTEGER,
+             url TEXT, state TEXT NOT NULL, merge_sha TEXT, created REAL NOT NULL,
+             updated REAL NOT NULL, PRIMARY KEY(branch,head_sha))''')
         # State tables above are mutable operational indexes. Keep an append-only
         # receipt for every resource transition for recovery and audit.
         self.db.execute('''CREATE TABLE IF NOT EXISTS resource_checkpoints
@@ -240,6 +247,7 @@ class Broker:
         self.db.execute('DELETE FROM direct_repo_publications WHERE created<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM repository_candidates WHERE created<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM repository_candidates WHERE job_id NOT IN (SELECT id FROM jobs)')
+        self.db.execute('DELETE FROM repository_pull_requests WHERE updated<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM resource_checkpoints WHERE created<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM resource_checkpoints WHERE id NOT IN '
                         '(SELECT id FROM resource_checkpoints ORDER BY created DESC,id DESC LIMIT ?)', (AUDIT_LIMIT,))
@@ -716,7 +724,9 @@ class Broker:
         fields = {'run': {'files','argv','title'}, 'publish': {'id'},
                   'repo_read': {'branch','project'},
                   'repo_run': {'snapshot_id','changes','delete','argv','title'},
-                  'repo_publish': set(), 'repo_inspect': {'id'}, 'job_inspect': {'id'},
+                  'repo_publish': set(), 'repo_pr_create': {'branch','expected_head_sha','title'},
+                  'repo_pr_inspect': {'number'}, 'repo_pr_merge': {'number','expected_head_sha'},
+                  'repo_inspect': {'id'}, 'job_inspect': {'id'},
                   'repo_repair': {'id','changes','delete','argv','title'},
                   'repo_diagnose': {'id','argv','title'}}
         fields['reference'] = {'key'}
@@ -988,6 +998,38 @@ class Broker:
             self.resource_checkpoint('job', job_id, req, state)
             self.db.commit()
             return self.result(self.db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())
+        if action == 'repo_pr_create':
+            try:
+                pull = self.repository.create_pull_request(req['branch'], req['expected_head_sha'], req['title'])
+            except Exception:
+                self.db.execute('''INSERT INTO repository_pull_requests VALUES (?,?,?,?,?,?,?,?)
+                    ON CONFLICT(branch,head_sha) DO UPDATE SET state=excluded.state,updated=excluded.updated''',
+                    (req['branch'], req['expected_head_sha'], None, None, 'create_uncertain', None, time.time(), time.time()))
+                self.db.commit()
+                raise
+            self.record_pull_request(pull)
+            return pull
+        if action == 'repo_pr_inspect':
+            pull = self.repository.pull_request(req['number'])
+            self.record_pull_request(pull)
+            return pull
+        if action == 'repo_pr_merge':
+            # Read the immutable target identity before the merge side effect so
+            # an uncertain response is durably tied to the real branch, never a
+            # caller-provided or placeholder destination.
+            current = self.repository.pull_request(req['number'])
+            if current['head_sha'] != req['expected_head_sha']:
+                raise ValueError('pull request head changed; inspect and retest before merging')
+            try:
+                pull = self.repository.merge_pull_request(req['number'], req['expected_head_sha'])
+            except Exception:
+                self.db.execute('''INSERT INTO repository_pull_requests VALUES (?,?,?,?,?,?,?,?)
+                    ON CONFLICT(branch,head_sha) DO UPDATE SET state=excluded.state,updated=excluded.updated''',
+                    (current['branch'], current['head_sha'], req['number'], current['url'], 'merge_uncertain', None, time.time(), time.time()))
+                self.db.commit()
+                raise
+            self.record_pull_request(pull)
+            return pull
         if action == 'repo_publish':
             job = self.direct_repository_publication_job(req)
         else:
@@ -1041,6 +1083,15 @@ class Broker:
         self.resource_checkpoint('publication', job_id, req, 'published')
         self.db.commit()
         return self.result(self.db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())
+
+    def record_pull_request(self, pull):
+        state = 'merged' if pull.get('merged') else pull.get('state')
+        self.db.execute('''INSERT INTO repository_pull_requests VALUES (?,?,?,?,?,?,?,?)
+            ON CONFLICT(branch,head_sha) DO UPDATE SET number=excluded.number,url=excluded.url,
+            state=excluded.state,merge_sha=excluded.merge_sha,updated=excluded.updated''',
+            (pull['branch'], pull['head_sha'], pull['number'], pull['url'], state,
+             pull.get('merge_sha'), time.time(), time.time()))
+        self.db.commit()
 
     def publish_repository(self, req, job, destination, allow_after_final_report=False):
         # Read/preflight before marking submitted; no writes on stale bases.

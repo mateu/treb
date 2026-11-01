@@ -47,6 +47,25 @@ $tools{publish_repo}{code}->(bless({},'ProxyTool'),{});'''
         self.assertNotIn('id', envelope)
         self.assertNotIn('destination', envelope)
 
+    def test_runtime_pr_tools_forward_only_fixed_structured_fields(self):
+        root = Path(__file__).resolve().parents[2]
+        perl = r'''use strict; use warnings; use JSON::PP; use lib 'lib'; use Bot::Runtime::Workbench;
+{ package ProxyBot; sub _bot_name_slug {'burt'} sub _is_human_nick { $_[1] ne 'system' } sub _pending_raid { $_[0]{pending} } sub _send_to_channel {} }
+{ package ProxyTool; sub text_result { $_[1] } }
+$ENV{BURT_WORKBENCH_SOCKET}='/not/a/socket'; $ENV{IRC_SERVER}='irc.perl.org';
+my $bot=bless {pending=>{channel=>'#ai',expires_at=>time+60,messages=>[{nick=>'mateu',source_kind=>'conversation',msg=>'open the PR'}]}},'ProxyBot';
+my %tools=map {$_->{name}=>$_} @{Bot::Runtime::Workbench::tool_specs($bot)};
+no warnings 'redefine'; local *Bot::Runtime::Workbench::broker_call=sub { print encode_json($_[0]); return '{"state":"open"}' };
+$tools{create_repo_pull_request}{code}->(bless({},'ProxyTool'),{branch=>'burt/dictionary',expected_head_sha=>('a'x40),title=>'Dictionary feature'});'''
+        result = subprocess.run(['script/with-burt-env.sh','perl','-Ilib','-e',perl], cwd=root, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        envelope=json.loads(result.stdout)
+        self.assertEqual(envelope['action'], 'repo_pr_create')
+        self.assertEqual({k:envelope[k] for k in ('branch','expected_head_sha','title')},
+                         {'branch':'burt/dictionary','expected_head_sha':'a'*40,'title':'Dictionary feature'})
+        self.assertNotIn('capability', envelope)
+        self.assertNotIn('grant', envelope)
+
     def test_runtime_dispatch_selects_saved_feature_over_later_base_only_and_stub_publishes(self):
         envelope = self.runtime_publish_envelope()
         with tempfile.TemporaryDirectory() as tmp:

@@ -185,7 +185,7 @@ sub report_result {
     $url='' unless $url =~ m#\Ahttps://(?:gist\.github\.com/burt-agent/[a-f0-9]+|github\.com/burt-agent/workspace/commit/[a-f0-9]{40})\z#;
     $receipts->{published}{$id}=$url;
   }
-  $state='error' unless $state =~ /\A(?:passed|failed|published|publishing|uncertain)\z/;
+  $state='error' unless $state =~ /\A(?:passed|failed|published|publishing|uncertain|open|closed|merged)\z/;
   my $notice="$action: $state" . ($id ? " (job $id)" : '');
   if ($state eq 'error' && ($r->{rejection_schema}//'') eq '1') {
     my $code=$r->{code}//'';
@@ -199,7 +199,7 @@ sub report_result {
     $notice.='; success unconfirmed; the public write may already have succeeded; operator reconciliation required before retrying; do not retry';
   }
   my $url=$r->{url}//'';
-  if ($url =~ m#\Ahttps://(?:gist\.github\.com/burt-agent/[a-f0-9]+|github\.com/burt-agent/workspace/commit/[a-f0-9]{40})\z#) {
+  if ($url =~ m#\Ahttps://(?:gist\.github\.com/burt-agent/[a-f0-9]+|github\.com/burt-agent/workspace/(?:commit/[a-f0-9]{40}|pull/[1-9][0-9]*))\z#) {
     $notice.=" $url";
   }
   if ($action =~ /(?:run|repair|diagnose)/ && ref($r->{result}) eq 'HASH') {
@@ -325,8 +325,14 @@ sub tool_specs {
       ['id'],{id=>{type=>'string'}},'repo_inspect'],
     ['repair_repo_project',"Repair and TEST a saved repository job from this active runtime task. Supply its id, changes mapping filenames to COMPLETE replacement contents for changed/new files ONLY, delete as an explicit list (usually empty), argv for the COMPLETE project suite, and title. Unchanged files are preserved exactly by the broker. Same branch/project/base; creates a new immutable job with a NEW id. Uses one of the $sandbox_budget shared sandbox attempts. Fix the reported failure without removing tests or rewriting unrelated code. Does not publish; only a broker-selected passed candidate is eligible for publish_repo.",
       [qw(id changes delete argv title)],{id=>{type=>'string'},changes=>{type=>'object',additionalProperties=>{type=>'string'}},delete=>{type=>'array',items=>{type=>'string'}},argv=>{type=>'array',items=>{type=>'string'}},title=>{type=>'string',maxLength=>200}},'repo_repair'],
-    ['publish_repo','Ask the broker to publish exactly one recent PASSED repository candidate selected from active runtime provenance. The broker fixes the burt/* destination; it never writes main or another project, force-pushes, or accepts a model-selected job ID or destination. Missing or ambiguous eligible work is blocked truthfully. Stale base requires reread and retest. Return only the actual broker receipt commit URL; if uncertain stop and ask operator. One submission per task, 10/day globally.',
+    ['publish_repo','Ask the broker to publish exactly one recent PASSED repository candidate selected from active runtime provenance. The broker fixes the burt/* destination; this branch-publishing tool never writes main, force-pushes, or accepts a model-selected job ID or destination. Missing or ambiguous eligible work is blocked truthfully. Stale base requires reread and retest. Return only the actual broker receipt commit URL; if uncertain inspect the receipt before retrying. One submission per task, 10/day globally.',
       [],{},'repo_publish'],
+    ['create_repo_pull_request','Create or inspect the fixed burt-agent/workspace pull request from a burt/<lowercase-slug> branch to main. Supply branch, exact 40-character expected_head_sha, and a short title. The broker verifies the live branch head, fixed repository/base, and duplicate PR state; it never accepts arbitrary repositories, direct main writes, force pushes, or admin bypass. Use after publish_repo returns the branch commit. If uncertain, inspect this same branch/head before retrying.',
+      [qw(branch expected_head_sha title)],{branch=>{type=>'string'},expected_head_sha=>{type=>'string'},title=>{type=>'string',maxLength=>200}},'repo_pr_create'],
+    ['inspect_repo_pull_request','Inspect one burt-agent/workspace pull request and return bounded fixed-repository head/base/state metadata. Supply its numeric number. Use this to reconcile creation or merge results; no write occurs.',
+      ['number'],{number=>{type=>'integer'}},'repo_pr_inspect'],
+    ['merge_repo_pull_request','Merge one burt-agent/workspace PR to main through normal GitHub protections. Supply numeric PR number and exact expected_head_sha. The broker verifies the fixed repository, burt/* head, main base, current head, and mergeability, then uses normal expected-SHA squash merge—never force or admin bypass. If uncertain, inspect the same PR before retrying.',
+      [qw(number expected_head_sha)],{number=>{type=>'integer'},expected_head_sha=>{type=>'string'}},'repo_pr_merge'],
     ['checkpoint_coding_task','Save an immutable bounded checkpoint of the currently admitted coding task. The broker binds it to the trusted requester, channel, network and task identity; source and logs are never copied into the checkpoint.',
       [],{},'task_checkpoint'],
     ['coding_checkpoint_status','Read bounded derived status for one exact checkpoint id in the same broker-bound requester/channel/network tuple. It returns only checkpoint/job metadata and the remaining task-wide sandbox budget.',
@@ -440,7 +446,7 @@ sub tool_specs {
           # requester, scope, deadline, checkpoint, and terminal reporting.
           require_admitted_task($self,$action) if $action =~ /\A(?:run|repo_(?:run|repair|diagnose))\z/;
           task_notice($self,$self->_pending_raid,"$action started.") unless $action =~ /\A(?:repo_(?:read|inspect)|reference)\z/;
-          $publication_attempted=1 if $action eq 'publish' || $action eq 'repo_publish';
+          $publication_attempted=1 if $action eq 'publish' || $action eq 'repo_publish' || $action eq 'repo_pr_create' || $action eq 'repo_pr_merge';
           my $raw=broker_call({%$args,action=>$action,scope=>$scope,requester=>$requester,channel=>lc($self->_pending_raid->{channel}),network=>'irc.perl.org',
             ($action eq 'repo_publish' ? (requester=>trusted_requester($self)) : ())});
           report_result($self,$action,$raw,

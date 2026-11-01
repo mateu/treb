@@ -14,6 +14,14 @@ TOKEN = Path.home() / '.config/burt-publisher/github.token'
 SHA = r'[a-f0-9]{40}'
 
 
+def validate_pull_request(branch, expected_head_sha=None):
+    if not isinstance(branch, str) or not re.fullmatch(r'burt/[a-z0-9][a-z0-9-]{0,59}', branch):
+        raise ValueError('use a burt/<lowercase-slug> head branch for a pull request')
+    if expected_head_sha is not None and (not isinstance(expected_head_sha, str)
+                                          or not re.fullmatch(SHA, expected_head_sha)):
+        raise ValueError('invalid expected branch head')
+
+
 def validate_destination(branch, project, base_sha=None):
     if not isinstance(branch, str) or not re.fullmatch(r'burt/[a-z0-9][a-z0-9-]{0,59}', branch):
         raise ValueError('use a burt/<lowercase-slug> branch; main is never writable')
@@ -74,6 +82,83 @@ class Repository:
         repo = self.api('/repos/' + REPO)
         if repo.get('full_name') != REPO or repo.get('private') is not False or not repo.get('permissions', {}).get('push'):
             raise ValueError('expected public writable burt-agent/workspace')
+
+    def pull_request(self, number):
+        if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+            raise ValueError('invalid pull request number')
+        self.deadline = time.monotonic() + 14
+        self.verify()
+        return self._validated_pull(self.api('/repos/' + REPO + '/pulls/' + str(number)))
+
+    @staticmethod
+    def _validated_pull(data):
+        if not isinstance(data, dict):
+            raise ValueError('invalid pull request response')
+        number, head, base, url = data.get('number'), data.get('head', {}), data.get('base', {}), data.get('html_url', '')
+        if (not isinstance(number, int) or not isinstance(head, dict) or not isinstance(base, dict)
+                or not re.fullmatch(r'burt/[a-z0-9][a-z0-9-]{0,59}', head.get('ref', ''))
+                or not re.fullmatch(SHA, head.get('sha', '')) or base.get('ref') != 'main'
+                or base.get('repo', {}).get('full_name') != REPO or head.get('repo', {}).get('full_name') != REPO
+                or not re.fullmatch(r'https://github\.com/burt-agent/workspace/pull/[1-9][0-9]*', url)):
+            raise ValueError('unexpected pull request response')
+        return {'number': number, 'branch': head['ref'], 'head_sha': head['sha'], 'base': 'main',
+                'state': data.get('state'), 'merged': bool(data.get('merged')), 'mergeable': data.get('mergeable'), 'url': url}
+
+    def _find_pull(self, branch, expected_head_sha):
+        data = self.api('/repos/' + REPO + '/pulls?state=all&head=burt-agent:' + branch + '&base=main')
+        if not isinstance(data, list) or len(data) > 100:
+            raise ValueError('invalid pull request list response')
+        matches = [self._validated_pull(item) for item in data]
+        matches = [item for item in matches if item['branch'] == branch and item['head_sha'] == expected_head_sha]
+        if len(matches) > 1:
+            raise ValueError('ambiguous pull request response')
+        return matches[0] if matches else None
+
+    def create_pull_request(self, branch, expected_head_sha, title):
+        validate_pull_request(branch, expected_head_sha)
+        if not isinstance(title, str) or not 1 <= len(title) <= 200 or '\x00' in title:
+            raise ValueError('invalid pull request title')
+        self.deadline = time.monotonic() + 16
+        self.verify()
+        prefix = '/repos/' + REPO
+        head = self.api(prefix + '/git/ref/heads/' + branch).get('object', {}).get('sha', '')
+        if head != expected_head_sha:
+            raise ValueError('branch head changed; reread and retest before creating a pull request')
+        existing = self._find_pull(branch, expected_head_sha)
+        if existing:
+            return existing | {'created': False}
+        try:
+            created = self.api(prefix + '/pulls', {'title': title, 'head': branch, 'base': 'main'}, 'POST')
+        except Exception:
+            existing = self._find_pull(branch, expected_head_sha)
+            if existing:
+                return existing | {'created': False}
+            raise ValueError('pull request submission outcome is uncertain; inspect before retrying') from None
+        result = self._validated_pull(created)
+        if result['branch'] != branch or result['head_sha'] != expected_head_sha:
+            raise ValueError('unexpected created pull request')
+        return result | {'created': True}
+
+    def merge_pull_request(self, number, expected_head_sha):
+        current = self.pull_request(number)
+        validate_pull_request(current['branch'], expected_head_sha)
+        if current['head_sha'] != expected_head_sha:
+            raise ValueError('pull request head changed; inspect and retest before merging')
+        if current['merged']:
+            return current | {'merged_now': False}
+        if current['state'] != 'open' or current['mergeable'] is False:
+            raise ValueError('pull request is not mergeable under normal GitHub protections')
+        try:
+            merged = self.api('/repos/' + REPO + '/pulls/' + str(number) + '/merge',
+                              {'sha': expected_head_sha, 'merge_method': 'squash'}, 'PUT')
+        except Exception:
+            reconciled = self.pull_request(number)
+            if reconciled['merged']:
+                return reconciled | {'merged_now': False}
+            raise ValueError('pull request merge outcome is uncertain; inspect before retrying') from None
+        if not isinstance(merged, dict) or merged.get('merged') is not True or not re.fullmatch(SHA, merged.get('sha', '')):
+            raise ValueError('pull request was not merged under normal GitHub protections')
+        return self.pull_request(number) | {'merged_now': True, 'merge_sha': merged['sha']}
 
     def snapshot(self, branch, project):
         validate_destination(branch, project)
