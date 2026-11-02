@@ -722,7 +722,7 @@ for my $ending ('error','silent') {
     input=>'publish tested bundle',messages=>[]};
   my $bot;
   $bot=Local::RaidFlowBot->new(pending=>$pending,replies=>[sub {
-    Bot::Runtime::Workbench::report_result($bot,'repo_publish',
+    Bot::Runtime::Workbench::report_result($bot,'publish',
       '{"error":"repository submission failed or response lost; operator reconciliation required; do not retry"}');
     die "model failed after publication\n" if $ending eq 'error';
     return '__SILENT__';

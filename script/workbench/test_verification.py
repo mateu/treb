@@ -113,8 +113,8 @@ class VerificationTests(unittest.TestCase):
         changed = copy.deepcopy(self.policy)
         changed['checks']['verify.py'] += '\n# new policy'
         self.b.verification = Verification({'burt/dictionary:dictionary': changed})
-        publish = self.request('repo_publish')
-        with self.assertRaisesRegex(ValueError, 'receipt missing or stale|needs one unambiguous saved project candidate'):
+        publish = self.request('github_commit_files') | {'repo': 'burt-agent/workspace', 'branch': 'burt/dictionary', 'from_job': first['id'], 'message': 'tested'}
+        with self.assertRaisesRegex(ValueError, 'receipt missing or stale'):
             self.b.handle(publish)
         second = self.b.handle(self.req)
         self.assertNotEqual(first['id'], second['id'])
@@ -124,8 +124,8 @@ class VerificationTests(unittest.TestCase):
         self.b.execute = lambda job: {'reason': 'exited', 'exit_code': 0}
         job = self.b.handle(self.req)
         self.b.verification = self.gate
-        publish = self.request('repo_publish')
-        with self.assertRaisesRegex(ValueError, 'receipt missing or stale|needs one unambiguous saved project candidate'):
+        publish = self.request('github_commit_files') | {'repo': 'burt-agent/workspace', 'branch': 'burt/dictionary', 'from_job': job['id'], 'message': 'tested'}
+        with self.assertRaisesRegex(ValueError, 'receipt missing or stale'):
             self.b.handle(publish)
 
     def test_final_execution_reserved(self):

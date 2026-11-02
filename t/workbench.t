@@ -28,7 +28,7 @@ local $ENV{BURT_WORKBENCH_SOCKET} = '/not/a/socket';
 local $ENV{IRC_SERVER} = 'irc.perl.org';
 my %defs = map { $_->{name} => $_ } @{Bot::Runtime::Workbench::tool_specs($bot)};
 
-is(scalar keys %defs, 17, 'thin proxy exposes the supported tool set');
+is(scalar keys %defs, 16, 'thin proxy exposes the supported tool set');
 ok(!exists $defs{create_repo_pull_request} && !exists $defs{inspect_repo_pull_request}
    && !exists $defs{merge_repo_pull_request},
   'legacy fixed-repository pull-request tools are absent');
@@ -160,8 +160,7 @@ $bot->{pending}{channel} = '#mateu-test';
   $defs{read_repo_project}{code}->($tool, {branch => 'burt/dictionary', project => 'dictionary'});
 }
 is($requests[-1]{channel}, '#mateu-test', 'test channel is runtime-derived, never hardcoded');
-like($defs{publish_repo}{code}->($tool, {id => 'x'}), qr/Invalid tool fields/,
-  'repository publication takes no model-selected job or destination');
+ok(!exists $defs{publish_repo}, 'legacy repository publication tool is removed');
 
 $bot->{pending} = pending();
 my @lifecycle;
@@ -210,7 +209,7 @@ is_deeply([sort grep { $_ ne 'files' && $_ ne 'argv' && $_ ne 'title' } keys %$r
 ok(!exists($run->{capability}) && !exists($run->{grant}), 'run has no authorization payload');
 is($bot->{pending}{coding_attempts_remaining}, 12, 'broker attempt receipt reaches runtime state');
 
-Bot::Runtime::Workbench::report_result($bot, 'repo_publish',
+Bot::Runtime::Workbench::report_result($bot, 'publish',
   JSON::PP::encode_json({id => 'b'x32, state => 'uncertain'}));
 like($bot->{sent}[-1], qr/success unconfirmed.*do not retry/,
   'uncertain publication directs reconciliation instead of retry');

@@ -39,7 +39,13 @@ my $bot=bless {pending=>pending()}, 'GitHubBot';
 my %defs=map { $_->{name}=>$_ } @{Bot::Runtime::Workbench::tool_specs($bot)};
 ok($defs{$_}, "$_ is exposed for Burt with the socket enabled") for @github;
 ok(!exists $defs{$_}{input_schema}{properties}{requester}, "$_ schema has no requester field") for @github;
+ok(!exists $defs{publish_repo}, 'publish_repo is not exposed');
+is($defs{github_commit_files}{input_schema}{properties}{from_job}{type}, 'string', 'tested job is an optional commit source');
+is_deeply([sort @{$defs{github_commit_files}{input_schema}{required}}], [qw(branch message repo)], 'commit requires destination/message but chooses files or from_job');
 is_deeply([sort @{$defs{github_api}{input_schema}{required}}], [qw(method path)], 'github_api requires method and path');
+is_deeply([sort @{$defs{github_commit_files}{input_schema}{required}}], [qw(branch message repo)], 'commit schema permits either source');
+ok(exists $defs{github_commit_files}{input_schema}{properties}{from_job}, 'commit schema exposes tested job source');
+ok(!exists $defs{publish_repo}, 'legacy repository publish tool is absent');
 like($defs{github_api}{description}, qr/api\.github\.com/, 'github_api documents the fixed host');
 like($defs{github_whoami}{description}, qr/never assume an account name/i, 'whoami discourages hard-coded identity');
 for my $name (keys %defs) {
@@ -116,6 +122,9 @@ sub broker {
   $reply{github_commit_files}=JSON::PP::encode_json({ok=>JSON::PP::true, write=>JSON::PP::true,
     commit_sha=>$sha, commit_url=>$url});
   $defs{github_commit_files}{code}->($tool, {repo=>'o/r', branch=>'topic', files=>{a=>'b'}, message=>'m'});
+  $defs{github_commit_files}{code}->($tool, {repo=>'o/r', branch=>'topic', from_job=>'a'x32, message=>'tested'});
+  is($calls[-1]{from_job}, 'a'x32, 'runtime forwards explicit tested job');
+  ok(!exists $calls[-1]{files}, 'tested source never adds caller files');
   my $pending=$bot->{pending};
   is(Bot::Runtime::Workbench::verified_final_report($bot, $pending, "I committed the change: $url"),
     "I committed the change: $url", 'commit claims backed by a GitHub receipt are allowed');

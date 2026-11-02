@@ -477,11 +477,13 @@ class GitHub:
             raise GitHubError('commit content exceeds 512 KiB')
         return entries
 
-    def _prepare_commit(self, call, repo, git, branch, base_ref, create_branch, entries, message):
+    def _prepare_commit(self, call, repo, git, branch, base_ref, create_branch, entries, message, expected_parent=None, require_new_branch=False, expected_exists=None):
         try:
             parent = call('GET', f'{git}/ref/heads/{branch}')['data']['object']['sha']
             created = False
         except GitHubHTTPError as exc:
+            if exc.status == 404 and expected_exists is True:
+                raise GitHubError('branch moved since the tested snapshot; re-read and re-test') from None
             if exc.status != 404 or not create_branch:
                 raise
             if base_ref is None:
@@ -494,6 +496,16 @@ class GitHub:
             created = True
         if not isinstance(parent, str) or not SHA.fullmatch(parent):
             raise GitHubError('GitHub returned an invalid branch head')
+        if expected_exists is not None and expected_exists != (not created):
+            raise GitHubError('branch moved since the tested snapshot; re-read and re-test')
+        if require_new_branch and not created:
+            raise GitHubError('target must match snapshot branch or be a new branch from the tested base')
+        if expected_parent is not None and parent != expected_parent:
+            raise GitHubError('branch moved since the tested snapshot; re-read and re-test')
+        if expected_exists is False and created:
+            fallback = call('GET', f'{git}/ref/heads/main')['data']['object']['sha']
+            if fallback != expected_parent:
+                raise GitHubError('branch moved since the tested snapshot; re-read and re-test')
         base_tree = call('GET', f'{git}/commits/{parent}')['data']['tree']['sha']
         tree = [{'path': path, 'mode': mode, 'type': 'blob', 'content': value} if value is not None
                 else {'path': path, 'mode': mode, 'type': 'blob', 'sha': None} for path, mode, value in entries]
@@ -505,7 +517,7 @@ class GitHub:
             raise GitHubError('GitHub returned an invalid commit')
         return parent, created, tree_sha, commit_sha
 
-    def commit_files(self, repo, branch, base_ref, files, message, create_branch=True, audit=None):
+    def commit_files(self, repo, branch, base_ref, files, message, create_branch=True, audit=None, expected_parent=None, require_new_branch=False, expected_exists=None):
         """One atomic commit: unreferenced objects first, then a single ref write."""
         entries = self.validate_commit(repo, branch, base_ref, files, message)
         deadline = self.clock() + OPERATION_DEADLINE
@@ -514,7 +526,7 @@ class GitHub:
             return self.request(method, path, body=body, audit=audit, deadline=deadline, **kw)
         try:
             parent, created, tree_sha, commit_sha = self._prepare_commit(call, repo, git, branch, base_ref,
-                                                                        create_branch, entries, message)
+                                                                        create_branch, entries, message, expected_parent, require_new_branch, expected_exists)
         except (KeyError, TypeError, IndexError):
             raise GitHubError('GitHub returned an unexpected response; no branch was changed') from None
         # The only reference-changing request. Objects above are unreachable

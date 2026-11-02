@@ -62,7 +62,6 @@ class LargeBundleBrokerTests(unittest.TestCase):
     setUp = test_repository.RepositoryBrokerTests.setUp
     post = test_repository.RepositoryBrokerTests.post
     repair = test_repository.RepositoryBrokerTests.repair
-    repo_publish = test_repository.RepositoryBrokerTests.repo_publish
     def test_repair_inspect_publish_and_overflow(self):
         files = {'lib/main.py': 'x' * 70000, 't/test.py': 'x' * 61072}
         self.repo.files = files.copy()
@@ -82,9 +81,8 @@ class LargeBundleBrokerTests(unittest.TestCase):
         inspected = self.b.handle(envelope('repo_inspect', req['scope'], req['channel'], req['network']) |
                                  {'action': 'repo_inspect', 'id': fixed['id']})
         self.assertEqual(inspected['files'], files | {'lib/main.py': 'y' * 70000})
-        self.repo_publish(fixed)
-        tree = next(p['tree'] for _, p, _ in self.repo.calls if p and 'tree' in p)
-        self.assertEqual({e['path'].removeprefix('projects/dictionary/'): e['content'] for e in tree}, inspected['files'])
+        candidate = self.b.tested_commit_candidate(envelope('github_commit_files', req['scope'], req['channel'], req['network']) | {'from_job': fixed['id'], 'repo': 'burt-agent/workspace', 'branch': 'burt/dictionary'})
+        self.assertEqual({k.removeprefix('projects/dictionary/'): v for k, v in candidate['files'].items()}, inspected['files'])
         self.assertEqual(len(self.runs), 2)
 
 

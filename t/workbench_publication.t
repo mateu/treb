@@ -21,7 +21,7 @@ my $bot=bless {pending=>{coding_task=>1,channel=>'#ai',expires_at=>time+100,
     msg=>'burt_bot: write code and publish a gist and commit to the repository'}]}},'PublicationBot';
 my $warning=qr/success unconfirmed; the public write may already have succeeded; operator reconciliation required before retrying; do not retry/;
 
-for my $action (qw(publish repo_publish)) {
+for my $action (qw(publish)) {
   for my $response (
     {error=>'submission failed or response lost; operator reconciliation required; do not retry; INJECTED'},
     {error=>'broker unavailable; operator inspection required'},
@@ -51,7 +51,8 @@ local $ENV{BURT_WORKBENCH_SOCKET}='/test/socket';
 local $ENV{IRC_SERVER}='irc.perl.org';
 my %tools=map {$_->{name}=>$_} @{Bot::Runtime::Workbench::tool_specs($bot)};
 my $tool=bless {},'PublicationTool';
-for my $name (qw(publish_gist publish_repo)) {
+ok(!exists $tools{publish_repo}, 'legacy repository publication callback is absent');
+for my $name (qw(publish_gist)) {
   no warnings qw(redefine once);
   local *Bot::Runtime::Workbench::broker_call=sub {
     die "Workbench read failed\n";

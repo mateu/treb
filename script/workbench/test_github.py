@@ -526,6 +526,151 @@ class BrokerGitHubTests(unittest.TestCase):
         self.assertEqual((result['ok'], result['status']), (False, 404))
         self.assertEqual(len(self.opener.calls), 1)
 
+    def _tested_job(self, *, passed=True):
+        from test_repository import FakeRepository
+        self.b.repository = FakeRepository()
+        self.b.repository.exists = True
+        self.b.repository.files = {'old.txt': 'old', 'keep.txt': 'keep'}
+        self.b.execute = lambda job: {'reason': 'exited', 'exit_code': 0 if passed else 1, 'output': 'suite result'}
+        snapshot = self.b.handle(self.env('repo_read', branch='burt/dictionary', project='dictionary'))
+        return self.b.handle(self.env('repo_run', snapshot_id=snapshot['snapshot_id'],
+            changes={'new.txt': 'tested'}, delete=['old.txt'], argv=['/bin/sh', '-c', 'true'], title='suite'))
+
+    def _tested_commit(self, job, **fields):
+        return self.b.handle(self.env('github_commit_files', repo='burt-agent/workspace',
+            branch='burt/dictionary', from_job=job['id'], message='Tested commit') | fields)
+
+    def _tested_routes(self, *, exists=True, parent=SHA1):
+        self.git_routes()
+        for (method, path), response in list(self.opener.routes.items()):
+            if path.startswith('/repos/o/r/'):
+                self.opener.routes[(method, path.replace('/repos/o/r/', '/repos/burt-agent/workspace/').replace('/heads/topic', '/heads/burt/dictionary'))] = response
+        self.opener.routes[('GET', '/repos/burt-agent/workspace/git/ref/heads/burt/dictionary')] = (
+            Response(200, {'object': {'sha': parent}}) if exists else http_error(404))
+
+    def test_from_job_maps_exact_tested_bundle_and_snapshot_deletions(self):
+        job = self._tested_job()
+        self._tested_routes()
+        receipt = self._tested_commit(job)
+        self.assertTrue(receipt['tested'])
+        self.assertEqual(receipt['job_id'], job['id'])
+        self.assertEqual(receipt['test_argv'], ['/bin/sh', '-c', 'true'])
+        self.assertEqual(receipt['test_summary']['exit_code'], 0)
+        tree = next(c['body']['tree'] for c in self.opener.calls if c['path'].endswith('/git/trees'))
+        self.assertEqual({e['path']: e.get('content') for e in tree}, {
+            'projects/dictionary/new.txt': 'tested', 'projects/dictionary/keep.txt': 'keep',
+            'projects/dictionary/old.txt': None})
+        self.assertEqual(receipt['parent_sha'], SHA1)
+
+    def test_plain_commit_receipt_does_not_claim_tests(self):
+        self.git_routes()
+        receipt = self.commit()
+        self.assertIs(receipt['tested'], False)
+        self.assertNotIn('job_id', receipt)
+
+    def test_from_job_validation_happens_before_github_io(self):
+        job = self._tested_job()
+        for fields in ({'files': {'forged': 'x'}}, {'repo': 'other/repo'}, {'base_ref': SHA4},
+                       {'scope': 'f' * 64}, {'from_job': 'bad'}):
+            with self.subTest(fields=fields), self.assertRaises(ValueError):
+                self._tested_commit(job, **fields)
+        self.assertEqual(self.opener.calls, [])
+        self.assertEqual(self.b.db.execute('SELECT COUNT(*) FROM github_write_budgets').fetchone()[0], 0)
+
+    def test_from_job_rejects_failed_and_diagnostic_jobs(self):
+        failed = self._tested_job(passed=False)
+        with self.assertRaises(ValueError): self._tested_commit(failed)
+        self.b.execute = lambda job: {'reason': 'exited', 'exit_code': 0}
+        diagnostic = self.b.handle(self.env('repo_diagnose', id=failed['id'], argv=['/bin/sh', '-c', 'true'], title='diagnostic'))
+        with self.assertRaises(ValueError): self._tested_commit(diagnostic)
+        self.assertEqual(self.opener.calls, [])
+
+    def test_from_job_survives_resume_with_same_task_identity(self):
+        job = self._tested_job()
+        checkpoint = self.b.handle(self.env('task_checkpoint', phase='stopped', reason='iteration_limit'))
+        self.b.handle(self.env('task_resume', scope='f' * 64, checkpoint_id=checkpoint['checkpoint_id']))
+        self._tested_routes()
+        receipt = self._tested_commit(job, scope='f' * 64)
+        self.assertEqual(receipt['job_id'], job['id'])
+        self.assertTrue(receipt['tested'])
+
+    def test_commit_requires_exactly_one_source_and_rejects_non_repository_job(self):
+        with self.assertRaises(ValueError):
+            self.b.handle(self.env('github_commit_files', repo='o/r', branch='topic', message='missing source'))
+        self.b.execute = lambda job: {'reason': 'exited', 'exit_code': 0}
+        job = self.b.handle(self.env('run', files={'main.py': 'print(1)'}, argv=['/usr/bin/python3', '/work/main.py'], title='standalone'))
+        with self.assertRaises(ValueError): self._tested_commit(job)
+        self.assertEqual(self.opener.calls, [])
+
+    def test_from_job_detects_moved_parent_before_object_writes(self):
+        job = self._tested_job()
+        self._tested_routes(parent=SHA4)
+        with self.assertRaises(ValueError): self._tested_commit(job)
+        self.assertTrue(self.opener.calls)
+        self.assertTrue(all(c['method'] == 'GET' for c in self.opener.calls))
+
+    def test_legacy_pending_publications_do_not_gate_new_work(self):
+        job = self._tested_job()
+        self.b.db.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (job['id'],))
+        self.b.record_publication_attempt(job['id'])
+        self.b.db.commit()
+        self.assertEqual(self.b.publication_attempt_count(), 0)
+        self.assertTrue(self.api('POST', '/repos/o/r/issues', scope='f' * 64, body={'title': 'new'})['ok'])
+        reopened = Broker(Path(self.tmp.name) / 'state')
+        self.addCleanup(reopened.db.close)
+        self.assertEqual(reopened.db.execute('SELECT state FROM jobs WHERE id=?', (job['id'],)).fetchone()['state'], 'uncertain')
+        self.assertIsNotNone(reopened.db.execute("SELECT name FROM sqlite_master WHERE name='direct_repo_publications'").fetchone())
+
+    def test_from_job_original_missing_branch_rechecks_fallback_before_writes(self):
+        job = self._tested_job()
+        destination = json.loads(self.b.db.execute('SELECT destination FROM repo_jobs WHERE id=?', (job['id'],)).fetchone()[0])
+        row = self.b.db.execute('SELECT snapshot FROM repo_snapshots WHERE id=?', (destination['snapshot_id'],)).fetchone()
+        snapshot = json.loads(row[0]); snapshot['exists'] = False
+        self.b.db.execute('UPDATE repo_snapshots SET snapshot=? WHERE id=?', (json.dumps(snapshot), destination['snapshot_id']))
+        self.b.db.commit()
+        self._tested_routes(exists=False)
+        main = ('GET', '/repos/burt-agent/workspace/git/ref/heads/main')
+        self.opener.routes[main] = Response(200, {'object': {'sha': SHA4}})
+        with self.assertRaisesRegex(ValueError, 'branch moved since the tested snapshot'):
+            self._tested_commit(job)
+        self.assertTrue(all(c['method'] == 'GET' for c in self.opener.calls))
+        self.opener.calls.clear()
+        self.opener.routes[main] = Response(200, {'object': {'sha': SHA1}})
+        self.assertTrue(self._tested_commit(job)['tested'])
+
+    def test_from_job_deleted_snapshot_branch_has_no_write_calls(self):
+        job = self._tested_job()
+        self._tested_routes(exists=False)
+        with self.assertRaisesRegex(ValueError, 'branch moved since the tested snapshot'):
+            self._tested_commit(job)
+        self.assertTrue(all(c['method'] == 'GET' for c in self.opener.calls))
+
+    def test_from_job_non_writer_has_no_github_calls(self):
+        job = self._tested_job()
+        with patch.dict(os.environ, {'BURT_GITHUB_WRITERS': ''}):
+            with self.assertRaisesRegex(ValueError, 'allowlisted'):
+                self._tested_commit(job)
+        self.assertEqual(self.opener.calls, [])
+
+    def test_from_job_rejects_snapshot_branch_disappearing(self):
+        job = self._tested_job()
+        self._tested_routes(exists=False)
+        with self.assertRaises(ValueError): self._tested_commit(job)
+        self.assertTrue(all(c['method'] == 'GET' for c in self.opener.calls))
+
+    def test_from_job_new_branch_uses_snapshot_sha_not_default_branch(self):
+        job = self._tested_job()
+        self._tested_routes()
+        self.opener.routes[('GET', '/repos/burt-agent/workspace/git/ref/heads/new-topic')] = http_error(404)
+        receipt = self._tested_commit(job, branch='new-topic')
+        self.assertEqual(receipt['parent_sha'], SHA1)
+        self.assertTrue(receipt['created_branch'])
+        self.assertNotIn('/repos/burt-agent/workspace', [c['path'] for c in self.opener.calls])
+        self.opener.calls.clear()
+        self.opener.routes[('GET', '/repos/burt-agent/workspace/git/ref/heads/new-topic')] = Response(200, {'object': {'sha': SHA1}})
+        with self.assertRaises(ValueError): self._tested_commit(job, branch='new-topic')
+        self.assertTrue(all(c['method'] == 'GET' for c in self.opener.calls))
+
     def test_commit_files_rejects_unsafe_paths_before_io_and_budget(self):
         for files in ({'../x': 'a'}, {'/abs': 'a'}, {'.git/config': 'a'}, {'a/.Git/hooks/x': 'a'}, {'a\\b': 'a'},
                       {'a//b': 'a'}, {}, {'a': 5}, {'a': {'content': 'x', 'mode': '120000'}},
