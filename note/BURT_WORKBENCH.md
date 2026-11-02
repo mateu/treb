@@ -52,7 +52,7 @@ magic words, nickname addressing, or publication intent. Model arguments cannot
 change network, channel, requester, or scope. Reminder/bot/ambient/history-only
 turns cannot dispatch because they have no active human envelope.
 
-Sandbox repository reads and tests remain fixed to public `burt-agent/workspace`.
+Sandbox repository reads and tests support any account-readable repository, for anyone in the channel.
 Their GitHub reads use the account credential (`BURT_GITHUB_TOKEN_FILE`, default
 `~/.config/burt-github/token`) through the broker; no token enters either
 namespace. Repository commits use the same account credential and Git Data API,
@@ -62,9 +62,9 @@ longer used. Keep legacy publication/uncertainty records and reconciliation
 support intact; credential retirement must not erase their evidence or authorize
 replay. The separate gist credential remains in use.
 
-* `read_repo_project(branch, project, repo="burt-agent/workspace")`: only `burt/<lowercase-slug>` branches;
-  missing branches read from `main`. Returns the current `base_sha` and complete
-  project text bundle, relative to `projects/<project>/`.
+* `read_repo_project(repo, ref?, path?)`: snapshot a repository subtree at a branch head;
+  ref defaults to its default branch, path to root. Legacy `read_repo_project(branch, project)`
+  selects workspace `projects/<project>/` on `burt/<slug>`, falling back to main.
 * `run_repo_project(snapshot_id, changes, delete, argv, title)`: test the
   desired project materialized from the immutable snapshot, explicit changed/new
   contents and deletions; unchanged source/tests/docs are preserved. Safe
@@ -398,8 +398,8 @@ journal without publishing or changing the live policy.
 ## General GitHub account tools
 
 For GitHub work Burt should prefer `github_whoami`, `github_api`, `github_read`,
-and `github_commit_files` over the fixed `burt-agent/workspace` tools, which
-remain available for sandbox reads and tests, not a separate publication path. Identity is never hard-coded: `github_whoami`
+and `github_commit_files` alongside repository sandbox tools, which
+support account-readable repositories for reads and tests, not a separate publication path. Identity is never hard-coded: `github_whoami`
 reports the login, id, type and OAuth scopes from `GET /user` (cached per token
 for an hour), whether the current trusted requester may write, and the task's
 write budget. Burt must only claim what tool receipts show.
@@ -440,7 +440,7 @@ write budget. Burt must only claim what tool receipts show.
   `irc_fold` requester to be listed in `BURT_GITHUB_WRITERS` (comma-separated,
   folded the same way; empty means no writes). The requester always comes from
   the runtime envelope, never tool arguments. Pull-request endpoints are used
-  through `github_api` with the account token; fixed-workspace sandbox reads and
+  through `github_api` with the account token; account-readable repository sandbox reads and
   saved-job commits also use that account token. An installed but unsafe account token fails closed.
 * **Budget.** At most `BURT_GITHUB_WRITE_CAP` (default 60) writes per task,
   reserved in the broker before sending; separate from, and never consuming,
@@ -491,3 +491,16 @@ write budget. Burt must only claim what tool receipts show.
    provenance. Verify moved-base and non-writer requests fail closed. Then retire
    `~/.config/burt-publisher/github.token` without deleting legacy publication,
    pending uncertainty, or reconciliation records. Do not replay old tasks.
+
+
+Repository sandbox workflow: anyone may read_repo_project with repo owner/name,
+optional ref (repository default_branch), and optional relative path (root by default),
+then run_repo_project / repair_repo_project. Files are relative to that subtree.
+Without repo, legacy branch burt/<slug> and project select workspace projects/<project>
+with missing branches falling back to main. Empty repositories are refused: writers
+should github_api POST /user/repos {"name":"demo","auto_init":true}, then read and run,
+commit the PASSED job with github_commit_files from_job to a new branch, and open a PR
+using github_api. from_job cannot write the default branch; repository must match and
+branch must be unchanged or new from exactly the tested SHA. Writer gate and caps apply.
+The code sandbox has no network and only /usr system Perl/Python modules;
+~/perl5 is NOT mounted. Do not attempt network installs in the sandbox.

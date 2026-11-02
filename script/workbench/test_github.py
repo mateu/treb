@@ -562,6 +562,54 @@ class BrokerGitHubTests(unittest.TestCase):
             'projects/dictionary/old.txt': None})
         self.assertEqual(receipt['parent_sha'], SHA1)
 
+    def test_other_repo_anyone_read_run_and_writer_commit(self):
+        from test_repository import OtherRepository
+        self.b.repository = OtherRepository(); self.b.repository.exists = True
+        self.b.repository.files = {'README.md': 'hello'}
+        self.b.repository.entries = [dict(path='README.md', mode='100644', type='blob', size=5, sha='1'*40)]
+        self.b.execute = lambda job: {'reason': 'exited', 'exit_code': 0}
+        snapshot = self.b.handle(self.env('repo_read', repo='other/demo'))
+        job = self.b.handle(self.env('repo_run', snapshot_id=snapshot['snapshot_id'],
+            changes={'README.md': 'tested'}, delete=[], argv=['/bin/sh', '-c', 'true'], title='suite'))
+        for target in ('trunk',):
+            with self.assertRaisesRegex(ValueError, 'default branch'):
+                self._tested_commit(job, repo='other/demo', branch=target)
+        with self.assertRaisesRegex(ValueError, 'allowlisted'):
+            self._tested_commit(job, repo='other/demo', branch='feature', requester='visitor')
+        self.assertEqual(self.opener.calls, [])
+        self.git_routes()
+        for (method, path), response in list(self.opener.routes.items()):
+            if path.startswith('/repos/o/r/'):
+                self.opener.routes[(method, path.replace('/repos/o/r/', '/repos/other/demo/').replace('/heads/topic', '/heads/feature'))] = response
+        self.opener.routes[('GET', '/repos/other/demo')] = Response(200, {'default_branch': 'trunk'})
+        self.opener.routes[('GET', '/repos/other/demo/git/ref/heads/feature')] = http_error(404)
+        with self.assertRaisesRegex(ValueError, 'match tested snapshot'):
+            self._tested_commit(job, repo='wrong/repo', branch='feature')
+        self.opener.routes[('GET', '/repos/other/demo/git/ref/heads/trunk')] = Response(200, {'object': {'sha': SHA4}})
+        with self.assertRaisesRegex(ValueError, 'branch moved'):
+            self._tested_commit(job, repo='other/demo', branch='trunk-feature', base_ref=SHA4)
+        self.opener.routes[('GET', '/repos/other/demo')] = Response(200, {'default_branch': 'feature'})
+        with self.assertRaisesRegex(ValueError, 'default branch'):
+            self._tested_commit(job, repo='other/demo', branch='feature')
+        self.opener.routes[('GET', '/repos/other/demo')] = Response(200, {'default_branch': 'trunk'})
+        self.opener.routes[('GET', '/repos/other/demo/git/ref/heads/feature')] = Response(200, {'object': {'sha': SHA4}})
+        with self.assertRaises(ValueError):
+            self._tested_commit(job, repo='other/demo', branch='feature')
+        self.assertTrue(all(c['method'] == 'GET' for c in self.opener.calls))
+        self.opener.routes[('GET', '/repos/other/demo/git/ref/heads/feature')] = http_error(404)
+        self.assertTrue(self._tested_commit(job, repo='other/demo', branch='feature')['tested'])
+        tree = next(c['body']['tree'] for c in self.opener.calls if c['path'].endswith('/git/trees'))
+        self.assertEqual(tree[0]['path'], 'README.md')
+        visitor = self.b.handle(self.env('repo_read', requester='visitor', scope='f'*64, repo='other/demo'))
+        self.assertEqual(self.b.handle(self.env('repo_run', requester='visitor', scope='f'*64,
+            snapshot_id=visitor['snapshot_id'], changes={}, delete=[], argv=['/bin/sh', '-c', 'true'], title='suite'))['state'], 'passed')
+
+    def test_user_repo_creation_writer_gate(self):
+        with self.assertRaisesRegex(ValueError, 'allowlisted'):
+            self.api('POST', '/user/repos', requester='visitor', body={'name': 'demo', 'auto_init': True})
+        self.assertEqual(self.opener.calls, [])
+        self.assertTrue(self.api('POST', '/user/repos', body={'name': 'demo', 'auto_init': True})['ok'])
+
     def test_plain_commit_receipt_does_not_claim_tests(self):
         self.git_routes()
         receipt = self.commit()

@@ -528,3 +528,46 @@ class RepositoryBrokerTests(unittest.TestCase):
             second.handle(self.envelope('repo_publish',self.req['scope'],self.req['channel'],self.req['network']) | {'id': diagnostic['id']})
         with self.assertRaises(ValueError): self.b.handle(request | {'scope':'b'*64})
         self.assertFalse(any(p is not None for _,p,_ in self.repo.calls))
+
+
+class OtherRepository(FakeRepository):
+    def api(self, path, payload=None, method=None):
+        if path == '/repos/other/demo':
+            self.calls.append((path, payload, method))
+            return {'default_branch': 'trunk'}
+        return super().api(path, payload, method)
+
+
+class OtherRepositoryTests(unittest.TestCase):
+    def test_default_and_explicit_subtree(self):
+        r = OtherRepository(); r.exists = True
+        r.entries = [dict(path='src/hello.py', mode='100644', type='blob', size=2, sha='1'*40)]
+        r.files = {'hello.py': 'ok'}
+        snap = r.snapshot(repo='other/demo', path='src')
+        self.assertEqual((snap['repo'], snap['ref'], snap['path'], snap['base_sha']),
+                         ('other/demo', 'trunk', 'src', A))
+        self.assertEqual(snap['files'], {'hello.py': 'ok'})
+        self.assertTrue(any('/heads/trunk' in c[0] for c in r.calls))
+        self.assertEqual(r.snapshot(repo='other/demo', ref='feature', path='src')['ref'], 'feature')
+
+    def test_invalid_inputs_and_empty_repo(self):
+        for path in ('/src', '../src', 'src/../x', '.git', 'a/.GIT/x', 'a//b'):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                OtherRepository().snapshot(repo='other/demo', path=path)
+        for repo in ('bad', '../x', 'a/b/c'):
+            with self.assertRaises(ValueError): OtherRepository().snapshot(repo=repo)
+        with self.assertRaisesRegex(ValueError, 'auto_init:true'):
+            OtherRepository().snapshot(repo='other/demo')
+
+    def test_tree_and_size_bounds(self):
+        r = OtherRepository(); r.exists = True
+        r.entries = [dict(path='x', type='tree')] * 5001
+        with self.assertRaisesRegex(ValueError, 'tree exceeds'): r.snapshot(repo='other/demo')
+        r.entries = [dict(path='x', mode='100644', type='blob', size=131073, sha=A)]
+        with self.assertRaises(ValueError): r.snapshot(repo='other/demo')
+        original = r.api
+        def truncated(path, *args):
+            if '/git/trees/' in path: return {'tree': [], 'truncated': True}
+            return original(path, *args)
+        r.api = truncated
+        with self.assertRaisesRegex(ValueError, 'tree exceeds'): r.snapshot(repo='other/demo')

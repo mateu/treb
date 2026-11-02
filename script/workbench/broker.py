@@ -479,7 +479,8 @@ class Broker:
                         (AUDIT_LIMIT, *protected))
 
     def create_snapshot(self, req):
-        snapshot = self.repository.snapshot(req['branch'], req['project'])
+        snapshot = (self.repository.snapshot(repo=req['repo'], ref=req.get('ref'), path=req.get('path'))
+                    if 'repo' in req else self.repository.snapshot(req['branch'], req['project']))
         now = time.time()
         snapshot_id = uuid.uuid4().hex
         self.db.execute('INSERT INTO repo_snapshots VALUES (?,?,?,?,?,?,?,?)',
@@ -972,12 +973,16 @@ class Broker:
                     or receipt.get('policy_sha256') != self.verification.identity(policy)
                     or receipt.get('kind') != 'trusted_checks'):
                 raise GitHubError('trusted verification receipt missing or stale; retest')
-        root = 'projects/' + snapshot['project'] + '/'
+        if req['branch'] == snapshot.get('default_branch', 'main'):
+            raise GitHubError('from_job cannot write the default branch; create a new branch and open a PR')
+        root = snapshot.get('path', 'projects/' + snapshot['project'])
+        root = root + '/' if root else ''
         mapped = {root + name: content for name, content in files.items()}
         mapped.update({root + name: None for name in set(snapshot['files']) - set(files)})
         return {'files': mapped, 'base_sha': snapshot['base_sha'], 'job_id': job_id,
                 'require_new_branch': req['branch'] != snapshot['branch'],
                 'expected_exists': snapshot['exists'] if req['branch'] == snapshot['branch'] else None,
+                'explicit_repo': snapshot.get('explicit_repo', False),
                 'test_argv': result.get('argv', []), 'test_summary': result}
 
     def github_action(self, req):
@@ -1032,6 +1037,11 @@ class Broker:
             elif action == 'github_read':
                 result = self.github.read(req['repo'], req['ref'], req['path'], audit=audit)
             else:
+                if tested and tested['explicit_repo']:
+                    metadata = self.github.api('GET', '/repos/' + req['repo'], audit=audit)
+                    default_branch = metadata.get('data', {}).get('default_branch')
+                    if not isinstance(default_branch, str) or req['branch'] == default_branch:
+                        raise GitHubError('from_job cannot write the default branch; create a new branch and open a PR')
                 result = self.github.commit_files(req['repo'], req['branch'], req.get('base_ref'), req['files'],
                                                   req['message'], req.get('create_branch', True), audit=audit,
                                                   **({'expected_parent': tested['base_sha'], 'require_new_branch': tested['require_new_branch'], 'expected_exists': tested['expected_exists']} if tested else {}))
@@ -1073,7 +1083,7 @@ class Broker:
         action = req.get('action')
         allowed = {'action', 'scope', 'requester', 'channel', 'network'}
         fields = {'run': {'files','argv','title'}, 'publish': {'id'},
-                  'repo_read': {'branch','project'},
+                  'repo_read': set(),
                   'repo_run': {'snapshot_id','changes','delete','argv','title'},
                   'repo_inspect': {'id'}, 'job_inspect': {'id'},
                   'repo_repair': {'id','changes','delete','argv','title'},
@@ -1086,7 +1096,7 @@ class Broker:
         fields['task_progress'] = set()
         fields['task_checkpoint'] = {'requester', 'phase', 'reason'}
         optional_fields = {'task_status': {'deadline', 'model_iterations'}, 'task_checkpoint': {'deadline'},
-                           'repo_read': {'repo'}}
+                           'repo_read': {'repo','ref','path','branch','project'}}
         fields['checkpoint_status'] = {'checkpoint_id', 'requester'}
         fields['task_resume'] = {'checkpoint_id', 'requester'}
         optional_fields['task_resume'] = {'deadline'}
@@ -1096,8 +1106,6 @@ class Broker:
         if (action not in fields or not {'action', 'scope', 'requester', 'channel', 'network'} <= set(req)
               or not fields[action] <= set(req) or set(req) - allowed):
             raise ValueError('invalid action or fields')
-        if action == 'repo_read' and req.get('repo', 'burt-agent/workspace') != 'burt-agent/workspace':
-            raise ValueError('sandbox projects currently support only burt-agent/workspace')
         if req['channel'] not in ('#ai', '#mateu-test') or req['network'] != 'irc.perl.org':
             raise ValueError('workbench is restricted to irc.perl.org #ai or #mateu-test')
         scope = req['scope']
@@ -1260,11 +1268,15 @@ class Broker:
         destination = None
         policy = None
         if action == 'repo_read':
-            validate_destination(req['branch'], req['project'])
+            if 'repo' not in req:
+                if 'ref' in req or 'path' in req:
+                    raise ValueError('ref/path require repo')
+                validate_destination(req.get('branch'), req.get('project'))
             return self.create_snapshot(req)
         if action == 'repo_run':
             snapshot = self.load_snapshot(req, req['snapshot_id'], require_active=not _saved_snapshot)
-            current = self.repository.snapshot(snapshot['branch'], snapshot['project'])
+            current = (self.repository.snapshot(repo=snapshot['repository'], ref=snapshot['branch'], path=snapshot['path'])
+                       if snapshot.get('explicit_repo') else self.repository.snapshot(snapshot['branch'], snapshot['project']))
             if any(current[key] != snapshot[key] for key in ('base_sha', 'tree_sha', 'exists', 'files')):
                 raise ValueError('branch changed; read project and retest against the new base')
             files = self.materialize_files(snapshot['files'], req['changes'], req['delete'])

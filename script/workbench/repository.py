@@ -9,7 +9,7 @@ import time
 import urllib.error
 import urllib.request
 
-from github import GitHub
+from github import GitHub, safe_repo, safe_branch, safe_file_path
 from runner import MAX_INPUT_BYTES, MAX_JSON_BYTES, InputSizeError
 
 REPO = 'burt-agent/workspace'
@@ -308,15 +308,39 @@ class Repository:
         # outcome to a later transport error.
         return current | {'state': 'closed', 'merged': True, 'merged_now': True, 'merge_sha': merged['sha']}
 
-    def snapshot(self, branch, project):
-        validate_destination(branch, project)
+    def snapshot(self, branch=None, project=None, *, repo=None, ref=None, path=None):
+        explicit = repo is not None
+        if explicit:
+            safe_repo(repo)
+            if branch is not None or project is not None:
+                raise ValueError('use ref/path with repo, or branch/project without repo')
+            root = '' if path is None else path
+            if not isinstance(root, str) or root.startswith('/'):
+                raise ValueError('path must be a relative directory')
+            if root:
+                safe_file_path(root)
+        else:
+            validate_destination(branch, project)
+            repo, root = REPO, 'projects/' + project
         self.deadline = time.monotonic() + 14
-        self.verify()
-        prefix = '/repos/' + REPO
+        if explicit:
+            metadata = self.api('/repos/' + repo)
+            default_branch = metadata.get('default_branch')
+            safe_branch(default_branch)
+            branch = default_branch if ref is None else ref
+            safe_branch(branch)
+        else:
+            self.verify()
+            default_branch = 'main'
+        prefix = '/repos/' + repo
         exists = True
         try:
             ref = self.api(prefix + '/git/ref/heads/' + branch)
         except urllib.error.HTTPError as exc:
+            if explicit:
+                if exc.code in (404, 409):
+                    raise ValueError('ref missing or repository empty; create with auto_init:true and use an existing ref') from None
+                raise
             if exc.code != 404:
                 raise
             exists = False
@@ -331,14 +355,14 @@ class Repository:
         tree = self.api(prefix + '/git/trees/' + tree_sha + '?recursive=1')
         if tree.get('truncated') or not isinstance(tree.get('tree'), list) or len(tree['tree']) > 5000:
             raise ValueError('repository tree exceeds bound')
-        root = 'projects/' + project
         files = {}
+        prefixes = {'/'.join(root.split('/')[:i]) for i in range(1, len(root.split('/')) + 1)} if root else set()
         for entry in tree['tree']:
             name = entry.get('path', '')
             # Reject symlink/submodule/file at a directory prefix too.
-            if name in ('projects', root) and entry.get('type') != 'tree':
+            if name in prefixes and entry.get('type') != 'tree':
                 raise ValueError('project directory is not a tree')
-            if not name.startswith(root + '/') or entry.get('type') == 'tree':
+            if (root and not name.startswith(root + '/')) or entry.get('type') == 'tree':
                 continue
             if (entry.get('mode') != '100644' or entry.get('type') != 'blob'
                     or not re.fullmatch(SHA, entry.get('sha', ''))
@@ -347,7 +371,7 @@ class Repository:
                 raise ValueError('project contains unsupported or oversized files')
             if entry['size'] > MAX_INPUT_BYTES:
                 raise InputSizeError(sum(len(v.encode('utf-8')) for v in files.values()) + entry['size'], 'project')
-            relative = name[len(root)+1:]
+            relative = name[len(root)+1:] if root else name
             validate_files({relative: ''})
             blob = self.api(prefix + '/git/blobs/' + entry['sha'])
             if blob.get('encoding') != 'base64':
@@ -355,7 +379,8 @@ class Repository:
             content = base64.b64decode(blob['content']).decode('utf-8')
             files[relative] = content
             validate_files(files)
-        result = dict(repository=REPO, branch=branch, project=project, base_sha=sha,
+        result = dict(repository=repo, repo=repo, ref=branch, path=root, default_branch=default_branch,
+                      explicit_repo=explicit, branch=branch, project=project or '', base_sha=sha,
                       exists=exists, tree_sha=tree_sha, files=files)
         if len(json.dumps(result).encode()) > MAX_JSON_BYTES:
             raise ValueError('encoded project response exceeds transport bound')
