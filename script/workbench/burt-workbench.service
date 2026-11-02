@@ -14,3 +14,7 @@ TasksMax=24
 
 [Install]
 WantedBy=default.target
+
+# Deployment environment (set through a systemd drop-in, never here):
+# Environment=BURT_GITHUB_TOKEN_FILE=%h/.config/burt-github/token
+# Environment=BURT_GITHUB_WRITERS=hunter

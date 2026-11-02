@@ -388,3 +388,13 @@ snapshot-bound effective baseline without mutating the operator policy; it still
 requires immutable checks, protected-path enforcement, and exact-artifact
 publication. An operator-only replay can use a frozen baseline and a separate
 journal without publishing or changing the live policy.
+
+## General GitHub account tools
+
+For GitHub work, Burt should first call `github_whoami` and use the returned login
+as the account identity. `github_api`, `github_read`, and `github_commit_files`
+are broker-owned, account-scoped tools. GitHub reads are available from trusted
+human envelopes; writes require the envelope requester to be listed in
+`BURT_GITHUB_WRITERS`. The token is read only by the broker from
+`BURT_GITHUB_TOKEN_FILE` (default `~/.config/burt-github/token`), a regular 0600
+file. Results are receipts: do not claim GitHub changes unless the receipt says so.

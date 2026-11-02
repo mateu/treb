@@ -15,6 +15,7 @@ import uuid
 
 from runner import run, validate, MAX_JSON_BYTES, MAX_INPUT_BYTES, MAX_GIST_INPUT_BYTES, InputSizeError
 from repository import GitHubHTTPRejected, Repository, validate_destination, validate_files
+from github import GitHub, GitHubError, GitHubHTTPError
 from verification import Verification
 from references import References, CATALOG
 
@@ -392,6 +393,8 @@ class Broker:
         self.verification = verification
         self.verify_execute = verify_execute or (lambda job, checks: run(job, checks=checks))
         self.references = References()
+        self.github = GitHub()
+        self.db.execute('''CREATE TABLE IF NOT EXISTS github_requests (created REAL NOT NULL, requester TEXT NOT NULL, channel TEXT NOT NULL, method TEXT NOT NULL, path TEXT NOT NULL, status INTEGER, request_id TEXT, body_sha256 TEXT)''')
 
     def prune_audit(self):
         now = time.time()
@@ -947,7 +950,10 @@ class Broker:
                   'repo_pr_inspect': {'number'}, 'repo_pr_merge': {'number','expected_head_sha'},
                   'repo_inspect': {'id'}, 'job_inspect': {'id'},
                   'repo_repair': {'id','changes','delete','argv','title'},
-                  'repo_diagnose': {'id','argv','title'}}
+                  'repo_diagnose': {'id','argv','title'},
+                  'github_whoami': set(), 'github_api': {'method','path'},
+                  'github_read': {'repo','ref','path'},
+                  'github_commit_files': {'repo','branch','files','message'}}
         fields['reference'] = {'key'}
         fields['task_status'] = {'phase', 'reason'}
         fields['task_progress'] = set()
@@ -957,6 +963,8 @@ class Broker:
         fields['checkpoint_status'] = {'checkpoint_id', 'requester'}
         fields['task_resume'] = {'checkpoint_id', 'requester'}
         optional_fields['task_resume'] = {'deadline'}
+        optional_fields['github_api'] = {'query','body'}
+        optional_fields['github_commit_files'] = {'base_ref','create_branch'}
         allowed |= fields.get(action, set()) | optional_fields.get(action, set())
         if (action not in fields or not {'action', 'scope', 'requester', 'channel', 'network'} <= set(req)
               or not fields[action] <= set(req) or set(req) - allowed):
@@ -1081,6 +1089,39 @@ class Broker:
             # task facts and actual job metadata.
             return {'jobs': [{'id': row['id'], 'state': row['state']} for row in
                              self.task_job_rows(self.task_binding(scope)['task_id'])], 'budget': budget}
+        if action in ('github_whoami', 'github_api', 'github_read', 'github_commit_files'):
+            method = req.get('method', 'GET').upper() if action == 'github_api' else ('POST' if action == 'github_commit_files' else 'GET')
+            path = req.get('path', '/user') if action in ('github_api', 'github_whoami') else '/repos/' + req['repo'] + '/contents/' + req.get('path', '')
+            writers = {item.strip().casefold() for item in os.environ.get('BURT_GITHUB_WRITERS', '').split(',') if item.strip()}
+            write = method in ('POST', 'PUT', 'PATCH', 'DELETE')
+            if write and req['requester'].casefold() not in writers:
+                raise ValueError('GitHub writes require an allowlisted trusted requester')
+            task_id = self.task_binding(scope)['task_id']
+            if write:
+                cap = int(os.environ.get('BURT_GITHUB_WRITE_CAP', '60'))
+                used = self.db.execute("SELECT COUNT(*) FROM github_requests WHERE requester=? AND status IS NOT NULL AND method IN ('POST','PUT','PATCH','DELETE')", (req['requester'],)).fetchone()[0]
+                if used >= cap: raise ValueError('GitHub write cap exhausted')
+            body = req.get('body') if action == 'github_api' else (req.get('files') if action == 'github_commit_files' else None)
+            digest = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(',', ':')).encode()).hexdigest() if body is not None else None
+            try:
+                if action == 'github_whoami': result = self.github.whoami()
+                elif action == 'github_api': result = self.github.request(method, req['path'], req.get('query'), req.get('body'))
+                elif action == 'github_read': result = self.github.read(req['repo'], req['ref'], req['path'])
+                else: result = self.github.commit_files(req['repo'], req['branch'], req.get('base_ref', 'main'), req['files'], req['message'], bool(req.get('create_branch', False)))
+                status = result.get('status', 200) if isinstance(result, dict) else 200
+                request_id = result.get('request_id') if isinstance(result, dict) else None
+            except GitHubHTTPError as exc:
+                status, request_id = exc.status, exc.request_id
+                result = {'github_http': exc.receipt()}
+            except Exception as exc:
+                if write and isinstance(exc, (urllib.error.URLError, TimeoutError, OSError)):
+                    result = {'outcome_uncertain': True, 'method': method, 'path': path, 'request_id': None, 'verify': 'Verify with GET requests before another write.'}
+                    status = None; request_id = None
+                else: raise
+            self.db.execute('INSERT INTO github_requests VALUES (?,?,?,?,?,?,?,?)', (time.time(), req['requester'], req['channel'], method, path, status, request_id, digest))
+            self.db.execute('DELETE FROM github_requests WHERE rowid NOT IN (SELECT rowid FROM github_requests ORDER BY created DESC LIMIT 4096)')
+            self.db.commit()
+            return result
         if action == 'reference':
             return self.references.read(req['key'])
         if action == 'job_inspect':
