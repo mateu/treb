@@ -14,7 +14,7 @@ import urllib.request
 import uuid
 
 from runner import run, validate, MAX_JSON_BYTES, MAX_INPUT_BYTES, MAX_GIST_INPUT_BYTES, InputSizeError
-from repository import PULL_TOKEN, GitHubHTTPRejected, Repository, validate_destination, validate_files
+from repository import GitHubHTTPRejected, Repository, validate_destination, validate_files
 from github import GitHub, GitHubError, GitHubHTTPError, GitHubPolicyError, GitHubTransportError, classify
 from verification import Verification
 from references import References, CATALOG
@@ -404,7 +404,7 @@ class Broker:
         (self.base / 'jobs.sqlite').chmod(0o600)
         self.prune_audit()
         self.db.commit()
-        self.repository = Repository(pull_token=PULL_TOKEN)
+        self.repository = Repository()
         self.verification = verification
         self.verify_execute = verify_execute or (lambda job, checks: run(job, checks=checks))
         self.references = References()

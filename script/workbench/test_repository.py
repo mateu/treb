@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
 from broker import reconcile_pending_pull_request
-from repository import GitHubHTTPRejected, Repository, validate_destination, validate_files
+from repository import PULL_TOKEN, GitHubHTTPRejected, Repository, validate_destination, validate_files
 import test_broker
 
 A, B, C, D = (c*40 for c in 'abcd')
@@ -195,7 +195,9 @@ class RepositoryTests(unittest.TestCase):
             self.assertEqual(r.credential('/repos/burt-agent/workspace/git/refs/heads/burt/pulls-demo'), legacy)
             self.assertEqual(r.credential('/repos/burt-agent/workspace/git/ref/heads/burt/pulls'), legacy)
             self.assertEqual(r.credential('/repos/burt-agent/workspace/pullsx'), legacy)
-            self.assertEqual(Repository(legacy).credential('/repos/burt-agent/workspace/pulls'), legacy)
+            self.assertEqual(Repository(legacy, pull_token=None).credential('/repos/burt-agent/workspace/pulls'), legacy)
+            # Default clients (broker and operator recovery) select the account token.
+            self.assertEqual(Repository(legacy).pull_token, PULL_TOKEN)
             # An installed but unsafe account token fails closed, never falls back.
             # Account token follows GitHub.token(): readable directories are
             # fine, writable ones are not; the publisher token stays stricter.

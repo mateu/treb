@@ -99,7 +99,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class Repository:
-    def __init__(self, token=TOKEN, pull_token=None):
+    def __init__(self, token=TOKEN, pull_token=PULL_TOKEN):
         self.token = Path(token)
         self.pull_token = Path(pull_token) if pull_token else None
         self.deadline = None
