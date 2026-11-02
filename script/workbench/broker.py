@@ -200,6 +200,76 @@ def reconcile_pending_pull_request(db, repository, task_id):
             'reconciled': True, 'replayed': False}
 
 
+def confirm_absent_pending_pull_request(db, repository, task_id, operator, commit=False):
+    """Operator-only, GET-verified retirement of one absent PR-create receipt."""
+    if not isinstance(task_id, str) or not re.fullmatch(r'[a-f0-9]{64}', task_id):
+        raise ValueError('invalid pull request reconciliation task id')
+    if not isinstance(operator, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,63}', operator):
+        raise ValueError('invalid reconciliation operator')
+
+    confirmed = db.execute('SELECT * FROM absent_pull_request_confirmations WHERE task_id=?',
+                           (task_id,)).fetchone()
+    if confirmed:
+        return dict(confirmed) | {'confirmed': True, 'replayed': True}
+    pending = db.execute('SELECT * FROM pending_pull_request_operations WHERE task_id=?',
+                         (task_id,)).fetchone()
+    if not pending or pending['operation'] != 'repo_pr_create':
+        raise ValueError('pending pull request creation not found')
+
+    # Preview always reaches the GitHub authority and never opens a write transaction.
+    evidence = repository.absent_pull_request_evidence(pending['branch'], pending['head_sha'])
+    result = {'task_id': task_id, 'operator': operator, 'evidence': evidence,
+              'confirmed': False, 'replayed': False}
+    if not commit:
+        return result
+
+    # The evidence is intentionally fetched again immediately before the atomic
+    # state transition; unknown or changed remote state fails before any local clear.
+    evidence = repository.absent_pull_request_evidence(pending['branch'], pending['head_sha'])
+    db.execute('BEGIN IMMEDIATE')
+    try:
+        confirmed = db.execute('SELECT * FROM absent_pull_request_confirmations WHERE task_id=?',
+                               (task_id,)).fetchone()
+        if confirmed:
+            db.commit()
+            return dict(confirmed) | {'confirmed': True, 'replayed': True}
+        current = db.execute('SELECT * FROM pending_pull_request_operations WHERE task_id=?',
+                             (task_id,)).fetchone()
+        if (not current or current['operation'] != 'repo_pr_create'
+                or (current['branch'], current['head_sha']) != (pending['branch'], pending['head_sha'])):
+            raise ValueError('pending pull request operation changed; record remains pending')
+        now = time.time()
+        budget = db.execute('SELECT 1 FROM task_phase_budgets WHERE task_id=?', (task_id,)).fetchone()
+        if budget:
+            db.execute("UPDATE task_phase_budgets SET phase='stopped',terminal_reason='publication_uncertain',updated=? WHERE task_id=?",
+                       (now, task_id))
+        else:
+            db.execute('''INSERT INTO task_phase_budgets
+                          (task_id,deadline,phase,model_iterations,sandbox_attempts,public_writes,
+                           progress_notices,terminal_reports,terminal_reason,updated)
+                          VALUES (?,?,?,?,?,?,?,?,?,?)''',
+                       (task_id, now, 'stopped', 0, 0, 0, 0, 0, 'publication_uncertain', now))
+        evidence_json = json.dumps(evidence, sort_keys=True, separators=(',', ':'))
+        db.execute('''INSERT INTO absent_pull_request_confirmations
+                      (task_id,branch,head_sha,operator,confirmed_at,evidence)
+                      VALUES (?,?,?,?,?,?)''',
+                   (task_id, pending['branch'], pending['head_sha'], operator, now, evidence_json))
+        cleared = db.execute("DELETE FROM pending_pull_request_operations WHERE task_id=? AND branch=? AND head_sha=? AND operation='repo_pr_create'",
+                             (task_id, pending['branch'], pending['head_sha']))
+        if cleared.rowcount != 1:
+            raise ValueError('pending pull request operation changed; record remains pending')
+        remaining = db.execute("SELECT 1 FROM pending_pull_request_operations WHERE branch=? AND head_sha=? AND operation='repo_pr_create' LIMIT 1",
+                               (pending['branch'], pending['head_sha'])).fetchone()
+        if not remaining:
+            db.execute("UPDATE repository_pull_requests SET state='absent_confirmed',number=NULL,url=NULL,merge_sha=NULL,updated=? WHERE branch=? AND head_sha=? AND state='create_uncertain'",
+                       (now, pending['branch'], pending['head_sha']))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return result | {'evidence': evidence, 'confirmed': True}
+
+
 class Broker:
     def max_attempts(self):
         return MAX_ATTEMPTS
@@ -303,6 +373,11 @@ class Broker:
             (task_id TEXT PRIMARY KEY, branch TEXT NOT NULL, head_sha TEXT NOT NULL,
              number INTEGER NOT NULL, url TEXT NOT NULL, state TEXT NOT NULL,
              reconciled REAL NOT NULL)''')
+        # Append-only operator receipts for an explicit, independently verified
+        # absence; this is not a runtime/model dispatch path.
+        self.db.execute('''CREATE TABLE IF NOT EXISTS absent_pull_request_confirmations
+            (task_id TEXT PRIMARY KEY, branch TEXT NOT NULL, head_sha TEXT NOT NULL,
+             operator TEXT NOT NULL, confirmed_at REAL NOT NULL, evidence TEXT NOT NULL)''')
         # State tables above are mutable operational indexes. Keep an append-only
         # receipt for every resource transition for recovery and audit.
         self.db.execute('''CREATE TABLE IF NOT EXISTS resource_checkpoints
@@ -341,7 +416,8 @@ class Broker:
         self.db.execute('DELETE FROM publication_attempts WHERE attempted<?', (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM task_phase_budgets WHERE task_id NOT IN (SELECT DISTINCT task_id FROM task_checkpoints) '
                         'AND task_id NOT IN (SELECT task_id FROM pending_pull_request_operations) '
-                        'AND task_id NOT IN (SELECT task_id FROM reconciled_pull_request_operations) AND updated<?',
+                        'AND task_id NOT IN (SELECT task_id FROM reconciled_pull_request_operations) '
+                        'AND task_id NOT IN (SELECT task_id FROM absent_pull_request_confirmations) AND updated<?',
                         (now - AUDIT_TTL,))
         self.db.execute('DELETE FROM task_execution_selections WHERE task_id NOT IN (SELECT DISTINCT task_id FROM task_checkpoints) '
                         'AND selected<?', (now - AUDIT_TTL,))
@@ -534,6 +610,9 @@ class Broker:
     def admit_pull_request_write(self, req, branch, head_sha, number=None, url=None):
         task_id = self.task_binding(req['scope'])['task_id']
         if self.pending_pull_request(task_id):
+            raise ValueError('publication outcome requires operator reconciliation')
+        if self.db.execute("SELECT 1 FROM pending_pull_request_operations WHERE branch=? AND head_sha=? AND operation='repo_pr_create' LIMIT 1",
+                           (branch, head_sha)).fetchone():
             raise ValueError('publication outcome requires operator reconciliation')
         self.db.execute('''INSERT INTO pending_pull_request_operations VALUES (?,?,?,?,?,?,?)
                            ''', (task_id, branch, head_sha, number, url, req['action'], time.time()))
