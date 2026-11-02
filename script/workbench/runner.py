@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import selectors
+import stat
 import subprocess
 import sys
 import tempfile
@@ -50,6 +51,27 @@ def validate(job, max_input_bytes=MAX_INPUT_BYTES):
             or argv[0] not in ('/usr/bin/python3', '/usr/bin/perl', '/bin/sh')):
         raise ValueError('invalid command; use absolute python3, perl, or sh')
     return files, argv
+
+
+def sandbox_perl5():
+    """Return a trusted optional local::lib, without exposing host paths in results."""
+    source = Path(os.environ.get('BURT_SANDBOX_PERL5', Path.home() / 'perl5'))
+    try:
+        if not source.is_absolute():
+            return None
+        source = source.resolve(strict=True)
+        library = source / 'lib' / 'perl5'
+        # Do not follow an external library symlink during host-side validation.
+        if not library.resolve(strict=True).is_relative_to(source):
+            return None
+        for directory in (source, library):
+            info = directory.stat()
+            if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+                    or info.st_mode & 0o022):
+                return None
+        return source
+    except (OSError, RuntimeError):
+        return None
 
 
 def run(job, seconds=20, checks=None):
@@ -103,6 +125,14 @@ def run(job, seconds=20, checks=None):
                           '--ro-bind', str(checks_dir), '/checks', '--chdir', '/work',
                           '--clearenv', '--setenv', 'PATH', '/usr/bin:/bin',
                           '--setenv', 'HOME', '/tmp', '--setenv', 'PYTHONDONTWRITEBYTECODE', '1', *argv]
+        # Add after the checks rewrite so both command shapes keep the same
+        # optional read-only mount and environment, before the executable.
+        perl5 = sandbox_perl5()
+        if perl5 is not None:
+            start = cmd.index('--chdir')
+            cmd[start:start] = ['--ro-bind', str(perl5), '/perl5']
+            start = cmd.index('HOME', cmd.index('--clearenv')) + 2
+            cmd[start:start] = ['--setenv', 'PERL5LIB', '/perl5/lib/perl5']
         output = bytearray()
         reason = 'exited'
         started = time.monotonic()
@@ -140,6 +170,7 @@ def run(job, seconds=20, checks=None):
             proc.stdout.close()
         return {'exit_code': proc.returncode, 'reason': reason,
                 'output': output.decode('utf-8', errors='replace'),
+                'perl5': 'mounted' if perl5 is not None else 'skipped',
                 'elapsed_seconds': round(time.monotonic() - started, 2)}
 
 
