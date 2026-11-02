@@ -15,7 +15,7 @@ import uuid
 
 from runner import run, validate, MAX_JSON_BYTES, MAX_INPUT_BYTES, MAX_GIST_INPUT_BYTES, InputSizeError
 from repository import GitHubHTTPRejected, Repository, validate_destination, validate_files
-from github import GitHub, GitHubError, GitHubHTTPError
+from github import GitHub, GitHubError, GitHubHTTPError, GitHubPolicyError, GitHubTransportError, classify
 from verification import Verification
 from references import References, CATALOG
 
@@ -27,6 +27,9 @@ MAX_MODEL_ITERATIONS = 26
 MAX_PROGRESS_NOTICES = 8
 MAX_PUBLIC_WRITES = 1
 TERMINAL_REPORT_RESERVE = 1
+GITHUB_AUDIT_LIMIT = 4096
+GITHUB_WRITE_CAP = 60
+GITHUB_ACTIONS = ('github_whoami', 'github_api', 'github_read', 'github_commit_files')
 
 # Operator-only audit: fixed strings, never arbitrary exception/source text.
 AUDIT_LIMIT = 512
@@ -37,7 +40,7 @@ REPEAT_REJECTION_LIMIT = 3
 ACTIONS = frozenset(('run', 'publish', 'repo_read', 'repo_run', 'repo_publish',
                      'repo_pr_create', 'repo_pr_inspect', 'repo_pr_merge',
                      'repo_inspect', 'job_inspect', 'repo_repair', 'repo_diagnose', 'reference', 'task_status',
-                     'task_progress', 'task_checkpoint', 'checkpoint_status', 'task_resume'))
+                     'task_progress', 'task_checkpoint', 'checkpoint_status', 'task_resume') + GITHUB_ACTIONS)
 # `irc_fold` on the Perl side emits the rfc1459 canonical alphabet. Do not
 # require an alphanumeric first character: IRC permits a leading special.
 REQUESTER_IDENTITY = re.compile(r'[a-z0-9_{}|~][a-z0-9_{}|~\-]{0,63}')
@@ -55,6 +58,8 @@ SAFE_REASONS = frozenset({
     'gist credential is not owned by burt-agent',
     'gist credential must have mode 600',
     'gist submission failed or response was lost; operator reconciliation required; do not retry',
+    'GitHub writes require an allowlisted trusted requester',
+    'limit: GitHub write cap reached for this task',
     'global limit: 10 gist submissions per day',
     'global limit: 10 submissions per day',
     'global limit: 30 sandbox runs per hour',
@@ -386,6 +391,16 @@ class Broker:
              task_id TEXT NOT NULL, scope TEXT NOT NULL, requester TEXT,
              channel TEXT NOT NULL, network TEXT NOT NULL, created REAL NOT NULL,
              state TEXT NOT NULL)''')
+        # Operator-only account audit: request metadata and body digest only,
+        # never tool bodies, responses, or credentials.
+        self.db.execute('''CREATE TABLE IF NOT EXISTS github_requests
+            (seq INTEGER PRIMARY KEY, created REAL NOT NULL, task_id TEXT NOT NULL, requester TEXT NOT NULL,
+             channel TEXT NOT NULL, action TEXT NOT NULL, method TEXT NOT NULL, path TEXT NOT NULL,
+             status INTEGER, request_id TEXT, body_sha256 TEXT)''')
+        # Account writes have their own per-task cap, separate from the single
+        # fixed-repository publication budget in task_phase_budgets.
+        self.db.execute('''CREATE TABLE IF NOT EXISTS github_write_budgets
+            (task_id TEXT PRIMARY KEY, writes INTEGER NOT NULL, updated REAL NOT NULL)''')
         (self.base / 'jobs.sqlite').chmod(0o600)
         self.prune_audit()
         self.db.commit()
@@ -394,7 +409,6 @@ class Broker:
         self.verify_execute = verify_execute or (lambda job, checks: run(job, checks=checks))
         self.references = References()
         self.github = GitHub()
-        self.db.execute('''CREATE TABLE IF NOT EXISTS github_requests (created REAL NOT NULL, requester TEXT NOT NULL, channel TEXT NOT NULL, method TEXT NOT NULL, path TEXT NOT NULL, status INTEGER, request_id TEXT, body_sha256 TEXT)''')
 
     def prune_audit(self):
         now = time.time()
@@ -438,6 +452,11 @@ class Broker:
             self.resource_checkpoint('snapshot', row['id'], dict(row), 'expired', now)
         self.prune_snapshots(now)
         self.db.execute('DELETE FROM rejection_fingerprints WHERE updated<?', (now - AUDIT_TTL,))
+        self.db.execute('DELETE FROM github_requests WHERE created<?', (now - AUDIT_TTL,))
+        self.db.execute('DELETE FROM github_requests WHERE seq NOT IN '
+                        '(SELECT seq FROM github_requests ORDER BY seq DESC LIMIT ?)', (GITHUB_AUDIT_LIMIT,))
+        self.db.execute('DELETE FROM github_write_budgets WHERE task_id NOT IN (SELECT DISTINCT task_id FROM task_checkpoints) '
+                        'AND updated<?', (now - AUDIT_TTL,))
 
     def recoverable_snapshot_ids(self):
         rows = self.db.execute('SELECT r.destination FROM repo_jobs r JOIN jobs j ON j.id=r.id '
@@ -532,14 +551,18 @@ class Broker:
         stale = message.startswith('branch changed') or 'snapshot expired' in message
         budget = message.startswith(('limit:', 'global limit:'))
         github_http = isinstance(exc, GitHubHTTPRejected)
+        github_policy = isinstance(exc, GitHubError) and action in GITHUB_ACTIONS
         code, public, disposition = (
             ('publication_uncertain', 'publication outcome requires operator reconciliation', 'terminal') if uncertain else
             ('github_http_rejected', 'GitHub rejected the pull request operation', 'retryable') if github_http else
+            # GitHubError messages are fixed broker strings; credentials and
+            # caller bytes never reach them.
+            ('github_policy', message, 'retryable') if github_policy else
             ('stale_base', 'repository base changed; read and retest', 'retryable') if stale else
             ('budget_exhausted', 'request budget exhausted', 'terminal') if budget else
             ('transport_unavailable', 'broker unavailable; operator inspection required', 'retryable') if isinstance(exc, (TimeoutError, OSError)) else
             ('invalid_request', 'request rejected by Workbench policy', 'retryable'))
-        reason = (exc.audit_reason() if github_http else
+        reason = (exc.audit_reason() if github_http else message if github_policy else
                   message if message in SAFE_REASONS or isinstance(exc, InputSizeError) else 'unclassified broker error')
         for prefix in ('baseline files cannot be deleted: ', 'protected baseline file changed: ',
                        'new files restricted to approved regression directories: ', 'unknown reference; available: '):
@@ -931,6 +954,87 @@ class Broker:
                 'latest_publication_job': latest_publication_job,
                 'attempts_remaining': budget['remaining_budget']['sandbox_executions'], 'budget': budget}
 
+    @staticmethod
+    def github_writers():
+        # Same folding as the runtime's rfc1459 irc_fold, so configured nicks
+        # compare equal to broker-bound requester identities.
+        fold = str.maketrans('[]\\^', '{}|~')
+        return {item.strip().lower().translate(fold)
+                for item in os.environ.get('BURT_GITHUB_WRITERS', '').split(',') if item.strip()}
+
+    @staticmethod
+    def github_write_cap():
+        raw = os.environ.get('BURT_GITHUB_WRITE_CAP', '')
+        return int(raw) if re.fullmatch(r'[0-9]{1,4}', raw.strip()) else GITHUB_WRITE_CAP
+
+    def github_action(self, req):
+        """Account-scoped GitHub work: broker-held token, envelope-bound requester."""
+        action, requester = req['action'], req['requester']
+        task_id = self.task_binding(req['scope'])['task_id']
+        # Validate and classify fully before authorization, budget or I/O.
+        if action == 'github_api':
+            route = classify(req['method'], req['path'], req.get('body'))
+            write, method, path = route.write, route.method, route.wire
+        elif action == 'github_commit_files':
+            self.github.validate_commit(req['repo'], req['branch'], req.get('base_ref'), req['files'], req['message'])
+            if 'create_branch' in req and not isinstance(req['create_branch'], bool):
+                raise GitHubError('create_branch must be a boolean')
+            write, method, path = True, 'POST', f"/repos/{req['repo']}/git/commits"
+        else:
+            write, method, path = False, 'GET', '/user'
+        self.admit_transition(task_id, 'github_write' if write else 'github_read')
+        cap = self.github_write_cap()
+        used = self.db.execute('SELECT writes FROM github_write_budgets WHERE task_id=?', (task_id,)).fetchone()
+        used = used['writes'] if used else 0
+        if write:
+            if requester not in self.github_writers():
+                raise GitHubError('GitHub writes require an allowlisted trusted requester')
+            if used >= cap:
+                raise ValueError('limit: GitHub write cap reached for this task')
+            # Reserve before sending: a lost response still spends the slot.
+            used += 1
+            self.db.execute('INSERT INTO github_write_budgets VALUES (?,?,?) ON CONFLICT(task_id) '
+                            'DO UPDATE SET writes=excluded.writes,updated=excluded.updated', (task_id, used, time.time()))
+        self.db.commit()
+        def audit(http_method, http_path, status, request_id, digest):
+            self.db.execute('INSERT INTO github_requests (created,task_id,requester,channel,action,method,path,'
+                            'status,request_id,body_sha256) VALUES (?,?,?,?,?,?,?,?,?,?)',
+                            (time.time(), task_id, requester, req['channel'], action, http_method,
+                             http_path[:512], status, request_id, digest))
+        try:
+            if action == 'github_whoami':
+                result = self.github.whoami(audit=audit) | {
+                    'requester': requester, 'requester_can_write': requester in self.github_writers(),
+                    'write_cap': cap, 'writes_used': used}
+            elif action == 'github_api':
+                result = self.github.api(req['method'], req['path'], req.get('query'), req.get('body'), audit=audit)
+            elif action == 'github_read':
+                result = self.github.read(req['repo'], req['ref'], req['path'], audit=audit)
+            else:
+                result = self.github.commit_files(req['repo'], req['branch'], req.get('base_ref'), req['files'],
+                                                  req['message'], req.get('create_branch', True), audit=audit)
+        except GitHubHTTPError as exc:
+            result = exc.receipt() | {'write': write}
+        except GitHubTransportError as exc:
+            uncertain = write and (action == 'github_api' or getattr(exc, 'ref_write', False))
+            result = {'ok': False, 'write': write, 'status': exc.status, 'method': exc.method, 'path': exc.path,
+                      'request_id': exc.request_id}
+            if uncertain:
+                # Never retried, never a pending blocker: the model verifies.
+                result |= {'outcome_uncertain': True, 'retried': False,
+                           'instruction': 'The write may or may not have been applied. Do not repeat it; '
+                                          'verify the resulting state with GET requests first.'}
+            else:
+                result |= {'error': 'github_unavailable',
+                           'instruction': 'No branch or resource was changed by this failure; '
+                                          'a later retry is safe.' if write else 'GitHub read failed; retry later.'}
+        finally:
+            self.prune_audit()
+            self.db.commit()
+        if write:
+            result['writes_remaining'] = max(cap - used, 0)
+        return self.github.redact(result)
+
     def handle(self, req, _diagnostic=False):
         try:
             return self._handle(req, _diagnostic=_diagnostic)
@@ -1089,39 +1193,8 @@ class Broker:
             # task facts and actual job metadata.
             return {'jobs': [{'id': row['id'], 'state': row['state']} for row in
                              self.task_job_rows(self.task_binding(scope)['task_id'])], 'budget': budget}
-        if action in ('github_whoami', 'github_api', 'github_read', 'github_commit_files'):
-            method = req.get('method', 'GET').upper() if action == 'github_api' else ('POST' if action == 'github_commit_files' else 'GET')
-            path = req.get('path', '/user') if action in ('github_api', 'github_whoami') else '/repos/' + req['repo'] + '/contents/' + req.get('path', '')
-            writers = {item.strip().casefold() for item in os.environ.get('BURT_GITHUB_WRITERS', '').split(',') if item.strip()}
-            write = method in ('POST', 'PUT', 'PATCH', 'DELETE')
-            if write and req['requester'].casefold() not in writers:
-                raise ValueError('GitHub writes require an allowlisted trusted requester')
-            task_id = self.task_binding(scope)['task_id']
-            if write:
-                cap = int(os.environ.get('BURT_GITHUB_WRITE_CAP', '60'))
-                used = self.db.execute("SELECT COUNT(*) FROM github_requests WHERE requester=? AND status IS NOT NULL AND method IN ('POST','PUT','PATCH','DELETE')", (req['requester'],)).fetchone()[0]
-                if used >= cap: raise ValueError('GitHub write cap exhausted')
-            body = req.get('body') if action == 'github_api' else (req.get('files') if action == 'github_commit_files' else None)
-            digest = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(',', ':')).encode()).hexdigest() if body is not None else None
-            try:
-                if action == 'github_whoami': result = self.github.whoami()
-                elif action == 'github_api': result = self.github.request(method, req['path'], req.get('query'), req.get('body'))
-                elif action == 'github_read': result = self.github.read(req['repo'], req['ref'], req['path'])
-                else: result = self.github.commit_files(req['repo'], req['branch'], req.get('base_ref', 'main'), req['files'], req['message'], bool(req.get('create_branch', False)))
-                status = result.get('status', 200) if isinstance(result, dict) else 200
-                request_id = result.get('request_id') if isinstance(result, dict) else None
-            except GitHubHTTPError as exc:
-                status, request_id = exc.status, exc.request_id
-                result = {'github_http': exc.receipt()}
-            except Exception as exc:
-                if write and isinstance(exc, (urllib.error.URLError, TimeoutError, OSError)):
-                    result = {'outcome_uncertain': True, 'method': method, 'path': path, 'request_id': None, 'verify': 'Verify with GET requests before another write.'}
-                    status = None; request_id = None
-                else: raise
-            self.db.execute('INSERT INTO github_requests VALUES (?,?,?,?,?,?,?,?)', (time.time(), req['requester'], req['channel'], method, path, status, request_id, digest))
-            self.db.execute('DELETE FROM github_requests WHERE rowid NOT IN (SELECT rowid FROM github_requests ORDER BY created DESC LIMIT 4096)')
-            self.db.commit()
-            return result
+        if action in GITHUB_ACTIONS:
+            return self.github_action(req)
         if action == 'reference':
             return self.references.read(req['key'])
         if action == 'job_inspect':
