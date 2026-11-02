@@ -4,6 +4,8 @@ use strict;
 use warnings;
 
 use Bot::Runtime::Presence ();
+use Bot::Runtime::Friends ();
+use Bot::IRCIdentity qw(irc_fold);
 
 sub handle_irc_join {
   my (%args) = @_;
@@ -15,14 +17,15 @@ sub handle_irc_join {
   return 0 if $nick eq $self->get_nickname;
   $self->info("$channel $nick ($host) joined");
   $self->_last_activity(time());
+  my $friend_greet = Bot::Runtime::Friends::greet($self, $nick, $channel);
   $self->_buffer_message(
     $channel,
     'system',
     Bot::Runtime::Presence::join_message(
       nick           => $nick,
       host           => $host,
-      join_greet_pct => $self->_persona_trait('join_greet_pct'),
-    ),
+      join_greet_pct => $friend_greet ? 100 : $self->_persona_trait('join_greet_pct'),
+    ) . ($friend_greet ? " This is a dear friend: greet them warmly now (one collective greeting for any friends in this batch); bypass random greeting selection, but keep housemate rules." : ""),
   );
 
   return 1;
@@ -62,6 +65,13 @@ sub handle_irc_quit {
   my $channel = $self->_default_channel;
 
   if (Bot::Runtime::Presence::is_netsplit_reason(reason => $reason)) {
+    # Seed suppression even if the friend had not been greeted this process.
+    if (Bot::Runtime::Friends::for_bot($self)->{irc_fold($nick)}) {
+      for my $ch ($channel, eval { $self->get_channels }) {
+        next unless defined $ch;
+        $self->{_friend_greetings}{irc_fold($ch) . "\0" . irc_fold($nick)} = time;
+      }
+    }
     push @{$self->_netsplit_quits}, $nick;
     # Delay reporting to aggregate short bursts from split storms.
     POE::Kernel->delay( _netsplit_report => 3, $channel, $reason );
