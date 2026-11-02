@@ -502,6 +502,10 @@ class GitHub:
             raise GitHubError('target must match snapshot branch or be a new branch from the tested base')
         if expected_parent is not None and parent != expected_parent:
             raise GitHubError('branch moved since the tested snapshot; re-read and re-test')
+        if expected_exists is False and created:
+            fallback = call('GET', f'{git}/ref/heads/main')['data']['object']['sha']
+            if fallback != expected_parent:
+                raise GitHubError('branch moved since the tested snapshot; re-read and re-test')
         base_tree = call('GET', f'{git}/commits/{parent}')['data']['tree']['sha']
         tree = [{'path': path, 'mode': mode, 'type': 'blob', 'content': value} if value is not None
                 else {'path': path, 'mode': mode, 'type': 'blob', 'sha': None} for path, mode, value in entries]

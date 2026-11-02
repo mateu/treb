@@ -621,6 +621,23 @@ class BrokerGitHubTests(unittest.TestCase):
         self.assertEqual(reopened.db.execute('SELECT state FROM jobs WHERE id=?', (job['id'],)).fetchone()['state'], 'uncertain')
         self.assertIsNotNone(reopened.db.execute("SELECT name FROM sqlite_master WHERE name='direct_repo_publications'").fetchone())
 
+    def test_from_job_original_missing_branch_rechecks_fallback_before_writes(self):
+        job = self._tested_job()
+        destination = json.loads(self.b.db.execute('SELECT destination FROM repo_jobs WHERE id=?', (job['id'],)).fetchone()[0])
+        row = self.b.db.execute('SELECT snapshot FROM repo_snapshots WHERE id=?', (destination['snapshot_id'],)).fetchone()
+        snapshot = json.loads(row[0]); snapshot['exists'] = False
+        self.b.db.execute('UPDATE repo_snapshots SET snapshot=? WHERE id=?', (json.dumps(snapshot), destination['snapshot_id']))
+        self.b.db.commit()
+        self._tested_routes(exists=False)
+        main = ('GET', '/repos/burt-agent/workspace/git/ref/heads/main')
+        self.opener.routes[main] = Response(200, {'object': {'sha': SHA4}})
+        with self.assertRaisesRegex(ValueError, 'branch moved since the tested snapshot'):
+            self._tested_commit(job)
+        self.assertTrue(all(c['method'] == 'GET' for c in self.opener.calls))
+        self.opener.calls.clear()
+        self.opener.routes[main] = Response(200, {'object': {'sha': SHA1}})
+        self.assertTrue(self._tested_commit(job)['tested'])
+
     def test_from_job_deleted_snapshot_branch_has_no_write_calls(self):
         job = self._tested_job()
         self._tested_routes(exists=False)
