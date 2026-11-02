@@ -59,12 +59,15 @@ def sandbox_perl5():
     try:
         if not source.is_absolute():
             return None
+        if source.is_symlink():
+            return None
         source = source.resolve(strict=True)
         library = source / 'lib' / 'perl5'
-        # Do not follow an external library symlink during host-side validation.
-        if not library.resolve(strict=True).is_relative_to(source):
-            return None
-        for directory in (source, library):
+        # Reject indirection and validate the intermediate directory too: a
+        # writable lib lets another user replace an otherwise safe perl5 child.
+        for directory in (source, source / 'lib', library):
+            if directory.is_symlink():
+                return None
             info = directory.stat()
             if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
                     or info.st_mode & 0o022):

@@ -49,7 +49,7 @@ class Perl5Tests(unittest.TestCase):
                 self.assertEqual(cmd[i+1], '/usr/bin:/bin')
 
     def test_unsafe_or_missing_skipped_for_both_shapes(self):
-        for target in (self.source, self.source / 'lib/perl5'):
+        for target in (self.source, self.source / 'lib', self.source / 'lib/perl5'):
             for mode in (0o775, 0o757):
                 target.chmod(mode)
                 for checks in (None, {'check.pl': '1;'}):
@@ -65,6 +65,12 @@ class Perl5Tests(unittest.TestCase):
             self.assertIsNone(runner.sandbox_perl5())
         (self.source / 'lib/perl5').rmdir()
         (self.source / 'lib/perl5').symlink_to('/usr')
+        self.assertIsNone(runner.sandbox_perl5())
+
+    def test_intermediate_symlink_skipped(self):
+        library = self.source / 'lib'
+        library.rename(self.source / 'real-lib')
+        library.symlink_to('real-lib')
         self.assertIsNone(runner.sandbox_perl5())
 
     def test_default_source(self):

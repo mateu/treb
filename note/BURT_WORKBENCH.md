@@ -507,5 +507,6 @@ The code sandbox has no network and has /usr system Perl/Python plus optional re
 
 The optional local::lib mount requires an absolute source (override with
 `BURT_SANDBOX_PERL5`), broker-owned directories with no group/world write
-on either the source or `lib/perl5`. Missing/unsafe trees are skipped; runner
+on the source, `lib`, and `lib/perl5`; symlinks at these directories
+are rejected. Missing/unsafe trees are skipped; runner
 results report `perl5: mounted|skipped` without disclosing the host path.
