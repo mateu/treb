@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import time
 import urllib.error
 import urllib.request
@@ -112,13 +113,19 @@ class Repository:
             # Only a genuinely missing account token falls back; any other
             # inspection error (e.g. an unreadable directory) fails closed.
             try:
-                os.lstat(self.pull_token)
+                info = os.lstat(self.pull_token)
+                parent = os.stat(self.pull_token.parent)
             except FileNotFoundError:
                 pass
             except OSError:
-                raise ValueError('repository credential requires private directory and mode 600') from None
+                raise ValueError('account credential requires an owner-only mode 600 file') from None
             else:
-                token = self.pull_token
+                # Same contract as GitHub.token(): owner-only regular file in a
+                # directory that is not group/world writable.
+                if (not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077
+                        or info.st_uid != os.getuid() or parent.st_mode & 0o022):
+                    raise ValueError('account credential requires an owner-only mode 600 file')
+                return self.pull_token
         if (not token.is_file() or token.is_symlink()
                 or token.stat().st_mode & 0o077 or token.parent.stat().st_mode & 0o077):
             raise ValueError('repository credential requires private directory and mode 600')

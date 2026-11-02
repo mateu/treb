@@ -197,6 +197,18 @@ class RepositoryTests(unittest.TestCase):
             self.assertEqual(r.credential('/repos/burt-agent/workspace/pullsx'), legacy)
             self.assertEqual(Repository(legacy).credential('/repos/burt-agent/workspace/pulls'), legacy)
             # An installed but unsafe account token fails closed, never falls back.
+            # Account token follows GitHub.token(): readable directories are
+            # fine, writable ones are not; the publisher token stays stricter.
+            account_dir.chmod(0o755)
+            self.assertEqual(r.credential('/repos/burt-agent/workspace/pulls'), account)
+            account_dir.chmod(0o775)
+            with self.assertRaisesRegex(ValueError, 'mode 600'):
+                r.credential('/repos/burt-agent/workspace/pulls')
+            account_dir.chmod(0o700)
+            legacy_dir.chmod(0o755)
+            with self.assertRaisesRegex(ValueError, 'mode 600'):
+                r.credential('/repos/burt-agent/workspace/git/refs/heads/x')
+            legacy_dir.chmod(0o700)
             account.chmod(0o640)
             with self.assertRaisesRegex(ValueError, 'mode 600'):
                 r.credential('/repos/burt-agent/workspace/pulls')
