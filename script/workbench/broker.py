@@ -479,8 +479,11 @@ class Broker:
                         (AUDIT_LIMIT, *protected))
 
     def create_snapshot(self, req):
-        snapshot = (self.repository.snapshot(repo=req['repo'], ref=req.get('ref'), path=req.get('path'))
-                    if 'repo' in req else self.repository.snapshot(req['branch'], req['project']))
+        legacy = 'repo' not in req or (req['repo'] == 'burt-agent/workspace'
+                  and ('branch' in req or 'project' in req) and not ({'ref', 'path'} & req.keys()))
+        snapshot = (self.repository.snapshot(req.get('branch'), req.get('project')) if legacy
+                    else self.repository.snapshot(req.get('branch'), req.get('project'),
+                                                  repo=req['repo'], ref=req.get('ref'), path=req.get('path')))
         now = time.time()
         snapshot_id = uuid.uuid4().hex
         self.db.execute('INSERT INTO repo_snapshots VALUES (?,?,?,?,?,?,?,?)',

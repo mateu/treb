@@ -562,6 +562,15 @@ class BrokerGitHubTests(unittest.TestCase):
             'projects/dictionary/old.txt': None})
         self.assertEqual(receipt['parent_sha'], SHA1)
 
+    def test_legacy_explicit_workspace_read_shape(self):
+        from test_repository import FakeRepository
+        self.b.repository = FakeRepository()
+        snapshot = self.b.handle(self.env('repo_read', repo='burt-agent/workspace',
+                                         branch='burt/dictionary', project='dictionary'))
+        self.assertEqual(snapshot['path'], 'projects/dictionary')
+        self.assertFalse(snapshot['exists'])
+        self.assertFalse(snapshot['explicit_repo'])
+
     def test_other_repo_anyone_read_run_and_writer_commit(self):
         from test_repository import OtherRepository
         self.b.repository = OtherRepository(); self.b.repository.exists = True
