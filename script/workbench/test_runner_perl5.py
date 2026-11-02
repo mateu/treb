@@ -78,7 +78,12 @@ class RealSandboxTests(unittest.TestCase):
         if not shutil.which('bwrap'):
             self.skipTest('bwrap unavailable')
         source = runner.sandbox_perl5()
-        if source is None or not (source / 'lib/perl5/Moose.pm').is_file():
+        arch = subprocess.check_output(
+            ['/usr/bin/perl', '-MConfig', '-e', 'print $Config{archname}'],
+            env={'PATH': '/usr/bin:/bin'}, text=True)
+        if source is None or not any(
+                (source / 'lib/perl5' / suffix).is_file()
+                for suffix in ('Moose.pm', arch + '/Moose.pm')):
             self.skipTest('safe operator local::lib with Moose unavailable')
         popen = subprocess.Popen
         def launch(cmd, **kwargs):
