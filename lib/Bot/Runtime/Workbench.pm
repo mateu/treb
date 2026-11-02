@@ -213,8 +213,7 @@ sub report_result {
     github_receipt($self,$pending,$action,$r);
     return;
   }
-  my $publication=$action eq 'publish' || $action eq 'repo_publish'
-    || $action eq 'repo_pr_create' || $action eq 'repo_pr_merge';
+  my $publication=$action eq 'publish' || $action eq 'repo_publish';
   my $r=eval { JSON::PP::decode_json($raw) };
   my $structured_rejection=ref($r) eq 'HASH' && ($r->{rejection_schema}//'') eq '1';
   $r={} if $publication && ref($r) ne 'HASH';
@@ -262,9 +261,7 @@ sub report_result {
   my $uncertain_write = !$structured_rejection
     || ($r->{code}//'') eq 'publication_uncertain'
     || ($state//'') eq 'publishing' || ($state//'') eq 'uncertain';
-  my $confirmed_publication = $state eq 'published'
-    || ($action eq 'repo_pr_create' && $state eq 'open')
-    || ($action eq 'repo_pr_merge' && $state eq 'closed' && $r->{merged});
+  my $confirmed_publication = $state eq 'published';
   if ($publication && !$confirmed_publication && $uncertain_write) {
     $notice.='; success unconfirmed; the public write may already have succeeded; operator reconciliation required before retrying; do not retry';
   }
@@ -405,14 +402,8 @@ sub tool_specs {
       ['id'],{id=>{type=>'string'}},'repo_inspect'],
     ['repair_repo_project',"Repair and TEST a saved repository job from this active runtime task. Supply its id, changes mapping filenames to COMPLETE replacement contents for changed/new files ONLY, delete as an explicit list (usually empty), argv for the COMPLETE project suite, and title. Unchanged files are preserved exactly by the broker. Same branch/project/base; creates a new immutable job with a NEW id. Uses one of the $sandbox_budget shared sandbox attempts. Fix the reported failure without removing tests or rewriting unrelated code. Does not publish; only a broker-selected passed candidate is eligible for publish_repo.",
       [qw(id changes delete argv title)],{id=>{type=>'string'},changes=>{type=>'object',additionalProperties=>{type=>'string'}},delete=>{type=>'array',items=>{type=>'string'}},argv=>{type=>'array',items=>{type=>'string'}},title=>{type=>'string',maxLength=>200}},'repo_repair'],
-    ['publish_repo','Publish exactly one recent PASSED repository candidate selected from active runtime provenance to its fixed burt/* branch. Use ONLY when this task has tested material changes that are not already on that branch. Do not call it merely to open a PR for an existing burt/* branch: read_repo_project gives that branch head for create_repo_pull_request. This tool never writes main, force-pushes, or accepts a model-selected job ID/destination. Missing/ambiguous candidates are safe preflight failures; a broker-reported uncertain submission alone requires reconciliation. One submission per task, 10/day globally.',
+    ['publish_repo','Publish exactly one recent PASSED repository candidate selected from active runtime provenance to its fixed burt/* branch. Use ONLY when this task has tested material changes that are not already on that branch. After publish_repo, use github_api to open or merge a pull request. This tool never writes main, force-pushes, or accepts a model-selected job ID/destination. Missing/ambiguous candidates are safe preflight failures; a broker-reported uncertain submission alone requires reconciliation. One submission per task, 10/day globally.',
       [],{},'repo_publish'],
-    ['create_repo_pull_request','Create or inspect the fixed burt-agent/workspace pull request from a burt/<lowercase-slug> branch to main. Supply branch, exact 40-character expected_head_sha, and a short title. For an existing branch, first use read_repo_project and pass its base_sha; after testing unchanged branch files, create the PR directly—do not republish. After publish_repo, use its returned branch commit SHA. The broker verifies live branch head, fixed repository/base, and duplicate PR state; it never accepts arbitrary repositories, direct main writes, force pushes, or admin bypass. Requires the current trusted requester to be an allowlisted GitHub writer. If uncertain, inspect this same PR before retrying.',
-      [qw(branch expected_head_sha title)],{branch=>{type=>'string'},expected_head_sha=>{type=>'string'},title=>{type=>'string',maxLength=>200}},'repo_pr_create'],
-    ['inspect_repo_pull_request','Inspect one burt-agent/workspace pull request and return bounded fixed-repository head/base/state metadata. Supply its numeric number. Use this to reconcile creation or merge results; no write occurs.',
-      ['number'],{number=>{type=>'integer'}},'repo_pr_inspect'],
-    ['merge_repo_pull_request','Merge one burt-agent/workspace PR to main through normal GitHub protections. Supply numeric PR number and exact expected_head_sha. The broker verifies the fixed repository, burt/* head, main base, current head, and mergeability, then uses normal expected-SHA squash merge—never force or admin bypass. Requires the current trusted requester to be an allowlisted GitHub writer. If uncertain, inspect the same PR before retrying.',
-      [qw(number expected_head_sha)],{number=>{type=>'integer'},expected_head_sha=>{type=>'string'}},'repo_pr_merge'],
     ['checkpoint_coding_task','Save an immutable bounded checkpoint of the currently admitted coding task. The broker binds it to the trusted requester, channel, network and task identity; source and logs are never copied into the checkpoint.',
       [],{},'task_checkpoint'],
     ['coding_checkpoint_status','Read bounded derived status for one exact checkpoint id in the same broker-bound requester/channel/network tuple. It returns only checkpoint/job metadata and the remaining task-wide sandbox budget.',
@@ -537,7 +528,7 @@ sub tool_specs {
           die "GitHub writes require an allowlisted trusted requester\n"
             if github_write_request($action,$args) && !github_writer($requester);
           task_notice($self,$self->_pending_raid,"$action started.") unless $action =~ /\A(?:repo_(?:read|inspect)|reference|github_\w+)\z/;
-          $publication_attempted=1 if $action eq 'publish' || $action eq 'repo_publish' || $action eq 'repo_pr_create' || $action eq 'repo_pr_merge';
+          $publication_attempted=1 if $action eq 'publish' || $action eq 'repo_publish';
           my $raw=broker_call({%$args,action=>$action,scope=>$scope,requester=>$requester,channel=>lc($pending->{channel}),network=>'irc.perl.org',
             ($action eq 'repo_publish' ? (requester=>$requester) : ())});
           report_result($self,$action,$raw,

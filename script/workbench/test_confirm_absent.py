@@ -47,11 +47,23 @@ class ConfirmAbsentTests(unittest.TestCase):
     def request(self, action):
         return self.envelope(action)
 
-    def absent_pending(self):
+    def legacy_pending(self, *, with_pull=False):
+        """Seed a pre-removal uncertain receipt for operator compatibility tests."""
         self.repo.exists = True
         self.repo.head = A
         self.repo.fail_reconciliation = False
-        task_id = test_repository.RepositoryBrokerTests.uncertain_pr_create(self)
+        task_id = self.b.task_binding(self.req['scope'])['task_id']
+        self.b.db.execute('INSERT INTO pending_pull_request_operations VALUES (?,?,?,?,?,?,?)',
+                          (task_id, 'burt/dictionary', A, None, None, 'repo_pr_create', 0))
+        self.b.db.execute('INSERT INTO repository_pull_requests VALUES (?,?,?,?,?,?,?,?)',
+                          ('burt/dictionary', A, None, None, 'create_uncertain', None, 0, 0))
+        self.b.db.commit()
+        if with_pull:
+            self.repo.pulls[1] = self.repo.pull(1, 'burt/dictionary', A)
+        return task_id
+
+    def absent_pending(self):
+        task_id = self.legacy_pending()
         self.repo.pulls.clear()
         return task_id
 
@@ -72,7 +84,7 @@ class ConfirmAbsentTests(unittest.TestCase):
         self.assertTrue(all(method is None for _, _, method in self.repo.calls[calls:]))
 
     def test_any_pr_state_blocks_absence_and_default_still_reconciles_matching_pr(self):
-        task_id = test_repository.RepositoryBrokerTests.uncertain_pr_create(self)
+        task_id = self.legacy_pending(with_pull=True)
         for state, merged in (('open', False), ('closed', False), ('closed', True)):
             with self.subTest(state=state, merged=merged):
                 self.repo.pulls[1]['state'], self.repo.pulls[1]['merged'] = state, merged
@@ -133,7 +145,7 @@ class ConfirmAbsentTests(unittest.TestCase):
         self.assertTrue(any('page=2' in path for path in paths))
         self.assertTrue(all(method is None for _, _, method in repo.calls))
 
-    def test_commit_writes_one_audit_row_replays_and_unblocks_after_last_identity_row(self):
+    def test_commit_writes_one_audit_row_and_replays_after_last_identity_row(self):
         first = self.absent_pending()
         second = 'f' * 64
         self.b.db.execute('INSERT INTO pending_pull_request_operations VALUES (?,?,?,?,?,?,?)',
@@ -150,13 +162,10 @@ class ConfirmAbsentTests(unittest.TestCase):
                                                (second,)).fetchone())
         self.assertEqual(self.b.db.execute('SELECT state FROM repository_pull_requests WHERE branch=? AND head_sha=?',
                                            ('burt/dictionary', A)).fetchone()['state'], 'create_uncertain')
-        with self.assertRaisesRegex(ValueError, 'operator reconciliation'):
-            self.b.admit_pull_request_write(self.request('repo_pr_create'), 'burt/dictionary', A)
         self.assertTrue(self.confirm(first, commit=True)['replayed'])
         self.confirm(second, commit=True)
         self.assertEqual(self.b.db.execute('SELECT state FROM repository_pull_requests WHERE branch=? AND head_sha=?',
                                            ('burt/dictionary', A)).fetchone()['state'], 'absent_confirmed')
-        self.b.admit_pull_request_write(self.request('repo_pr_create'), 'burt/dictionary', A)
 
     def test_commit_concurrency_is_idempotent(self):
         task_id = self.absent_pending()

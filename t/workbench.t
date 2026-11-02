@@ -28,7 +28,10 @@ local $ENV{BURT_WORKBENCH_SOCKET} = '/not/a/socket';
 local $ENV{IRC_SERVER} = 'irc.perl.org';
 my %defs = map { $_->{name} => $_ } @{Bot::Runtime::Workbench::tool_specs($bot)};
 
-is(scalar keys %defs, 20, 'thin proxy exposes the supported tool set');
+is(scalar keys %defs, 17, 'thin proxy exposes the supported tool set');
+ok(!exists $defs{create_repo_pull_request} && !exists $defs{inspect_repo_pull_request}
+   && !exists $defs{merge_repo_pull_request},
+  'legacy fixed-repository pull-request tools are absent');
 ok(!exists $defs{propose_workbench_action} && !exists $defs{confirm_workbench_proposal},
   'obsolete proposal and confirmation tools are absent');
 for my $name (keys %defs) {
@@ -222,21 +225,6 @@ unlike($bot->{sent}[-1], qr/success unconfirmed|operator reconciliation|do not r
   'safe publication preflight is not misreported as an uncertain write');
 ok(!$bot->{pending}{coding_stop_reason},
   'safe publication preflight does not terminally stop the task');
-Bot::Runtime::Workbench::report_result($bot, 'repo_pr_create', JSON::PP::encode_json({
-  rejection_schema => 1, code => 'github_http_rejected', disposition => 'retryable',
-  github_http => {status => 403, message => "Resource not accessible\nby integration", request_id => 'abc:123'},
-}));
-like($bot->{sent}[-1], qr/repo_pr_create: error; github_http_rejected; GitHub HTTP 403: Resource not accessible by integration \[request abc:123\]/,
-  'runtime reports bounded broker-sanitized GitHub rejection metadata');
-for my $pr_result (
-  ['repo_pr_create', {state => 'open', url => 'https://github.com/burt-agent/workspace/pull/7'}],
-  ['repo_pr_merge', {state => 'closed', merged => JSON::PP::true,
-    url => 'https://github.com/burt-agent/workspace/pull/7'}],
-) {
-  Bot::Runtime::Workbench::report_result($bot, $pr_result->[0], JSON::PP::encode_json($pr_result->[1]));
-  unlike($bot->{sent}[-1], qr/success unconfirmed|operator reconciliation|do not retry/,
-    "$pr_result->[0] confirmed receipt is not misreported as uncertain");
-}
 Bot::Runtime::Workbench::report_result($bot, 'repo_run',
   JSON::PP::encode_json({id => 'f'x32, state => 'failed', attempts_remaining => 0,
     result => {exit_code => 1, output => 'INJECTED'}}));

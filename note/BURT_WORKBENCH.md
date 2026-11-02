@@ -1,8 +1,8 @@
 # Burt coding and public publishing on clawd
 
 Opt-in tools: `run_code`, `publish_gist`, `read_repo_project`,
-`run_repo_project`, `publish_repo`, `create_repo_pull_request`,
-`inspect_repo_pull_request`, and `merge_repo_pull_request`. Disabled unless
+`run_repo_project`, `publish_repo`, and the general GitHub account tools.
+Disabled unless
 `BURT_WORKBENCH_SOCKET` is set, and never registered for another bot profile.
 Example in irc.perl.org `#ai`:
 
@@ -54,8 +54,9 @@ turns cannot dispatch because they have no active human envelope.
 Repository tools are fixed to public `burt-agent/workspace`. The separate
 `~/.config/burt-publisher/github.token` must authenticate as `burt-agent`, with
 ordinary pull/push access to this repository; parent 0700/file 0600. It never
-enters either namespace. The publisher uses fixed GitHub REST tree/commit/ref
-and pull-request APIs, not a shell or Git checkout, and refuses redirects/proxies.
+enters either namespace. The publisher uses fixed GitHub REST tree/commit/ref APIs, not a shell or Git
+checkout, and refuses redirects/proxies. Pull requests are opened and merged
+through the general `github_api` tool.
 
 * `read_repo_project(branch, project)`: only `burt/<lowercase-slug>` branches;
   missing branches read from `main`. Returns the current `base_sha` and complete
@@ -71,11 +72,7 @@ and pull-request APIs, not a shell or Git checkout, and refuses redirects/proxie
   rereading and retesting. Creates
   `burt/*` branches or non-force updates them; it never directly writes `main`,
   opens PRs, merges, or executes repository content. Returns an actual commit URL.
-* `create_repo_pull_request(branch, expected_head_sha, title)`: creates or
-  reconciles exactly one `burt/*` to `main` PR in `burt-agent/workspace` after
-  checking the live branch head. Duplicate requests return the same PR.
-* `inspect_repo_pull_request(number)`: returns bounded fixed-repository PR
-  head/base/state data for reconciliation without writing.
+  Use `github_api` after publication to open or merge a pull request.
 * `script/workbench/reconcile_pending_pull_request.py --task-id <task-id>`:
   operator-only recovery for one durable **PR-create** uncertainty. It is not a
   runtime/model tool and makes GitHub GET requests only. It accepts a result only
@@ -87,9 +84,6 @@ and pull-request APIs, not a shell or Git checkout, and refuses redirects/proxie
   replay remains blocked and leaves the pending evidence intact.
 * `script/workbench/reconcile_pending_pull_request.py --task-id <task-id> --confirm-absent --operator <name>`:
   a CLI-only operator preview for the exceptional case where the operator has independently established that no PR was created. It performs only GitHub GETs and prints evidence (all-state, paginated PR search; exact branch SHA; request IDs when available), but never changes the database. Add `--yes` only after reviewing that evidence to atomically audit and retire exactly that pending `repo_pr_create` row. The commit path repeats the remote checks immediately before its transaction; any PR, branch/SHA change, API/auth/rate/pagination error, malformed evidence, changed row, or ambiguity leaves the row pending. The bounded operator identifier is required and is never accepted from IRC/model input. The normal command without `--confirm-absent` still requires an identity-matching PR.
-* `merge_repo_pull_request(number, expected_head_sha)`: merges that verified PR
-  to `main` only through GitHub's normal expected-SHA squash merge. It has no
-  force or administrator bypass; normal repository protections remain effective.
 
 Example initial request (after recovering API details):
 
@@ -433,10 +427,8 @@ write budget. Burt must only claim what tool receipts show.
   DELETE and `github_commit_files`) additionally require the envelope's
   `irc_fold` requester to be listed in `BURT_GITHUB_WRITERS` (comma-separated,
   folded the same way; empty means no writes). The requester always comes from
-  the runtime envelope, never tool arguments. The fixed-repository
-  `repo_pr_create`/`repo_pr_merge` tools obey the same allowlist and, when the
-  account token is installed, call the pull request endpoints with it (the
-  publisher token may lack PR permissions); other fixed-repository calls keep
+  the runtime envelope, never tool arguments. Pull-request endpoints are used
+  through `github_api` with the account token; fixed-repository publication uses
   the publisher token. An installed but unsafe account token fails closed.
 * **Budget.** At most `BURT_GITHUB_WRITE_CAP` (default 60) writes per task,
   reserved in the broker before sending; separate from, and never consuming,
