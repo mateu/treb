@@ -11,6 +11,10 @@ UMask=0077
 NoNewPrivileges=yes
 MemoryMax=192M
 TasksMax=24
+# Account tools: the broker alone reads this private 0600 token file.
+Environment=BURT_GITHUB_TOKEN_FILE=%h/.config/burt-github/token
+# Non-secret writer allowlist / write cap shared with the bot unit.
+EnvironmentFile=-%h/.config/burt-github/workbench.env
 
 [Install]
 WantedBy=default.target

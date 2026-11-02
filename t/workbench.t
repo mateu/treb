@@ -28,7 +28,7 @@ local $ENV{BURT_WORKBENCH_SOCKET} = '/not/a/socket';
 local $ENV{IRC_SERVER} = 'irc.perl.org';
 my %defs = map { $_->{name} => $_ } @{Bot::Runtime::Workbench::tool_specs($bot)};
 
-is(scalar keys %defs, 16, 'thin proxy exposes the supported tool set');
+is(scalar keys %defs, 20, 'thin proxy exposes the supported tool set');
 ok(!exists $defs{propose_workbench_action} && !exists $defs{confirm_workbench_proposal},
   'obsolete proposal and confirmation tools are absent');
 for my $name (keys %defs) {

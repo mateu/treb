@@ -388,3 +388,85 @@ snapshot-bound effective baseline without mutating the operator policy; it still
 requires immutable checks, protected-path enforcement, and exact-artifact
 publication. An operator-only replay can use a frozen baseline and a separate
 journal without publishing or changing the live policy.
+
+## General GitHub account tools
+
+For GitHub work Burt should prefer `github_whoami`, `github_api`, `github_read`,
+and `github_commit_files` over the fixed `burt-agent/workspace` tools, which
+remain available unchanged. Identity is never hard-coded: `github_whoami`
+reports the login, id, type and OAuth scopes from `GET /user` (cached per token
+for an hour), whether the current trusted requester may write, and the task's
+write budget. Burt must only claim what tool receipts show.
+
+* **Credential.** A classic PAT for the Burt account (scopes `repo`, `workflow`,
+  `gist`, `read:org`, `read:user`, `notifications`) at `BURT_GITHUB_TOKEN_FILE`,
+  default `~/.config/burt-github/token`. It must be a regular file (not a
+  symlink) owned by the broker user, mode 0600, in a directory that is not
+  group/world writable. Only the broker reads it; it never enters the bot
+  namespace, a tool result, exception, log, notice or audit row (results are
+  additionally redacted against the token).
+* **`github_api(method, path, query?, body?)`** is a general REST proxy to
+  `https://api.github.com` only. `path` must begin with a single `/`; URLs,
+  hosts, `?`/`#`, backslashes, whitespace, `.`/`..` segments, encoded `/` or
+  `%`, and invalid percent-encoding are rejected. Duplicate/trailing slashes are
+  collapsed and the normalized path is what is both policy-checked and sent.
+  Query parameters go in the `query` object; responses carry a `pagination`
+  map (`next`/`last`/... with `path` and `query`) from the `Link` header.
+  Bodies are bounded to 256 KiB; responses over 256 KiB return
+  `truncated: true` with no data. Redirects and proxies are disabled.
+  `POST /graphql` is accepted only for read queries.
+* **Denylist** (`DENY_RULES` in `script/workbench/github.py`), matched on
+  case-folded segments, with `/repositories/{id}` and `/organizations/{id}`
+  aliases mapped first: `DELETE /repos/{o}/{r}`; writes to `/repos/{o}/{r}/`
+  `transfer`, `keys`, `hooks`, `actions/secrets`, `actions/variables`,
+  `dependabot/secrets`, `codespaces/secrets`, `environments/*/secrets`,
+  `environments/*/variables`, `collaborators`, `invitations`; writes to
+  `/user/keys`, `/user/gpg_keys`, `/user/ssh_signing_keys`, `/user/emails`,
+  `/user/social_accounts`, `/user/codespaces/secrets`, `/user/installations`,
+  `/user/memberships`, and `PATCH /user`; writes to `/authorizations`,
+  `/applications`, `/app`, `/app-manifests`, `/installation`; and writes under
+  `/orgs`, `/teams`, `/enterprises` and `/admin`, except `POST
+  /orgs/{org}/repos`. GraphQL mutations are blocked. Everything else the token
+  can do is allowed.
+* **Authorization.** Reads need only the trusted human envelope (Burt,
+  `irc.perl.org`, `#ai`/`#mateu-test`, fresh request). Writes (POST/PUT/PATCH/
+  DELETE and `github_commit_files`) additionally require the envelope's
+  `irc_fold` requester to be listed in `BURT_GITHUB_WRITERS` (comma-separated,
+  folded the same way; empty means no writes). The requester always comes from
+  the runtime envelope, never tool arguments.
+* **Budget.** At most `BURT_GITHUB_WRITE_CAP` (default 60) writes per task,
+  reserved in the broker before sending; separate from, and never consuming,
+  the fixed-repository one-publication budget.
+* **Failures.** 4xx/3xx responses return `status`, `message`,
+  `documentation_url`, `request_id` (and bounded `errors`). A write is never
+  retried; a transport failure or 5xx on a write returns `outcome_uncertain`
+  with method, path and request id, and the model must verify with GETs. No
+  pending/blocking rows are created.
+* **`github_commit_files`** creates one atomic commit through the Git Data API:
+  it resolves the branch (or, when missing, `base_ref` or the repository default
+  branch), creates a tree from inline contents (`null` deletes; an object with
+  `mode: "100755"` keeps a file executable; other updates are written 100644),
+  creates the commit, then performs the single fast-forward ref write (`POST
+  git/refs` for a new branch, `PATCH ... force:false` otherwise). Failures
+  before that ref write leave the branch untouched. Paths with traversal,
+  absolute paths, backslashes or a `.git` component are rejected; at most 100
+  files and 512 KiB of content.
+* **Audit.** `github_requests` in the broker DB records time, task, requester,
+  channel, action, method, normalized path, status, request id and body SHA-256
+  for every HTTP request, pruned to 7 days and 4096 rows.
+
+### Deployment
+
+1. Create the PAT for the Burt GitHub account, then:
+   `install -d -m 700 ~/.config/burt-github` and write it with
+   `install -m 600 /dev/stdin ~/.config/burt-github/token` (no symlink).
+2. Create `~/.config/burt-github/workbench.env` (mode 600) with
+   `BURT_GITHUB_WRITERS=<comma-separated IRC nicks>` and optionally
+   `BURT_GITHUB_WRITE_CAP=60`. It contains no secret. Both
+   `burt-workbench.service` and the isolated `burt-sandbox.service` override
+   load it with `EnvironmentFile=-%h/.config/burt-github/workbench.env`.
+   `run-burt-isolated.sh` passes only `BURT_GITHUB_WRITERS` into the bot
+   namespace (a fail-fast mirror; the broker remains authoritative).
+3. Install the updated broker files and unit, `systemctl --user daemon-reload`,
+   restart `burt-workbench.service`, then restart Burt, and ask Burt to call
+   `github_whoami`.

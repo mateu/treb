@@ -12,6 +12,9 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ReadWritePaths=%h/dev/treb
+# Non-secret GitHub writer allowlist; run-burt-isolated.sh forwards only
+# BURT_GITHUB_WRITERS into the bot namespace. The token stays with the broker.
+EnvironmentFile=-%h/.config/burt-github/workbench.env
 StandardOutput=journal
 StandardError=journal
 

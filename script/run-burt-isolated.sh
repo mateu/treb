@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Host launcher. Not mounted into Burt's namespace. No model-controlled argv.
+# Only the non-secret GitHub writer allowlist crosses into the namespace; the
+# account token stays with the broker.
 set -euo pipefail
 repo="${BURT_SOURCE_ROOT:-$HOME/dev/treb}"
 state="$HOME/.local/share/burt-irc"
@@ -36,7 +38,8 @@ request=dict(action="run",scope=scope,requester="probe",channel=channel,network=
 s.sendall(json.dumps(request).encode()+b"\n")
 result=json.loads(s.makefile().readline()); s.close()
 assert result.get("state")=="passed" and result["result"]["output"]=="42\n", result
-assert not any(k in os.environ for k in ("SSH_AUTH_SOCK","DBUS_SESSION_BUS_ADDRESS","GH_TOKEN","GITHUB_TOKEN"))
+assert not any(k in os.environ for k in ("SSH_AUTH_SOCK","DBUS_SESSION_BUS_ADDRESS","GH_TOKEN","GITHUB_TOKEN","BURT_GITHUB_TOKEN_FILE"))
+assert not pathlib.Path("/home/hunter/.config/burt-github").exists()
 print("bot namespace: hidden host/credentials/other bots; readonly code; own state; clean environment; broker execution passed")
 ') ;;
   *) echo 'Expected start, check, probe, model-check, model-repo-check, model-repo-continue-check (publish public artifacts), or model-repair-check (no publication)' >&2; exit 2 ;;
@@ -59,6 +62,7 @@ exec /usr/bin/bwrap --unshare-user --unshare-pid --unshare-ipc --unshare-uts \
   --size 33554432 --tmpfs /tmp --chdir /app --remount-ro / \
   --clearenv --setenv PATH /usr/bin:/bin --setenv HOME /tmp \
   --setenv USER burt --setenv LANG C.UTF-8 \
+  --setenv BURT_GITHUB_WRITERS "${BURT_GITHUB_WRITERS:-}" \
   /bin/bash --noprofile --norc -c '
     set -euo pipefail
     eval "$(perl -I/perl5/lib/perl5 -Mlocal::lib=/perl5)"
