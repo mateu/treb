@@ -191,6 +191,10 @@ class RepositoryTests(unittest.TestCase):
             self.assertEqual(r.credential('/repos/burt-agent/workspace/pulls?state=all&head=burt-agent:x'), account)
             self.assertEqual(r.credential('/repos/burt-agent/workspace/git/refs/heads/x'), legacy)
             self.assertEqual(r.credential('/repos/burt-agent/workspace/contents/x?ref=pulls'), legacy)
+            # Branch names cannot change credential selection.
+            self.assertEqual(r.credential('/repos/burt-agent/workspace/git/refs/heads/burt/pulls-demo'), legacy)
+            self.assertEqual(r.credential('/repos/burt-agent/workspace/git/ref/heads/burt/pulls'), legacy)
+            self.assertEqual(r.credential('/repos/burt-agent/workspace/pullsx'), legacy)
             self.assertEqual(Repository(legacy).credential('/repos/burt-agent/workspace/pulls'), legacy)
             # An installed but unsafe account token fails closed, never falls back.
             account.chmod(0o640)

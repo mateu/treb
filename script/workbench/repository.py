@@ -106,7 +106,9 @@ class Repository:
 
     def credential(self, path):
         token = self.token
-        if self.pull_token is not None and '/pulls' in path.split('?', 1)[0]:
+        pulls = '/repos/' + REPO + '/pulls'
+        endpoint = path.split('?', 1)[0]
+        if self.pull_token is not None and (endpoint == pulls or endpoint.startswith(pulls + '/')):
             # Only a genuinely missing account token falls back; any other
             # inspection error (e.g. an unreadable directory) fails closed.
             try:
