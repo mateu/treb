@@ -1,8 +1,10 @@
 """Fixed public repository. No checkout, shell, caller URLs, or host paths."""
 import base64
 import json
+import os
 from pathlib import Path
 import re
+import stat
 import time
 import urllib.error
 import urllib.request
@@ -11,6 +13,9 @@ from runner import MAX_INPUT_BYTES, MAX_JSON_BYTES, InputSizeError
 
 REPO = 'burt-agent/workspace'
 TOKEN = Path.home() / '.config/burt-publisher/github.token'
+# Pull request endpoints use the account token (same file as github.py) when it
+# is installed: the fixed-repository publisher token may lack PR permissions.
+PULL_TOKEN = Path(os.environ.get('BURT_GITHUB_TOKEN_FILE') or Path.home() / '.config/burt-github/token')
 SHA = r'[a-f0-9]{40}'
 
 
@@ -94,16 +99,41 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class Repository:
-    def __init__(self, token=TOKEN):
+    def __init__(self, token=TOKEN, pull_token=PULL_TOKEN):
         self.token = Path(token)
+        self.pull_token = Path(pull_token) if pull_token else None
         self.deadline = None
         self.request_ids = []
 
-    def api(self, path, payload=None, method=None):
-        if (not self.token.is_file() or self.token.is_symlink()
-                or self.token.stat().st_mode & 0o077 or self.token.parent.stat().st_mode & 0o077):
+    def credential(self, path):
+        token = self.token
+        pulls = '/repos/' + REPO + '/pulls'
+        endpoint = path.split('?', 1)[0]
+        if self.pull_token is not None and (endpoint == pulls or endpoint.startswith(pulls + '/')):
+            # Only a genuinely missing account token falls back; any other
+            # inspection error (e.g. an unreadable directory) fails closed.
+            try:
+                info = os.lstat(self.pull_token)
+                parent = os.stat(self.pull_token.parent)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                raise ValueError('account credential requires an owner-only mode 600 file') from None
+            else:
+                # Same contract as GitHub.token(): owner-only regular file in a
+                # directory that is not group/world writable.
+                if (not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077
+                        or info.st_uid != os.getuid() or parent.st_mode & 0o022):
+                    raise ValueError('account credential requires an owner-only mode 600 file')
+                return self.pull_token
+        if (not token.is_file() or token.is_symlink()
+                or token.stat().st_mode & 0o077 or token.parent.stat().st_mode & 0o077):
             raise ValueError('repository credential requires private directory and mode 600')
-        headers = {'Authorization': 'Bearer ' + self.token.read_text().strip(),
+        return token
+
+    def api(self, path, payload=None, method=None):
+        token = self.credential(path)
+        headers = {'Authorization': 'Bearer ' + token.read_text().strip(),
                    'Accept': 'application/vnd.github+json', 'User-Agent': 'burt-workbench',
                    'Content-Type': 'application/json'}
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())

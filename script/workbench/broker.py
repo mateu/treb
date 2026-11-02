@@ -1334,6 +1334,8 @@ class Broker:
             self.resource_checkpoint('job', job_id, req, state)
             self.db.commit()
             return self.result(self.db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())
+        if action in ('repo_pr_create', 'repo_pr_merge') and req['requester'] not in self.github_writers():
+            raise GitHubError('pull request writes require an allowlisted trusted requester')
         if action == 'repo_pr_create':
             self.admit_transition(binding['task_id'], 'pull_request_write')
             self.admit_pull_request_write(req, req['branch'], req['expected_head_sha'])
