@@ -199,6 +199,15 @@ class RepositoryTests(unittest.TestCase):
             account.chmod(0o600); account.unlink(); account.symlink_to(legacy)
             with self.assertRaisesRegex(ValueError, 'mode 600'):
                 r.credential('/repos/burt-agent/workspace/pulls')
+            # An account token that cannot be inspected never falls back either.
+            account.unlink(); account.write_text('account'); account.chmod(0o600)
+            if os.geteuid() != 0:  # root bypasses directory permissions
+                account_dir.chmod(0o000)
+                try:
+                    with self.assertRaisesRegex(ValueError, 'mode 600'):
+                        r.credential('/repos/burt-agent/workspace/pulls')
+                finally:
+                    account_dir.chmod(0o700)
 
     def test_pull_request_http_rejections_are_deterministic_and_bounded(self):
         r=FakeRepository(); r.exists=True; r.pr_http_status=403

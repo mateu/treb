@@ -106,8 +106,17 @@ class Repository:
 
     def credential(self, path):
         token = self.token
-        if self.pull_token is not None and '/pulls' in path.split('?', 1)[0] and os.path.lexists(self.pull_token):
-            token = self.pull_token
+        if self.pull_token is not None and '/pulls' in path.split('?', 1)[0]:
+            # Only a genuinely missing account token falls back; any other
+            # inspection error (e.g. an unreadable directory) fails closed.
+            try:
+                os.lstat(self.pull_token)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                raise ValueError('repository credential requires private directory and mode 600') from None
+            else:
+                token = self.pull_token
         if (not token.is_file() or token.is_symlink()
                 or token.stat().st_mode & 0o077 or token.parent.stat().st_mode & 0o077):
             raise ValueError('repository credential requires private directory and mode 600')
