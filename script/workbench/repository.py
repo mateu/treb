@@ -12,7 +12,7 @@ import urllib.request
 from runner import MAX_INPUT_BYTES, MAX_JSON_BYTES, InputSizeError
 
 REPO = 'burt-agent/workspace'
-TOKEN = Path.home() / '.config/burt-publisher/github.token'
+TOKEN = Path(os.environ.get('BURT_GITHUB_TOKEN_FILE') or Path.home() / '.config/burt-github/token')
 # Pull request endpoints use the account token (same file as github.py) when it
 # is installed: the fixed-repository publisher token may lack PR permissions.
 PULL_TOKEN = Path(os.environ.get('BURT_GITHUB_TOKEN_FILE') or Path.home() / '.config/burt-github/token')

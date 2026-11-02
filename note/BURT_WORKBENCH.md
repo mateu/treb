@@ -1,7 +1,9 @@
 # Burt coding and public publishing on clawd
 
 Opt-in tools: `run_code`, `publish_gist`, `read_repo_project`,
-`run_repo_project`, `publish_repo`, and the general GitHub account tools.
+`run_repo_project`, `inspect_repo_job`, `repair_repo_project`,
+`diagnose_repo_job`, and the general GitHub account tools. Repository commits
+use `github_commit_files`; the former repository publication tool is removed.
 Disabled unless
 `BURT_WORKBENCH_SOCKET` is set, and never registered for another bot profile.
 Example in irc.perl.org `#ai`:
@@ -41,8 +43,7 @@ Classic PAT owned by `burt-agent`, **gist scope only**, stored at
 repository-scoped token or operator's `gh` login. Identity is checked before
 POST. Only api.github.com is used; redirects/proxy environment are disabled.
 Every gist is **public**, with a flat filename set supplied to `run_code`.
-No package installs, secret access or arbitrary HTTP tool. Repository publishing
-uses a separate fine-grained credential as described below.
+No package installs, secret access or arbitrary HTTP tool. Repository commits use the account credential as described below.
 
 The runtime derives structured provenance from the active human conversation
 envelope: Burt identity, `irc.perl.org`, an allowed public channel, an unexpired
@@ -51,28 +52,37 @@ magic words, nickname addressing, or publication intent. Model arguments cannot
 change network, channel, requester, or scope. Reminder/bot/ambient/history-only
 turns cannot dispatch because they have no active human envelope.
 
-Repository tools are fixed to public `burt-agent/workspace`. The separate
-`~/.config/burt-publisher/github.token` must authenticate as `burt-agent`, with
-ordinary pull/push access to this repository; parent 0700/file 0600. It never
-enters either namespace. The publisher uses fixed GitHub REST tree/commit/ref APIs, not a shell or Git
-checkout, and refuses redirects/proxies. Pull requests are opened and merged
-through the general `github_api` tool.
+Sandbox repository reads and tests remain fixed to public `burt-agent/workspace`.
+Their GitHub reads use the account credential (`BURT_GITHUB_TOKEN_FILE`, default
+`~/.config/burt-github/token`) through the broker; no token enters either
+namespace. Repository commits use the same account credential and Git Data API,
+not a shell or Git checkout. Redirects/proxies are refused. After deploying and
+verifying this path, retire `~/.config/burt-publisher/github.token`; it is no
+longer used. Keep legacy publication/uncertainty records and reconciliation
+support intact; credential retirement must not erase their evidence or authorize
+replay. The separate gist credential remains in use.
 
-* `read_repo_project(branch, project)`: only `burt/<lowercase-slug>` branches;
+* `read_repo_project(branch, project, repo="burt-agent/workspace")`: only `burt/<lowercase-slug>` branches;
   missing branches read from `main`. Returns the current `base_sha` and complete
   project text bundle, relative to `projects/<project>/`.
-* `run_repo_project(branch, project, base_sha, files, argv, title)`: test the
-  **complete desired project**, including unchanged source/tests/docs. Safe
+* `run_repo_project(snapshot_id, changes, delete, argv, title)`: test the
+  desired project materialized from the immutable snapshot, explicit changed/new
+  contents and deletions; unchanged source/tests/docs are preserved. Safe
   nested paths are supported. 32 files/128 KiB aggregate UTF-8 source; no hidden files, symlinks,
-  submodules or binary files. Omitted existing project files are deleted upon
-  publication; everything outside the selected project is preserved.
-* `publish_repo()`: mechanically selects the one eligible stored successful
-  repository candidate for the active provenance tuple. It cannot change
-  destination or publish gist jobs. Rechecks branch head; stale bases require
-  rereading and retesting. Creates
-  `burt/*` branches or non-force updates them; it never directly writes `main`,
-  opens PRs, merges, or executes repository content. Returns an actual commit URL.
-  Use `github_api` after publication to open or merge a pull request.
+  submodules or binary files. Explicitly deleted project files are deleted upon
+  commit; everything outside the selected project is preserved.
+* `github_commit_files(..., from_job=job_id)`: commits the immutable input
+  files of a passed repository job from the same active task. `from_job` and
+  inline `files` are mutually exclusive. The broker maps the complete saved
+  bundle under `projects/<project>/`, preserving everything outside that project
+  and deleting omitted existing project files. Only this path returns
+  `tested: true`. Standalone/diagnostic jobs, failed jobs, foreign-task jobs and
+  inline contents cannot receive that claim. The destination and exact base
+  come from the saved job: the branch must still match that base (or remain
+  absent with the same saved fallback base). Branch movement fails closed;
+  reread and retest instead of rebasing the bundle. This uses the account writer
+  gate and write cap, not the retired fixed-repository publication authority.
+  Use `github_api` after the commit to open or merge a pull request.
 * `script/workbench/reconcile_pending_pull_request.py --task-id <task-id>`:
   operator-only recovery for one durable **PR-create** uncertainty. It is not a
   runtime/model tool and makes GitHub GET requests only. It accepts a result only
@@ -99,13 +109,15 @@ Continuation:
 > repo. Add URL-encoding edge-case tests and fix any failures. Preserve existing
 > files, test the complete project and publish the update to the same repo branch.
 
-All channel humans have the same narrow publishing authority as for gists;
-this is not authenticated owner-only access. Gist/repository submission quotas
-are shared. Repository partial-write/lost-reply failures remain uncertain, even
+Gist publication retains its narrow channel-human authority. Repository commits,
+including saved-job commits, require the configured account writer gate and
+account write cap; a passing test does not grant write authority. Repository partial-write/lost-reply failures remain uncertain, even
 if only unreachable Git objects may have been created. The operator must inspect
 GitHub branch heads and the journal; do not blindly resubmit.
 
-Exact bundles/results survive service restart. Up to 5 attempts and 1 submission
+Exact bundles/results survive service restart. The following publication-journal
+limits describe gist publication and legacy repository records, not the account
+commit write budget. Up to 5 attempts and 1 submission
 per turn, 30 executions/hour, 10 submissions/day globally. Runs/publications are
 idempotent per request and exact bundle. Jobs must pass and be <15 minutes old.
 Failed/resource-killed/output-truncated jobs cannot publish. Lost GitHub replies
@@ -387,7 +399,7 @@ journal without publishing or changing the live policy.
 
 For GitHub work Burt should prefer `github_whoami`, `github_api`, `github_read`,
 and `github_commit_files` over the fixed `burt-agent/workspace` tools, which
-remain available unchanged. Identity is never hard-coded: `github_whoami`
+remain available for sandbox reads and tests, not a separate publication path. Identity is never hard-coded: `github_whoami`
 reports the login, id, type and OAuth scopes from `GET /user` (cached per token
 for an hour), whether the current trusted requester may write, and the task's
 write budget. Burt must only claim what tool receipts show.
@@ -428,17 +440,19 @@ write budget. Burt must only claim what tool receipts show.
   `irc_fold` requester to be listed in `BURT_GITHUB_WRITERS` (comma-separated,
   folded the same way; empty means no writes). The requester always comes from
   the runtime envelope, never tool arguments. Pull-request endpoints are used
-  through `github_api` with the account token; fixed-repository publication uses
-  the publisher token. An installed but unsafe account token fails closed.
+  through `github_api` with the account token; fixed-workspace sandbox reads and
+  saved-job commits also use that account token. An installed but unsafe account token fails closed.
 * **Budget.** At most `BURT_GITHUB_WRITE_CAP` (default 60) writes per task,
   reserved in the broker before sending; separate from, and never consuming,
-  the fixed-repository one-publication budget.
+  the legacy fixed-repository one-publication budget. Saved-job commits use this
+  account write cap too; passing a job does not bypass it.
 * **Failures.** 4xx/3xx responses return `status`, `message`,
   `documentation_url`, `request_id` (and bounded `errors`). A write is never
   retried; a transport failure or 5xx on a write returns `outcome_uncertain`
   with method, path and request id, and the model must verify with GETs. No
   pending/blocking rows are created.
 * **`github_commit_files`** creates one atomic commit through the Git Data API:
+  accepts exactly one of inline `files` or optional `from_job`. For inline files,
   it resolves the branch (or, when missing, `base_ref` or the repository default
   branch), creates a tree from inline contents (`null` deletes; an object with
   `mode: "100755"` keeps a file executable; other updates are written 100644),
@@ -446,7 +460,12 @@ write budget. Burt must only claim what tool receipts show.
   git/refs` for a new branch, `PATCH ... force:false` otherwise). Failures
   before that ref write leave the branch untouched. Paths with traversal,
   absolute paths, backslashes or a `.git` component are rejected; at most 100
-  files and 512 KiB of content.
+  files and 512 KiB of content. Inline commits are not tested (`tested: false`).
+  With `from_job`, only a passed same-task repository job is accepted; its
+  immutable complete files are mapped under `projects/<project>/`, with saved
+  destination/base and no branch movement permitted. Only that commit path may
+  report `tested: true`; it cannot accept replacement inline contents. Both
+  modes require `BURT_GITHUB_WRITERS` and consume `BURT_GITHUB_WRITE_CAP`.
 * **Audit.** `github_requests` in the broker DB records time, task, requester,
   channel, action, method, normalized path, status, request id and body SHA-256
   for every HTTP request, pruned to 7 days and 4096 rows.
@@ -466,3 +485,9 @@ write budget. Burt must only claim what tool receipts show.
 3. Install the updated broker files and unit, `systemctl --user daemon-reload`,
    restart `burt-workbench.service`, then restart Burt, and ask Burt to call
    `github_whoami`.
+
+4. Verify fixed-workspace reads/tests and a writer-authorized saved-job commit
+   use the account credential, and that inline commits do not claim tested
+   provenance. Verify moved-base and non-writer requests fail closed. Then retire
+   `~/.config/burt-publisher/github.token` without deleting legacy publication,
+   pending uncertainty, or reconciliation records. Do not replay old tasks.

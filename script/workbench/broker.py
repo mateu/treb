@@ -37,7 +37,7 @@ AUDIT_TTL = 7 * 86400
 SNAPSHOT_TTL = 300
 REJECTION_SCHEMA_VERSION = 1
 REPEAT_REJECTION_LIMIT = 3
-ACTIONS = frozenset(('run', 'publish', 'repo_read', 'repo_run', 'repo_publish',
+ACTIONS = frozenset(('run', 'publish', 'repo_read', 'repo_run',
                      'repo_inspect', 'job_inspect', 'repo_repair', 'repo_diagnose', 'reference', 'task_status',
                      'task_progress', 'task_checkpoint', 'checkpoint_status', 'task_resume') + GITHUB_ACTIONS)
 # `irc_fold` on the Perl side emits the rfc1459 canonical alphabet. Do not
@@ -86,6 +86,7 @@ SAFE_REASONS = frozenset({
     'limit: one gist submission per IRC request',
     'limit: one submission per IRC request',
     'object required',
+    'sandbox projects currently support only burt-agent/workspace',
     'only a successful, recent, unsubmitted job can be published',
     'only an unsubmitted completed job can be repaired',
     'operator verification policy required for this project',
@@ -802,10 +803,10 @@ class Broker:
         # their existing created-within-day accounting until a new attempt is
         # recorded for that job.
         return self.db.execute('SELECT COUNT(*) FROM ('
-                               'SELECT job_id FROM publication_attempts WHERE attempted>? '
+                               'SELECT job_id FROM publication_attempts WHERE attempted>? AND job_id NOT IN (SELECT id FROM repo_jobs) '
                                'UNION '
                                "SELECT id FROM jobs WHERE created>? AND state IN ('published','publishing','uncertain') "
-                               'AND id NOT IN (SELECT job_id FROM publication_attempts))',
+                               'AND id NOT IN (SELECT id FROM repo_jobs) AND id NOT IN (SELECT job_id FROM publication_attempts))',
                                (now - 86400, now - 86400)).fetchone()[0]
 
     def record_publication_attempt(self, job_id, now=None):
@@ -941,15 +942,61 @@ class Broker:
         raw = os.environ.get('BURT_GITHUB_WRITE_CAP', '')
         return int(raw) if re.fullmatch(r'[0-9]{1,4}', raw.strip()) else GITHUB_WRITE_CAP
 
+    def tested_commit_candidate(self, req):
+        job_id = req['from_job']
+        if not isinstance(job_id, str) or not re.fullmatch(r'[a-f0-9]{32}', job_id):
+            raise GitHubError('invalid job id')
+        binding = self.task_binding(req['scope'])
+        if 'requester' in binding.keys() and (binding['requester'], binding['channel'], binding['network']) != (req['requester'], req['channel'], req['network']):
+            raise GitHubError('task identity mismatch')
+        job = self.load_job(req, job_id)
+        if self.task_binding(job['scope'])['task_id'] != self.task_binding(req['scope'])['task_id']:
+            raise GitHubError('job belongs to another task')
+        row = self.db.execute('SELECT destination FROM repo_jobs WHERE id=?', (job_id,)).fetchone()
+        if not row or job['state'] != 'passed':
+            raise GitHubError('from_job requires a passed repository job')
+        destination = json.loads(row['destination'])
+        if destination.get('diagnostic_only'):
+            raise GitHubError('diagnostic jobs cannot supply tested commits')
+        snapshot = self.load_snapshot(req, destination['snapshot_id'], require_active=False)
+        if req['repo'] != snapshot.get('repository', 'burt-agent/workspace'):
+            raise GitHubError('target repository must match tested snapshot')
+        if req.get('base_ref', snapshot['base_sha']) != snapshot['base_sha']:
+            raise GitHubError('branch moved since the tested snapshot; re-read and re-test')
+        files = json.loads(job['files'])
+        result = json.loads(job['result'])
+        if self.verification is not None:
+            policy = self.verification.prepare(snapshot, files)
+            receipt = result.get('verification', {})
+            if (destination.get('verification_policy') != self.verification.identity(policy)
+                    or receipt.get('policy_sha256') != self.verification.identity(policy)
+                    or receipt.get('kind') != 'trusted_checks'):
+                raise GitHubError('trusted verification receipt missing or stale; retest')
+        root = 'projects/' + snapshot['project'] + '/'
+        mapped = {root + name: content for name, content in files.items()}
+        mapped.update({root + name: None for name in set(snapshot['files']) - set(files)})
+        return {'files': mapped, 'base_sha': snapshot['base_sha'], 'job_id': job_id,
+                'require_new_branch': req['branch'] != snapshot['branch'],
+                'expected_exists': snapshot['exists'] if req['branch'] == snapshot['branch'] else None,
+                'test_argv': result.get('argv', []), 'test_summary': result}
+
     def github_action(self, req):
         """Account-scoped GitHub work: broker-held token, envelope-bound requester."""
         action, requester = req['action'], req['requester']
         task_id = self.task_binding(req['scope'])['task_id']
+        tested = None
         # Validate and classify fully before authorization, budget or I/O.
         if action == 'github_api':
             route = classify(req['method'], req['path'], req.get('body'))
             write, method, path = route.write, route.method, route.wire
         elif action == 'github_commit_files':
+            if ('files' in req) == ('from_job' in req):
+                raise GitHubError('supply exactly one of files or from_job')
+            if 'from_job' in req:
+                req = dict(req)
+                tested = self.tested_commit_candidate(req)
+                req['files'] = tested['files']
+                req['base_ref'] = tested['base_sha']
             self.github.validate_commit(req['repo'], req['branch'], req.get('base_ref'), req['files'], req['message'])
             if 'create_branch' in req and not isinstance(req['create_branch'], bool):
                 raise GitHubError('create_branch must be a boolean')
@@ -986,7 +1033,11 @@ class Broker:
                 result = self.github.read(req['repo'], req['ref'], req['path'], audit=audit)
             else:
                 result = self.github.commit_files(req['repo'], req['branch'], req.get('base_ref'), req['files'],
-                                                  req['message'], req.get('create_branch', True), audit=audit)
+                                                  req['message'], req.get('create_branch', True), audit=audit,
+                                                  **({'expected_parent': tested['base_sha'], 'require_new_branch': tested['require_new_branch'], 'expected_exists': tested['expected_exists']} if tested else {}))
+                result['tested'] = tested is not None
+                if tested:
+                    result.update({k: tested[k] for k in ('job_id', 'test_argv', 'test_summary')})
         except GitHubHTTPError as exc:
             result = exc.receipt() | {'write': write}
         except GitHubTransportError as exc:
@@ -1024,30 +1075,29 @@ class Broker:
         fields = {'run': {'files','argv','title'}, 'publish': {'id'},
                   'repo_read': {'branch','project'},
                   'repo_run': {'snapshot_id','changes','delete','argv','title'},
-                  'repo_publish': set(),
                   'repo_inspect': {'id'}, 'job_inspect': {'id'},
                   'repo_repair': {'id','changes','delete','argv','title'},
                   'repo_diagnose': {'id','argv','title'},
                   'github_whoami': set(), 'github_api': {'method','path'},
                   'github_read': {'repo','ref','path'},
-                  'github_commit_files': {'repo','branch','files','message'}}
+                  'github_commit_files': {'repo','branch','message'}}
         fields['reference'] = {'key'}
         fields['task_status'] = {'phase', 'reason'}
         fields['task_progress'] = set()
         fields['task_checkpoint'] = {'requester', 'phase', 'reason'}
         optional_fields = {'task_status': {'deadline', 'model_iterations'}, 'task_checkpoint': {'deadline'},
-                           'repo_publish': {'id', 'requester'}}
+                           'repo_read': {'repo'}}
         fields['checkpoint_status'] = {'checkpoint_id', 'requester'}
         fields['task_resume'] = {'checkpoint_id', 'requester'}
         optional_fields['task_resume'] = {'deadline'}
         optional_fields['github_api'] = {'query','body'}
-        optional_fields['github_commit_files'] = {'base_ref','create_branch'}
+        optional_fields['github_commit_files'] = {'base_ref','create_branch','files','from_job'}
         allowed |= fields.get(action, set()) | optional_fields.get(action, set())
         if (action not in fields or not {'action', 'scope', 'requester', 'channel', 'network'} <= set(req)
               or not fields[action] <= set(req) or set(req) - allowed):
             raise ValueError('invalid action or fields')
-        if action == 'repo_publish' and 'id' in req:
-            raise ValueError('direct repository publication selects its job from trusted task evidence')
+        if action == 'repo_read' and req.get('repo', 'burt-agent/workspace') != 'burt-agent/workspace':
+            raise ValueError('sandbox projects currently support only burt-agent/workspace')
         if req['channel'] not in ('#ai', '#mateu-test') or req['network'] != 'irc.perl.org':
             raise ValueError('workbench is restricted to irc.perl.org #ai or #mateu-test')
         scope = req['scope']
@@ -1307,16 +1357,13 @@ class Broker:
             self.resource_checkpoint('job', job_id, req, state)
             self.db.commit()
             return self.result(self.db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())
-        if action == 'repo_publish':
-            job = self.direct_repository_publication_job(req)
-        else:
-            job_id = req['id']
-            if not isinstance(job_id, str) or not re.fullmatch(r'[a-f0-9]{32}', job_id):
-                raise ValueError('invalid job id')
-            job = self.load_job(req, job_id)
+        job_id = req['id']
+        if not isinstance(job_id, str) or not re.fullmatch(r'[a-f0-9]{32}', job_id):
+            raise ValueError('invalid job id')
+        job = self.load_job(req, job_id)
         job_id = job['id']
         repo_job = self.db.execute('SELECT destination FROM repo_jobs WHERE id=?', (job_id,)).fetchone()
-        if bool(repo_job) != (action == 'repo_publish'):
+        if repo_job:
             raise ValueError('job publication destination does not match tool')
         job_task_id = self.task_binding(job['scope'])['task_id']
         if any(row['state'] in ('publishing', 'uncertain') for row in
@@ -1326,11 +1373,6 @@ class Broker:
             return self.result(job)
         if job['state'] != 'passed' or (not repo_job and job['created'] < time.time() - 900):
             raise ValueError('only a successful, recent, unsubmitted job can be published')
-        if repo_job:
-            destination = json.loads(repo_job['destination'])
-            if destination.get('diagnostic_only'):
-                raise ValueError('diagnostic jobs cannot be published; rerun the complete project suite')
-            return self.publish_repository(req, job, destination, allow_after_final_report=True)
         if not self.token.is_file():
             raise ValueError('Burt gist credential is not installed; ask the operator')
         if self.token.stat().st_mode & 0o077:
@@ -1360,46 +1402,6 @@ class Broker:
         self.resource_checkpoint('publication', job_id, req, 'published')
         self.db.commit()
         return self.result(self.db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())
-
-    def publish_repository(self, req, job, destination, allow_after_final_report=False):
-        # Read/preflight before marking submitted; no writes on stale bases.
-        snapshot = self.repository.snapshot(destination['branch'], destination['project'])
-        if self.verification is not None:
-            policy = self.verification.prepare(snapshot, json.loads(job['files']))
-            receipt = json.loads(job['result']).get('verification', {})
-            if (destination.get('verification_policy') != self.verification.identity(policy)
-                    or receipt.get('policy_sha256') != self.verification.identity(policy)
-                    or receipt.get('kind') != 'trusted_checks'):
-                raise ValueError('trusted verification receipt missing or stale; retest')
-        if any(snapshot[k] != destination[k] for k in ('base_sha','exists')):
-            raise ValueError('branch changed; read project and retest before publishing')
-        if self.publication_attempt_count() >= 10:
-            raise ValueError('global limit: 10 submissions per day')
-        job_task_id = self.task_binding(job['scope'])['task_id']
-        # A direct human request carries fresh bounded write authority while the
-        # older task continues to own its immutable job and publication spend.
-        authority_task_id = (self.task_binding(req['scope'])['task_id']
-                             if allow_after_final_report else job_task_id)
-        self.admit_transition(authority_task_id, 'public_write', allow_after_final_report=allow_after_final_report)
-        if authority_task_id != job_task_id:
-            self.consume_prior_task_publication_authority(job_task_id)
-        self.consume_task_publication(job_task_id, time.time())
-        self.record_publication_attempt(job['id'])
-        self.db.execute("UPDATE jobs SET state='publishing' WHERE id=?", (job['id'],))
-        self.resource_checkpoint('publication', job['id'], req, 'publishing')
-        self.db.commit()
-        try:
-            url = self.repository.publish(snapshot, json.loads(job['files']), job['title'])
-        except Exception:
-            self.db.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (job['id'],))
-            self.admit_transition(self.task_binding(job['scope'])['task_id'], 'terminal', terminal_reason='publication_uncertain')
-            self.resource_checkpoint('publication', job['id'], req, 'uncertain')
-            self.db.commit()
-            raise ValueError('repository submission failed or response lost; operator reconciliation required; do not retry') from None
-        self.db.execute("UPDATE jobs SET state='published',url=? WHERE id=?", (url, job['id']))
-        self.resource_checkpoint('publication', job['id'], req, 'published')
-        self.db.commit()
-        return self.result(self.db.execute('SELECT * FROM jobs WHERE id=?', (job['id'],)).fetchone())
 
     def post_gist(self, payload):
         # No caller-supplied URL, credential, proxy, redirect or GitHub identity.
