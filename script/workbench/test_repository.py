@@ -2,12 +2,15 @@ import base64
 from concurrent.futures import ThreadPoolExecutor
 import io
 import json
+import os
 from pathlib import Path
 import sqlite3
 import subprocess
+import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError
 from broker import reconcile_pending_pull_request
 from repository import GitHubHTTPRejected, Repository, validate_destination, validate_files
@@ -172,6 +175,31 @@ class RepositoryTests(unittest.TestCase):
         merged=r.merge_pull_request(1, A)
         self.assertEqual((merged['merged'], merged['merged_now'], merged['merge_sha']), (True, True, D))
 
+    def test_pull_request_endpoints_use_account_token_when_installed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy_dir, account_dir = Path(tmp, 'publisher'), Path(tmp, 'account')
+            for d in (legacy_dir, account_dir):
+                d.mkdir(mode=0o700)
+            legacy, account = legacy_dir / 'github.token', account_dir / 'token'
+            legacy.write_text('legacy'); legacy.chmod(0o600)
+            r = Repository(legacy, pull_token=account)
+            # Missing account token: PR endpoints keep the fixed publisher token.
+            self.assertEqual(r.credential('/repos/burt-agent/workspace/pulls'), legacy)
+            account.write_text('account'); account.chmod(0o600)
+            self.assertEqual(r.credential('/repos/burt-agent/workspace/pulls'), account)
+            self.assertEqual(r.credential('/repos/burt-agent/workspace/pulls/7/merge'), account)
+            self.assertEqual(r.credential('/repos/burt-agent/workspace/pulls?state=all&head=burt-agent:x'), account)
+            self.assertEqual(r.credential('/repos/burt-agent/workspace/git/refs/heads/x'), legacy)
+            self.assertEqual(r.credential('/repos/burt-agent/workspace/contents/x?ref=pulls'), legacy)
+            self.assertEqual(Repository(legacy).credential('/repos/burt-agent/workspace/pulls'), legacy)
+            # An installed but unsafe account token fails closed, never falls back.
+            account.chmod(0o640)
+            with self.assertRaisesRegex(ValueError, 'mode 600'):
+                r.credential('/repos/burt-agent/workspace/pulls')
+            account.chmod(0o600); account.unlink(); account.symlink_to(legacy)
+            with self.assertRaisesRegex(ValueError, 'mode 600'):
+                r.credential('/repos/burt-agent/workspace/pulls')
+
     def test_pull_request_http_rejections_are_deterministic_and_bounded(self):
         r=FakeRepository(); r.exists=True; r.pr_http_status=403
         with self.assertRaises(GitHubHTTPRejected) as create:
@@ -215,6 +243,8 @@ class RepositoryTests(unittest.TestCase):
             else: self.assertEqual(writes[2][1]['ref'],'refs/heads/burt/dictionary')
 
 
+# Fixed-repository PR writes share the account writer allowlist.
+@patch.dict(os.environ, {'BURT_GITHUB_WRITERS': 'mateu'})
 class RepositoryBrokerTests(unittest.TestCase):
     post = test_broker.BrokerTests.post
     publish = test_broker.BrokerTests.publish
@@ -256,6 +286,29 @@ class RepositoryBrokerTests(unittest.TestCase):
     def direct_repo_publish(self, scope='b' * 64):
         return self.b.handle(self.envelope('repo_publish', scope, self.req['channel'], self.req['network'])
                              | {'action':'repo_publish', 'requester':'mateu'})
+
+    def test_pr_writes_require_allowlisted_writer_before_any_github_call(self):
+        self.repo.exists = True
+        self.repo.pulls[1] = self.repo.pull(1, 'burt/dictionary', A)
+        for writers in ('', 'oalders'):
+            with patch.dict(os.environ, {'BURT_GITHUB_WRITERS': writers}):
+                for extra in ({'action': 'repo_pr_create', 'branch': 'burt/dictionary',
+                               'expected_head_sha': A, 'title': 'Dictionary feature'},
+                              {'action': 'repo_pr_merge', 'number': 1, 'expected_head_sha': A}):
+                    before = len(self.repo.calls)
+                    with self.assertRaisesRegex(Exception, 'allowlisted trusted requester'):
+                        self.b.handle(self.request(extra['action']) | extra)
+                    self.assertEqual(len(self.repo.calls), before)
+        self.assertEqual(self.b.db.execute('SELECT COUNT(*) FROM pending_pull_request_operations').fetchone()[0], 0)
+        self.assertEqual(self.b.db.execute('SELECT COUNT(*) FROM repository_pull_requests').fetchone()[0], 0)
+        # Writer nicks fold like IRC nicks; inspection stays open to everyone.
+        with patch.dict(os.environ, {'BURT_GITHUB_WRITERS': 'MaTeU'}):
+            created = self.b.handle(self.request('repo_pr_create') | {
+                'branch': 'burt/dictionary', 'expected_head_sha': A, 'title': 'Dictionary feature'})
+        self.assertEqual(created['head_sha'], A)
+        with patch.dict(os.environ, {'BURT_GITHUB_WRITERS': ''}):
+            self.assertEqual(self.b.handle(self.request('repo_pr_inspect') | {'number': created['number']})['number'],
+                             created['number'])
 
     def uncertain_pr_create(self):
         self.repo.exists = True

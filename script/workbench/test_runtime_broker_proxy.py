@@ -6,11 +6,14 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 from broker import Broker
 from test_repository import FakeRepository
 
 
+# Fixed-repository PR writes share the account writer allowlist.
+@patch.dict(os.environ, {'BURT_GITHUB_WRITERS': 'mateu'})
 class RuntimeBrokerProxyTests(unittest.TestCase):
     transcript = ('Pick up the saved dictionary query-string feature work—not the later base-only test run. '
                   'Check the actual saved candidate, run the full offline suite against it, and push it to '

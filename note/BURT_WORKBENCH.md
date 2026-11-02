@@ -433,7 +433,11 @@ write budget. Burt must only claim what tool receipts show.
   DELETE and `github_commit_files`) additionally require the envelope's
   `irc_fold` requester to be listed in `BURT_GITHUB_WRITERS` (comma-separated,
   folded the same way; empty means no writes). The requester always comes from
-  the runtime envelope, never tool arguments.
+  the runtime envelope, never tool arguments. The fixed-repository
+  `repo_pr_create`/`repo_pr_merge` tools obey the same allowlist and, when the
+  account token is installed, call the pull request endpoints with it (the
+  publisher token may lack PR permissions); other fixed-repository calls keep
+  the publisher token. An installed but unsafe account token fails closed.
 * **Budget.** At most `BURT_GITHUB_WRITE_CAP` (default 60) writes per task,
   reserved in the broker before sending; separate from, and never consuming,
   the fixed-repository one-publication budget.

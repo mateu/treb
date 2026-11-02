@@ -1,6 +1,8 @@
 import json
+import os
 import threading
 import unittest
+from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
 from urllib.error import HTTPError
 
@@ -29,6 +31,8 @@ class PagedRepository(FakeRepository):
         return super().api(path, payload, method)
 
 
+# Fixed-repository PR writes share the account writer allowlist.
+@patch.dict(os.environ, {'BURT_GITHUB_WRITERS': 'mateu'})
 class ConfirmAbsentTests(unittest.TestCase):
     post = test_broker.BrokerTests.post
     publish = test_broker.BrokerTests.publish

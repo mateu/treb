@@ -14,7 +14,7 @@ import urllib.request
 import uuid
 
 from runner import run, validate, MAX_JSON_BYTES, MAX_INPUT_BYTES, MAX_GIST_INPUT_BYTES, InputSizeError
-from repository import GitHubHTTPRejected, Repository, validate_destination, validate_files
+from repository import PULL_TOKEN, GitHubHTTPRejected, Repository, validate_destination, validate_files
 from github import GitHub, GitHubError, GitHubHTTPError, GitHubPolicyError, GitHubTransportError, classify
 from verification import Verification
 from references import References, CATALOG
@@ -404,7 +404,7 @@ class Broker:
         (self.base / 'jobs.sqlite').chmod(0o600)
         self.prune_audit()
         self.db.commit()
-        self.repository = Repository()
+        self.repository = Repository(pull_token=PULL_TOKEN)
         self.verification = verification
         self.verify_execute = verify_execute or (lambda job, checks: run(job, checks=checks))
         self.references = References()
@@ -1334,6 +1334,8 @@ class Broker:
             self.resource_checkpoint('job', job_id, req, state)
             self.db.commit()
             return self.result(self.db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())
+        if action in ('repo_pr_create', 'repo_pr_merge') and req['requester'] not in self.github_writers():
+            raise GitHubError('pull request writes require an allowlisted trusted requester')
         if action == 'repo_pr_create':
             self.admit_transition(binding['task_id'], 'pull_request_write')
             self.admit_pull_request_write(req, req['branch'], req['expected_head_sha'])
