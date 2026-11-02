@@ -22,7 +22,8 @@ Example in irc.perl.org `#ai`:
   access for IRC, model APIs and existing web tools; this is **not an egress
   allowlist**. Its model credential is necessarily available to its runtime.
 * **Generated programs:** the broker's `runner.py` uses fresh network/PID/mount
-  namespaces, no credentials or bot state, read-only `/usr`, writable tmpfs,
+  namespaces, no credentials or bot state, read-only `/usr`, optional read-only
+  operator `~/perl5` at `/perl5` with `PERL5LIB=/perl5/lib/perl5`, writable tmpfs,
   cgroup limits (256 MiB RAM/no swap/32 tasks/20 seconds), 64 KiB output and
   bounded text inputs. Absolute Python/Perl/sh argv only, executed inside the
   sandbox. Never an unsandboxed fallback; missing dependencies fail the job.
@@ -502,5 +503,10 @@ should github_api POST /user/repos {"name":"demo","auto_init":true}, then read a
 commit the PASSED job with github_commit_files from_job to a new branch, and open a PR
 using github_api. from_job cannot write the default branch; repository must match and
 branch must be unchanged or new from exactly the tested SHA. Writer gate and caps apply.
-The code sandbox has no network and only /usr system Perl/Python modules;
-~/perl5 is NOT mounted. Do not attempt network installs in the sandbox.
+The code sandbox has no network and has /usr system Perl/Python plus optional read-only CPAN modules from the operator's ~/perl5 at /perl5 (PERL5LIB set). To add a dependency, ask the operator to install it into ~/perl5. Do not attempt network installs in the sandbox.
+
+The optional local::lib mount requires an absolute source (override with
+`BURT_SANDBOX_PERL5`), broker-owned directories with no group/world write
+on the source, `lib`, and `lib/perl5`; symlinks at these directories
+are rejected. Missing/unsafe trees are skipped; runner
+results report `perl5: mounted|skipped` without disclosing the host path.
