@@ -8,6 +8,11 @@ state="$HOME/.local/share/burt-irc"
 ipc="${BURT_WORKBENCH_IPC_ROOT:-$HOME/.local/share/burt-workbench/ipc}"
 mode="${1:-start}"
 extra_mounts=()
+# Operator file lives outside writable /state, exposed only read-only.
+friend_mounts=()
+if [[ -f "$state/burt.friends.json" ]]; then
+  friend_mounts=(--ro-bind "$state/burt.friends.json" /app/burt.friends.json)
+fi
 case "$mode" in
   start) command=(/usr/bin/perl /app/burt.pl) ;;
   check) command=(/usr/bin/perl -c /app/burt.pl) ;;
@@ -58,7 +63,7 @@ exec /usr/bin/bwrap --unshare-user --unshare-pid --unshare-ipc --unshare-uts \
   --ro-bind "$repo/burt.mission.txt" /app/burt.mission.txt \
   --ro-bind "$state/burt.env" /app/burt.env \
   --bind "$state/data" /state --ro-bind "$ipc" /broker \
-  "${extra_mounts[@]}" \
+  "${extra_mounts[@]}" "${friend_mounts[@]}" \
   --size 33554432 --tmpfs /tmp --chdir /app --remount-ro / \
   --clearenv --setenv PATH /usr/bin:/bin --setenv HOME /tmp \
   --setenv USER burt --setenv LANG C.UTF-8 \

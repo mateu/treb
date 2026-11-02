@@ -3,6 +3,7 @@ package Bot::Runtime::Context;
 use strict;
 use warnings;
 use JSON::PP ();
+use Bot::Runtime::Friends ();
 use Bot::IRCIdentity qw(irc_fold);
 
 use Exporter 'import';
@@ -41,7 +42,7 @@ sub build_context_and_input {
     }
   }
 
-  my $context = '';
+  my $context = Bot::Runtime::Friends::context($self, $messages);
   for my $nick (sort keys %seen_nicks) {
     my $notes = $self->memory->recall_notes($nick, '', 5, $ENV{PINNED_NOTE_PCT} // 75);
     if ($notes) {
