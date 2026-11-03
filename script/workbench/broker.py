@@ -121,6 +121,18 @@ SAFE_REASONS = frozenset({
 })
 
 
+# Fixed operator-controlled policy failures cannot change by retrying a payload.
+NON_RETRYABLE_POLICY = {
+    'operator verification policy required for this project':
+        'The branch is not approved for test runs; the operator needs to add it to the verification policy.',
+    'verification baseline changed; operator review required':
+        'The verification baseline changed; the operator must review and approve it.',
+    'verification runtime changed; restart/review required':
+        'The verification runtime changed; the operator must review it and restart the broker.',
+    'verification policy must not be symlink/group/world writable':
+        'The operator must correct the verification policy file permissions.',
+}
+
 def reconcile_pending_pull_request(db, repository, task_id):
     """Reconcile one persisted PR-create operation without issuing a GitHub write."""
     if not isinstance(task_id, str) or not re.fullmatch(r'[a-f0-9]{64}', task_id):
@@ -584,6 +596,10 @@ class Broker:
                   'action': action, 'disposition': disposition,
                   'reconciliation': 'required' if uncertain else None,
                   'repeat_count': min(repeated, REPEAT_REJECTION_LIMIT)}
+        if message in NON_RETRYABLE_POLICY:
+            result.update(reason=message, message=message, disposition='terminal',
+                          retryable=False, required_action=NON_RETRYABLE_POLICY[message],
+                          instruction='Not retryable; do not repeat this request; tell the requester.')
         if github_http:
             result['github_http'] = {'status': exc.status, 'message': exc.message,
                                      'request_id': exc.request_id}

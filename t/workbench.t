@@ -270,6 +270,39 @@ $bot->{pending} = {coding_task => 1, coding_last_result => 'No verified work res
 like(Bot::Runtime::Workbench::verified_final_report($bot, $bot->{pending}, 'Tests passed and I pushed it.'),
   qr/report withheld/, 'unreceipted claims remain withheld');
 
+{
+  $bot->{pending}=pending();
+  no warnings 'redefine';
+  my $runs=0;
+  my $raw=JSON::PP::encode_json({rejection_schema=>1,code=>'invalid_request',
+    disposition=>'terminal',retryable=>JSON::PP::false,
+    reason=>'operator verification policy required for this project',
+    required_action=>'The branch is not approved for test runs; the operator needs to add it to the verification policy.'});
+  local *Bot::Runtime::Workbench::broker_call=sub {
+    return '{}' unless $_[0]{action} eq 'repo_run';
+    $runs++; return $raw;
+  };
+  my $args={snapshot_id=>'a'x32,changes=>{},delete=>[],argv=>['/usr/bin/perl','test.pl'],title=>'test'};
+  $defs{run_repo_project}{code}->($tool,$args);
+  $defs{run_repo_project}{code}->($tool,{%$args});
+  is($runs,1,'identical policy rejection short-circuits before broker dispatch');
+  my $report=Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},
+    'Both repo read and test failed twice.');
+  like($report,qr/repo_run blocked: operator verification policy required/,'report preserves actual action and reason');
+  like($report,qr/operator needs to add it/,'report includes concrete remedy');
+  unlike($report,qr/repo read|twice/,'unsupported model failure attribution is replaced');
+  like(Bot::Runtime::Workbench::finish_task($bot,$bot->{pending},'runtime_error'),
+    qr/operator verification policy required/,'stop path also preserves policy reason');
+  $bot->{pending}=pending();
+  $raw=JSON::PP::encode_json({rejection_schema=>1,code=>'transport_unavailable',
+    disposition=>'retryable',message=>'broker unavailable; operator inspection required'});
+  $runs=0;
+  $defs{run_repo_project}{code}->($tool,$args);
+  $defs{run_repo_project}{code}->($tool,$args);
+  is($runs,2,'transient errors retain retry dispatch behavior');
+
+}
+
 $bot->{bot} = 'astrid';
 is_deeply(Bot::Runtime::Workbench::tool_specs($bot), [], 'other bots remain unchanged');
 $bot->{bot} = 'burt';
