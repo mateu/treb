@@ -196,7 +196,7 @@ sub github_receipt {
     return;
   }
   return unless ref($r) eq 'HASH' && $r->{outcome_uncertain};
-  $receipts->{publication_uncertain}=1;
+  $receipts->{github_write_uncertain}=1;
   my $method=$r->{method}//'';
   my $path=$r->{path}//'';
   $method='' unless $method =~ /\A(?:POST|PUT|PATCH|DELETE)\z/;
@@ -386,7 +386,7 @@ sub verified_final_report {
   $tests='tests passed - job '.substr($id,0,8) if !$run && $r->{passed}{$id};
   my @published=sort grep { length } keys %urls;
   my $publication=@published ? 'publication: '.join(', ',@published) : 'publication: none this task';
-  $publication.='; uncertain write, operator reconciliation required' if $r->{publication_uncertain};
+  $publication.='; uncertain write, operator reconciliation required' if $r->{publication_uncertain} || $r->{github_write_uncertain};
   my $reason=$pending->{coding_policy_block}//$pending->{coding_stop_reason}//'';
   my $status="[verified: $tests; $publication".(length($reason) ? "; $reason" : '').']';
   my %seen;
@@ -544,6 +544,10 @@ sub tool_specs {
               $pending->{coding_last_execution_job}=$execution->{id};
               $pending->{coding_last_execution_state}=$execution->{state};
               $pending->{coding_receipts}//={};
+              $pending->{coding_receipts}{jobs}{$execution->{id}}=1;
+              if ($execution->{state} =~ /\A(?:passed|failed)\z/) {
+                $pending->{coding_receipts}{runs}{$execution->{id}}={state=>$execution->{state}};
+              }
               $pending->{coding_receipts}{passed}{$execution->{id}}=1 if $execution->{state} eq 'passed';
             } else {
               delete $pending->{coding_last_execution_job};

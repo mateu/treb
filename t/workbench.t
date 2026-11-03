@@ -235,6 +235,7 @@ like($bot->{pending}{coding_stop_reason}, qr/attempt budget exhausted/,
 $bot->{pending} = pending();
 $bot->{pending}{messages}[0]{msg} = 'resume checkpoint';
 my @resume;
+my $resume_state='passed';
 {
   no warnings 'redefine';
   local *Bot::Runtime::Workbench::broker_call = sub {
@@ -242,7 +243,7 @@ my @resume;
     return JSON::PP::encode_json({jobs => []}) if $request->{action} eq 'checkpoint_status';
     return JSON::PP::encode_json({
       resumed_scope => $request->{scope}, jobs => [], attempts_remaining => 4,
-      latest_execution_job => {id => 'd'x32, state => 'passed'},
+      latest_execution_job => {id => 'd'x32, state => $resume_state},
       latest_repository_job => {id => 'd'x32, state => 'published'},
       latest_publication_job => {id => 'd'x32,
         url => 'https://github.com/burt-agent/workspace/commit/'.('e'x40)},
@@ -256,6 +257,19 @@ my @resume;
   ok(!$bot->{pending}{coding_task}, 'checkpoint status does not accidentally admit an explicit resume request');
   like($defs{resume_coding_task}{code}->($tool, {checkpoint_id => 'a'x32}),
     qr/resumed_scope/, 'resume restores a checkpoint using a fresh envelope');
+  $resume_state='failed';
+  $bot->{pending}=pending();
+  $bot->{pending}{messages}[0]{msg}='resume checkpoint';
+  $defs{resume_coding_task}{code}->($tool, {checkpoint_id=>'a'x32});
+  like(Bot::Runtime::Workbench::verified_final_report($bot,$bot->{pending},'job '.('d'x32)),
+    qr/^job d{32}
+\[verified: tests failed - job d{8}/,
+    'failed resumed execution remains backed and renders failed status');
+  $resume_state='passed';
+  $bot->{pending}=pending();
+  $bot->{pending}{messages}[0]{msg}='resume checkpoint';
+  $defs{resume_coding_task}{code}->($tool, {checkpoint_id=>'a'x32});
+
 }
 is($bot->{pending}{coding_requester}, 'mateu', 'resume keeps runtime-derived requester');
 is($bot->{pending}{coding_receipts}{passed}{'d'x32}, 1, 'resume restores execution receipt');
@@ -345,6 +359,11 @@ like(Bot::Runtime::Workbench::verified_final_report($bot, $bot->{pending}, 'Test
   like(Bot::Runtime::Workbench::verified_final_report($bot,$p,'burt-agent/workspace#99'),qr/report withheld: PR burt-agent\/workspace#99/,'unbacked PR named');
   Bot::Runtime::Workbench::report_result($bot,'publish',JSON::PP::encode_json({state=>'uncertain'}));
   like(Bot::Runtime::Workbench::verified_final_report($bot,$p,'done'),qr/uncertain write/,'uncertain publication rendered');
+  Bot::Runtime::Workbench::github_receipt($bot,$p,'github_api',{outcome_uncertain=>1,method=>'POST',path=>'/repos/o/r/issues'});
+  Bot::Runtime::Workbench::report_result($bot,'publish',JSON::PP::encode_json({id=>'7'x32,state=>'published',url=>$url}));
+  like(Bot::Runtime::Workbench::verified_final_report($bot,$p,'done'),qr/uncertain write/,
+    'successful bundle publication does not reconcile unrelated account write');
+
 
 }
 
