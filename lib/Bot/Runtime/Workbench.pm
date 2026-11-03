@@ -237,7 +237,8 @@ sub report_result {
       $receipts->{snapshot_shas}{lc $sha}=1 if $sha =~ /\A[a-f0-9]{40}\z/i;
     }
   }
-  if ($id && $execution_state && $action =~ /\A(?:run|repo_(?:run|repair))\z/) {
+  # Inspections recover immutable execution evidence without selecting a new run.
+  if ($id && $execution_state && $action =~ /\A(?:run|repo_(?:run|repair|inspect)|job_inspect)\z/) {
     my $run={state=>$execution_state};
     # Consistency with recorded output, not proof against a malicious harness.
     my $output=ref($r->{result}) eq 'HASH' ? ($r->{result}{output}//'') : '';

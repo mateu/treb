@@ -354,6 +354,16 @@ like(Bot::Runtime::Workbench::verified_final_report($bot, $bot->{pending}, 'Test
   my $url='https://gist.github.com/burt-agent/'.('a'x32);
   Bot::Runtime::Workbench::report_result($bot,'publish',JSON::PP::encode_json({id=>'7'x32,state=>'published',url=>$url}));
   like(Bot::Runtime::Workbench::verified_final_report($bot,$p,$url),qr/^\Q$url\E\n\[verified:.*publication: \Q$url\E/,'gist ID is not mistaken for a job and publication is rendered');
+  for my $action (qw(repo_inspect job_inspect)) {
+    Bot::Runtime::Workbench::report_result($bot,$action,JSON::PP::encode_json({
+      id=>'6'x32,state=>'published',execution_state=>'passed',
+      result=>{output=>"Files=42, Tests=1500
+"}}),1);
+    like(Bot::Runtime::Workbench::verified_final_report($bot,$p,'42 files, 1500 tests'),
+      qr/^42 files, 1500 tests
+/,'inspection restores saved count evidence');
+    is($p->{coding_last_execution_job},'7'x32,'inspection does not change latest execution');
+  }
   like(Bot::Runtime::Workbench::verified_final_report($bot,$p,'job 88888888'),qr/^job 88888888\n/,'unique explicit job prefix backed');
   like(Bot::Runtime::Workbench::verified_final_report($bot,$p,'Files=23, Tests=1209'),qr/^Files=23, Tests=1209\n/,'paired harness counts backed');
   like(Bot::Runtime::Workbench::verified_final_report($bot,$p,'burt-agent/workspace#99'),qr/report withheld: PR burt-agent\/workspace#99/,'unbacked PR named');
