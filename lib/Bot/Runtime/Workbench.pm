@@ -188,12 +188,15 @@ sub github_receipt {
   my $receipts=$pending->{coding_receipts}//={};
   if (ref($r) eq 'HASH' && $r->{ok} && $r->{write}) {
     $receipts->{github_writes}++;
+    my $artifact=$r->{artifact_url}//'';
+    $receipts->{urls}{lc $artifact}=1 if $artifact =~ m#\Ahttps://(?:github\.com/burt-agent/[\w.-]+/pull/[1-9][0-9]*|gist\.github\.com/burt-agent/[a-f0-9]+)\z#;
     my $url=$r->{commit_url}//'';
     $receipts->{github_commits}{lc $url}=1
       if $url =~ m#\Ahttps://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/commit/[a-f0-9]{40}\z#;
     return;
   }
   return unless ref($r) eq 'HASH' && $r->{outcome_uncertain};
+  $receipts->{publication_uncertain}=1;
   my $method=$r->{method}//'';
   my $path=$r->{path}//'';
   $method='' unless $method =~ /\A(?:POST|PUT|PATCH|DELETE)\z/;
@@ -214,7 +217,7 @@ sub report_result {
     github_receipt($self,$pending,$action,$r);
     return;
   }
-  my $publication=$action eq 'publish';
+  my $publication=$action =~ /\A(?:publish|repo_publish)\z/;
   my $r=eval { JSON::PP::decode_json($raw) };
   my $structured_rejection=ref($r) eq 'HASH' && ($r->{rejection_schema}//'') eq '1';
   $r={} if $publication && ref($r) ne 'HASH';
@@ -226,6 +229,16 @@ sub report_result {
   my $execution_state=$r->{execution_state}//$state;
   $execution_state='' unless $execution_state =~ /\A(?:passed|failed)\z/;
   my $receipts=$pending->{coding_receipts}//={};
+  $receipts->{jobs}{$id}=1 if $id;
+  if ($id && $execution_state && $action =~ /\A(?:run|repo_(?:run|repair))\z/) {
+    my $run={state=>$execution_state};
+    # Consistency with recorded output, not proof against a malicious harness.
+    my $output=ref($r->{result}) eq 'HASH' ? ($r->{result}{output}//'') : '';
+    while ($output =~ /^Files=(\d+),\s*Tests=(\d+)\b/gm) {
+      @$run{qw(files tests)}=(0+$1,0+$2);
+    }
+    $receipts->{runs}{$id}=$run;
+  }
   if ($id && $execution_state eq 'passed' && $action =~ /\A(?:run|repo_(?:run|repair))\z/) {
     $receipts->{passed}{$id}=1;
   }
@@ -233,6 +246,7 @@ sub report_result {
     my $url=$r->{url}//'';
     $url='' unless $url =~ m#\Ahttps://(?:gist\.github\.com/burt-agent/[a-f0-9]+|github\.com/burt-agent/workspace/commit/[a-f0-9]{40})\z#;
     $receipts->{published}{$id}=$url;
+    delete $receipts->{publication_uncertain};
   }
   $state='error' unless $state =~ /\A(?:passed|failed|published|publishing|uncertain|open|closed|merged)\z/;
   my $notice="$action: $state" . ($id ? " (job $id)" : '');
@@ -271,12 +285,14 @@ sub report_result {
   my $uncertain_write = !$structured_rejection
     || ($r->{code}//'') eq 'publication_uncertain'
     || ($state//'') eq 'publishing' || ($state//'') eq 'uncertain';
+  $receipts->{publication_uncertain}=1 if $publication && $state ne 'published' && $uncertain_write;
   my $confirmed_publication = $state eq 'published';
   if ($publication && !$confirmed_publication && $uncertain_write) {
     $notice.='; success unconfirmed; the public write may already have succeeded; operator reconciliation required before retrying; do not retry';
   }
   my $url=$r->{url}//'';
   if ($url =~ m#\Ahttps://(?:gist\.github\.com/burt-agent/[a-f0-9]+|github\.com/burt-agent/workspace/(?:commit/[a-f0-9]{40}|pull/[1-9][0-9]*))\z#) {
+    $receipts->{urls}{lc $url}=1;
     $notice.=" $url";
   }
   if ($action =~ /(?:run|repair|diagnose)/ && ref($r->{result}) eq 'HASH') {
@@ -309,48 +325,70 @@ sub report_result {
     && ($r->{rejection_schema}//'') ne '1';
 }
 
+# Extract only explicit artifacts: bare 32-hex job IDs, job-prefixed 8-32
+# hex prefixes, commit-prefixed 7-40 hex SHAs, canonical GitHub artifact URLs,
+# burt-agent owner/repo#N references and PR/pull request #N references, and
+# integer harness counts. Decimal/version/size/line numbers are not artifacts.
 sub verified_final_report {
   my ($self,$pending,$answer)=@_;
   return $answer unless $pending && $pending->{coding_task};
-  return $pending->{coding_policy_block} if $pending->{coding_policy_block};
-  my $receipts=$pending->{coding_receipts}//{};
-  my $claims_pass=0;
-  while ($answer =~ /\b(?:tests?|suite|verification)\s+(?:all\s+)?pass(?:ed|es)?\b/gi) {
-    my $prefix=substr($answer,0,pos($answer)-length($&));
-    next if $prefix =~ /\b(?:no|not|never|un|fail\w*)(?:\s+\w+){0,3}\s*\z/i;
-    $claims_pass=1;
-    last;
+  my $r=$pending->{coding_receipts}//{};
+  my %jobs=map { $_=>1 } map { keys %{$r->{$_}//{}} } qw(jobs runs passed published);
+  my %urls=map { lc($_)=>1 } (keys %{$r->{github_commits}//{}}, values %{$r->{published}//{}}, keys %{$r->{urls}//{}});
+  my @shas=map { m{/commit/([a-f0-9]{7,40})$} ? $1 : () } keys %urls;
+  my @bad;
+  my $check_job=sub {
+    my ($id)=@_; $id=lc $id;
+    my @matches=grep { index($_,$id)==0 } keys %jobs;
+    push @bad,"job $id is not uniquely backed by this task's receipts" unless @matches==1;
+  };
+  my $plain=$answer;
+  $plain =~ s{https://[^\s<>]+}{}g;
+  while ($plain =~ /(?<![a-z0-9])([a-f0-9]{32})(?![a-z0-9])/gi) { $check_job->($1) }
+  while ($plain =~ /\bjob\s+([a-f0-9]{8,32})(?![a-z0-9])/gi) { $check_job->($1) }
+  while ($plain =~ /\bcommit(?:\s+SHA)?\s+([a-f0-9]{7,40})(?![a-z0-9])/gi) {
+    my $sha=lc $1;
+    push @bad,"commit $sha is not in this task's receipts" unless (grep { index($_,$sha)==0 } @shas)==1;
   }
-  pos($answer)=0;
-  my $claims_publication=0;
-  while ($answer =~ /\b(pushed|published|committed)\b/gi) {
-    my $prefix=substr($answer,0,pos($answer)-length($1));
-    next if $prefix =~ /\b(?:not|never|un|fail\w*)(?:\s+\w+){0,3}\s*\z/i;
-    $claims_publication=1;
-    last;
+  while ($answer =~ m{(https://(?:github\.com/[\w.-]+/[\w.-]+/(?:commit/[a-f0-9]{7,40}|pull/[1-9][0-9]*)|gist\.github\.com/[\w.-]+/[a-f0-9]+))(?![\w/])}gi) {
+    my $url=lc $1;
+    push @bad,"URL $url is not in this task's receipts" unless $urls{$url};
   }
-  $claims_publication=1 if $answer =~ m{https://github\.com/burt-agent/workspace/commit/[a-f0-9]{40}}i;
-  my $last_execution_job=$pending->{coding_last_execution_job}//$pending->{coding_last_repo_job}//'';
-  my $last_execution_state=$pending->{coding_last_execution_state}//$pending->{coding_last_repo_state}//'';
-  my $pass_receipt=$last_execution_job =~ /\A[a-f0-9]{32}\z/
-    && $last_execution_state eq 'passed'
-    && $receipts->{passed}{$last_execution_job};
-  my $last_publication_job=$pending->{coding_last_publication_job}//'';
-  my $publication_receipt=$last_publication_job =~ /\A[a-f0-9]{32}\z/
-    ? $receipts->{published}{$last_publication_job} : undef;
-  my ($reported_url)=$answer =~ m{(https://github\.com/burt-agent/workspace/commit/[a-f0-9]{40})}i;
-  my $publication_matches=defined($publication_receipt)
-    && (!defined($reported_url) || $reported_url eq $publication_receipt);
-  my $github_commits=$receipts->{github_commits}//{};
-  # Account-tool writes are their own receipts; a named commit URL must be one
-  # the broker actually returned in this task.
-  my @named_commits=map { lc } $answer =~ m{(https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/commit/[a-f0-9]{40})}gi;
-  my $github_matches=($receipts->{github_writes}//0) > 0
-    && !(grep { !$github_commits->{$_} && !(defined($publication_receipt) && $_ eq lc $publication_receipt) } @named_commits);
-  return $answer if (!$claims_pass || $pass_receipt)
-    && (!$claims_publication || $publication_matches || $github_matches);
-  my $status=$pending->{coding_last_result}//'No verified work result recorded.';
-  return "Coding task report withheld: the claimed result has no matching broker receipt. $status";
+  while ($answer =~ m{\b(burt-agent/[\w.-]+)\#([1-9][0-9]*)\b}gi) {
+    my $url='https://github.com/'.lc($1).'/pull/'.$2;
+    push @bad,"PR $1#$2 is not in this task's receipts" unless $urls{$url};
+  }
+  while ($answer =~ /\b(?:PR|pull\s+request)\s*#([1-9][0-9]*)\b/gi) {
+    my $n=$1;
+    push @bad,"PR #$n is not in this task's receipts" unless grep { m{^https://github\.com/burt-agent/[^/]+/pull/\Q$n\E$} } keys %urls;
+  }
+  my (@files,@tests);
+  while ($answer =~ /\bFiles=(\d+),\s*Tests=(\d+)\b/gi) {
+    my ($f,$t)=($1,$2);
+    push @bad,"Files=$f, Tests=$t is not in this task's receipts" unless grep {
+      defined($_->{files}) && $_->{files}==$f && $_->{tests}==$t
+    } values %{$r->{runs}//{}};
+  }
+  while ($answer =~ /(?<![\w.])(\d+)\s+(files|tests)\b/gi) { if (lc($2) eq 'files') { push @files,$1 } else { push @tests,$1 } }
+  my @runs=values %{$r->{runs}//{}};
+  for my $kind (['files',\@files],['tests',\@tests]) {
+    for my $n (@{$kind->[1]}) {
+      push @bad,"$n $kind->[0] is not in this task's receipts" unless grep { defined($_->{$kind->[0]}) && $_->{$kind->[0]}==$n } @runs;
+    }
+  }
+  my $id=$pending->{coding_last_execution_job}//$pending->{coding_last_repo_job}//'';
+  my $run=$r->{runs}{$id};
+  my $tests=$run ? "tests $run->{state} - job ".substr($id,0,8)
+    . (defined($run->{files}) ? ", $run->{files} files/$run->{tests} tests" : '') : 'tests: no runs recorded';
+  $tests='tests passed - job '.substr($id,0,8) if !$run && $r->{passed}{$id};
+  my @published=sort grep { length } keys %urls;
+  my $publication=@published ? 'publication: '.join(', ',@published) : 'publication: none this task';
+  $publication.='; uncertain write, operator reconciliation required' if $r->{publication_uncertain};
+  my $reason=$pending->{coding_policy_block}//$pending->{coding_stop_reason}//'';
+  my $status="[verified: $tests; $publication".(length($reason) ? "; $reason" : '').']';
+  my %seen;
+  my $prose=@bad ? 'Coding task report withheld: '.join('; ',grep { !$seen{$_}++ } @bad).'.' : $answer;
+  return "$prose\n$status";
 }
 
 sub broker_call {

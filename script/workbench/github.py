@@ -395,6 +395,12 @@ class GitHub:
         if (result['write'] and result['ok'] and isinstance(commit, dict) and isinstance(commit.get('sha'), str)
                 and SHA.fullmatch(commit['sha']) and repo and REPO.fullmatch(repo)):
             result['commit_url'] = f'https://github.com/{repo}/commit/{commit["sha"]}'
+        # Promote only canonical artifact identifiers into broker receipt metadata.
+        if result['write'] and result['ok'] and isinstance(data, dict):
+            url = data.get('html_url', '')
+            if isinstance(url, str) and re.fullmatch(
+                    r'https://(?:github\.com/burt-agent/[\w.-]+/pull/[1-9][0-9]*|gist\.github\.com/burt-agent/[a-f0-9]+)', url):
+                result['artifact_url'] = url
         return result
 
     def whoami(self, audit=None):

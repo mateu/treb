@@ -126,8 +126,8 @@ sub broker {
   is($calls[-1]{from_job}, 'a'x32, 'runtime forwards explicit tested job');
   ok(!exists $calls[-1]{files}, 'tested source never adds caller files');
   my $pending=$bot->{pending};
-  is(Bot::Runtime::Workbench::verified_final_report($bot, $pending, "I committed the change: $url"),
-    "I committed the change: $url", 'commit claims backed by a GitHub receipt are allowed');
+  like(Bot::Runtime::Workbench::verified_final_report($bot, $pending, "I committed the change: $url"),
+    qr/^I committed the change: \Q$url\E\n\[verified:/, 'commit claims backed by a GitHub receipt are allowed');
   like(Bot::Runtime::Workbench::verified_final_report($bot, $pending,
     'I committed it: https://github.com/o/r/commit/'.('f'x40)), qr/report withheld/,
     'a commit URL without a receipt is withheld');
@@ -141,7 +141,7 @@ sub broker {
     'uncertain writes notify the channel');
   ok(!$fresh->{pending}{coding_stop_reason}, 'uncertain GitHub writes do not stop the task');
   like(Bot::Runtime::Workbench::verified_final_report($fresh, $fresh->{pending}, 'I pushed the fix.'),
-    qr/report withheld/, 'an uncertain write is not a publication receipt');
+    qr/publication: none this task; uncertain write/, 'uncertain write status is authoritative');
   delete $reply{github_api};
 }
 

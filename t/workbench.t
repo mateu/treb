@@ -262,13 +262,13 @@ is($bot->{pending}{coding_receipts}{passed}{'d'x32}, 1, 'resume restores executi
 is($bot->{pending}{coding_receipts}{published}{'d'x32},
   'https://github.com/burt-agent/workspace/commit/'.('e'x40),
   'resume restores publication receipt');
-is(Bot::Runtime::Workbench::verified_final_report($bot, $bot->{pending},
+like(Bot::Runtime::Workbench::verified_final_report($bot, $bot->{pending},
   'Tests passed and the saved bundle was published.'),
-  'Tests passed and the saved bundle was published.', 'restored receipts support truthful report');
+  qr/^Tests passed and the saved bundle was published\.\n\[verified:/, 'restored receipts support truthful report');
 
 $bot->{pending} = {coding_task => 1, coding_last_result => 'No verified work result recorded.'};
 like(Bot::Runtime::Workbench::verified_final_report($bot, $bot->{pending}, 'Tests passed and I pushed it.'),
-  qr/report withheld/, 'unreceipted claims remain withheld');
+  qr/^Tests passed and I pushed it\.\n\[verified:/, 'prose verbs are not receipt claims');
 
 {
   $bot->{pending}=pending();
@@ -290,7 +290,7 @@ like(Bot::Runtime::Workbench::verified_final_report($bot, $bot->{pending}, 'Test
     'Both repo read and test failed twice.');
   like($report,qr/repo_run blocked: operator verification policy required/,'report preserves actual action and reason');
   like($report,qr/operator needs to add it/,'report includes concrete remedy');
-  unlike($report,qr/repo read|twice/,'unsupported model failure attribution is replaced');
+  like($report,qr/Both repo read and test failed twice/,'policy status does not replace model prose');
   like(Bot::Runtime::Workbench::finish_task($bot,$bot->{pending},'runtime_error'),
     qr/operator verification policy required/,'stop path also preserves policy reason');
   $bot->{pending}=pending();
@@ -300,6 +300,32 @@ like(Bot::Runtime::Workbench::verified_final_report($bot, $bot->{pending}, 'Test
   $defs{run_repo_project}{code}->($tool,$args);
   $defs{run_repo_project}{code}->($tool,$args);
   is($runs,2,'transient errors retain retry dispatch behavior');
+
+}
+
+{
+  my $p={coding_task=>1};
+  $bot->{pending}=$p;
+  Bot::Runtime::Workbench::report_result($bot,'repo_run',JSON::PP::encode_json({id=>'8'x32,state=>'passed',result=>{output=>"Files=23, Tests=1209\nResult: PASS"}}));
+  for my $text ('Nothing published - main already has it', 'No need to publish; already committed on main', 'already pushed to main', 'clean run - Result: PASS, 23 files, 1209 tests', 'v0.08 10.7k line 123') {
+    like(Bot::Runtime::Workbench::verified_final_report($bot,$p,$text),qr/^\Q$text\E\n\[verified:/,'prose preserved with status');
+  }
+  for my $case (['commit abc1234','commit abc1234'],['24 files','24 files'],['job '.('9'x32),'job '.('9'x32)],['https://github.com/burt-agent/workspace/commit/'.('a'x40),'URL']) {
+    my $v=Bot::Runtime::Workbench::verified_final_report($bot,$p,$case->[0]);
+    like($v,qr/report withheld:.*\Q$case->[1]\E/,'names unbacked artifact');
+    like($v,qr/\[verified: tests passed - job 88888888, 23 files\/1209 tests; publication: none this task\]/,'status survives withholding');
+  }
+  like(Bot::Runtime::Workbench::verified_final_report($bot,{coding_task=>1},'done'),qr/tests: no runs recorded/,'no run status');
+  Bot::Runtime::Workbench::report_result($bot,'repo_run',JSON::PP::encode_json({id=>'7'x32,state=>'failed'}));
+  like(Bot::Runtime::Workbench::verified_final_report($bot,$p,'done'),qr/tests failed - job 77777777/,'failed status');
+  my $url='https://gist.github.com/burt-agent/'.('a'x32);
+  Bot::Runtime::Workbench::report_result($bot,'publish',JSON::PP::encode_json({id=>'7'x32,state=>'published',url=>$url}));
+  like(Bot::Runtime::Workbench::verified_final_report($bot,$p,$url),qr/^\Q$url\E\n\[verified:.*publication: \Q$url\E/,'gist ID is not mistaken for a job and publication is rendered');
+  like(Bot::Runtime::Workbench::verified_final_report($bot,$p,'job 88888888'),qr/^job 88888888\n/,'unique explicit job prefix backed');
+  like(Bot::Runtime::Workbench::verified_final_report($bot,$p,'Files=23, Tests=1209'),qr/^Files=23, Tests=1209\n/,'paired harness counts backed');
+  like(Bot::Runtime::Workbench::verified_final_report($bot,$p,'PR #99'),qr/report withheld: PR #99/,'unbacked PR named');
+  Bot::Runtime::Workbench::report_result($bot,'publish',JSON::PP::encode_json({state=>'uncertain'}));
+  like(Bot::Runtime::Workbench::verified_final_report($bot,$p,'done'),qr/uncertain write/,'uncertain publication rendered');
 
 }
 
