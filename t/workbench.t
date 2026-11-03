@@ -310,11 +310,30 @@ like(Bot::Runtime::Workbench::verified_final_report($bot, $bot->{pending}, 'Test
   for my $text ('Nothing published - main already has it', 'No need to publish; already committed on main', 'already pushed to main', 'clean run - Result: PASS, 23 files, 1209 tests', 'v0.08 10.7k line 123') {
     like(Bot::Runtime::Workbench::verified_final_report($bot,$p,$text),qr/^\Q$text\E\n\[verified:/,'prose preserved with status');
   }
-  for my $case (['commit abc1234','commit abc1234'],['24 files','24 files'],['job '.('9'x32),'job '.('9'x32)],['https://github.com/burt-agent/workspace/commit/'.('a'x40),'URL']) {
+  for my $case (['commit abc1234','commit abc1234'],['24 files, 1209 tests','24 files/1209 tests'],['job '.('9'x32),'job '.('9'x32)],['https://github.com/burt-agent/workspace/commit/'.('a'x40),'URL']) {
     my $v=Bot::Runtime::Workbench::verified_final_report($bot,$p,$case->[0]);
     like($v,qr/report withheld:.*\Q$case->[1]\E/,'names unbacked artifact');
     like($v,qr/\[verified: tests passed - job 88888888, 23 files\/1209 tests; publication: none this task\]/,'status survives withholding');
   }
+  for my $text ('I edited 3 files', 'added 2 tests', 'mateu/treb PR #88 fixed the policy',
+      'pull request #88', 'https://github.com/mateu/treb/pull/88',
+      'https://github.com/other/repo/commit/'.('b'x40),
+      'https://gist.github.com/other/'.('b'x32),
+      '23 files/1209 tests', '23 files and 1209 tests') {
+    like(Bot::Runtime::Workbench::verified_final_report($bot,$p,$text),
+      qr/^\Q$text\E
+\[verified:/,'ordinary prose or backed paired counts preserved');
+  }
+  Bot::Runtime::Workbench::report_result($bot,'repo_read',JSON::PP::encode_json({
+    base_sha=>'be22ae6d'.('c'x32),tree_sha=>'abcdef12'.('d'x32),
+    files=>{'untrusted'=>'commit deadbee'}}),1);
+  for my $sha ('be22ae6d','abcdef12') {
+    like(Bot::Runtime::Workbench::verified_final_report($bot,$p,"commit $sha"),
+      qr/^commit $sha
+\[verified:/,'snapshot SHA prefix is backed');
+  }
+  like(Bot::Runtime::Workbench::verified_final_report($bot,$p,'commit deadbee'),
+    qr/report withheld: commit deadbee/,'snapshot file contents cannot back SHA');
   like(Bot::Runtime::Workbench::verified_final_report($bot,{coding_task=>1},'done'),qr/tests: no runs recorded/,'no run status');
   Bot::Runtime::Workbench::report_result($bot,'repo_run',JSON::PP::encode_json({id=>'7'x32,state=>'failed'}));
   like(Bot::Runtime::Workbench::verified_final_report($bot,$p,'done'),qr/tests failed - job 77777777/,'failed status');
@@ -323,7 +342,7 @@ like(Bot::Runtime::Workbench::verified_final_report($bot, $bot->{pending}, 'Test
   like(Bot::Runtime::Workbench::verified_final_report($bot,$p,$url),qr/^\Q$url\E\n\[verified:.*publication: \Q$url\E/,'gist ID is not mistaken for a job and publication is rendered');
   like(Bot::Runtime::Workbench::verified_final_report($bot,$p,'job 88888888'),qr/^job 88888888\n/,'unique explicit job prefix backed');
   like(Bot::Runtime::Workbench::verified_final_report($bot,$p,'Files=23, Tests=1209'),qr/^Files=23, Tests=1209\n/,'paired harness counts backed');
-  like(Bot::Runtime::Workbench::verified_final_report($bot,$p,'PR #99'),qr/report withheld: PR #99/,'unbacked PR named');
+  like(Bot::Runtime::Workbench::verified_final_report($bot,$p,'burt-agent/workspace#99'),qr/report withheld: PR burt-agent\/workspace#99/,'unbacked PR named');
   Bot::Runtime::Workbench::report_result($bot,'publish',JSON::PP::encode_json({state=>'uncertain'}));
   like(Bot::Runtime::Workbench::verified_final_report($bot,$p,'done'),qr/uncertain write/,'uncertain publication rendered');
 

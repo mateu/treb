@@ -230,6 +230,13 @@ sub report_result {
   $execution_state='' unless $execution_state =~ /\A(?:passed|failed)\z/;
   my $receipts=$pending->{coding_receipts}//={};
   $receipts->{jobs}{$id}=1 if $id;
+  # Snapshot identities are broker-returned metadata, never file contents.
+  if ($action eq 'repo_read' && !exists($r->{error})) {
+    for my $key (qw(base_sha tree_sha)) {
+      my $sha=$r->{$key}//'';
+      $receipts->{snapshot_shas}{lc $sha}=1 if $sha =~ /\A[a-f0-9]{40}\z/i;
+    }
+  }
   if ($id && $execution_state && $action =~ /\A(?:run|repo_(?:run|repair))\z/) {
     my $run={state=>$execution_state};
     # Consistency with recorded output, not proof against a malicious harness.
@@ -326,9 +333,10 @@ sub report_result {
 }
 
 # Extract only explicit artifacts: bare 32-hex job IDs, job-prefixed 8-32
-# hex prefixes, commit-prefixed 7-40 hex SHAs, canonical GitHub artifact URLs,
-# burt-agent owner/repo#N references and PR/pull request #N references, and
-# integer harness counts. Decimal/version/size/line numbers are not artifacts.
+# hex prefixes, commit-prefixed 7-40 hex SHAs, burt-agent GitHub artifact URLs
+# and owner/repo#N references. Counts require Files=N, Tests=M or an adjacent
+# N files/M tests pair (comma, slash, or "and"). Isolated counts and bare PR
+# numbers are prose. Decimal/version/size/line numbers are not artifacts.
 sub verified_final_report {
   my ($self,$pending,$answer)=@_;
   return $answer unless $pending && $pending->{coding_task};
@@ -336,6 +344,7 @@ sub verified_final_report {
   my %jobs=map { $_=>1 } map { keys %{$r->{$_}//{}} } qw(jobs runs passed published);
   my %urls=map { lc($_)=>1 } (keys %{$r->{github_commits}//{}}, values %{$r->{published}//{}}, keys %{$r->{urls}//{}});
   my @shas=map { m{/commit/([a-f0-9]{7,40})$} ? $1 : () } keys %urls;
+  @shas=keys %{ {map { $_=>1 } (@shas,keys %{$r->{snapshot_shas}//{}})} };
   my @bad;
   my $check_job=sub {
     my ($id)=@_; $id=lc $id;
@@ -350,7 +359,7 @@ sub verified_final_report {
     my $sha=lc $1;
     push @bad,"commit $sha is not in this task's receipts" unless (grep { index($_,$sha)==0 } @shas)==1;
   }
-  while ($answer =~ m{(https://(?:github\.com/[\w.-]+/[\w.-]+/(?:commit/[a-f0-9]{7,40}|pull/[1-9][0-9]*)|gist\.github\.com/[\w.-]+/[a-f0-9]+))(?![\w/])}gi) {
+  while ($answer =~ m{(https://(?:github\.com/burt-agent/[\w.-]+/(?:commit/[a-f0-9]{7,40}|pull/[1-9][0-9]*)|gist\.github\.com/burt-agent/[a-f0-9]+))(?![\w/])}gi) {
     my $url=lc $1;
     push @bad,"URL $url is not in this task's receipts" unless $urls{$url};
   }
@@ -358,23 +367,17 @@ sub verified_final_report {
     my $url='https://github.com/'.lc($1).'/pull/'.$2;
     push @bad,"PR $1#$2 is not in this task's receipts" unless $urls{$url};
   }
-  while ($answer =~ /\b(?:PR|pull\s+request)\s*#([1-9][0-9]*)\b/gi) {
-    my $n=$1;
-    push @bad,"PR #$n is not in this task's receipts" unless grep { m{^https://github\.com/burt-agent/[^/]+/pull/\Q$n\E$} } keys %urls;
-  }
-  my (@files,@tests);
   while ($answer =~ /\bFiles=(\d+),\s*Tests=(\d+)\b/gi) {
     my ($f,$t)=($1,$2);
     push @bad,"Files=$f, Tests=$t is not in this task's receipts" unless grep {
       defined($_->{files}) && $_->{files}==$f && $_->{tests}==$t
     } values %{$r->{runs}//{}};
   }
-  while ($answer =~ /(?<![\w.])(\d+)\s+(files|tests)\b/gi) { if (lc($2) eq 'files') { push @files,$1 } else { push @tests,$1 } }
-  my @runs=values %{$r->{runs}//{}};
-  for my $kind (['files',\@files],['tests',\@tests]) {
-    for my $n (@{$kind->[1]}) {
-      push @bad,"$n $kind->[0] is not in this task's receipts" unless grep { defined($_->{$kind->[0]}) && $_->{$kind->[0]}==$n } @runs;
-    }
+  while ($answer =~ /(?<![\w.])(\d+)\s+files\s*(?:,|\/|and)\s*(\d+)\s+tests\b/gi) {
+    my ($f,$t)=($1,$2);
+    push @bad,"$f files/$t tests is not in this task's receipts" unless grep {
+      defined($_->{files}) && $_->{files}==$f && $_->{tests}==$t
+    } values %{$r->{runs}//{}};
   }
   my $id=$pending->{coding_last_execution_job}//$pending->{coding_last_repo_job}//'';
   my $run=$r->{runs}{$id};

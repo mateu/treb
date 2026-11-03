@@ -129,7 +129,7 @@ sub broker {
   like(Bot::Runtime::Workbench::verified_final_report($bot, $pending, "I committed the change: $url"),
     qr/^I committed the change: \Q$url\E\n\[verified:/, 'commit claims backed by a GitHub receipt are allowed');
   like(Bot::Runtime::Workbench::verified_final_report($bot, $pending,
-    'I committed it: https://github.com/o/r/commit/'.('f'x40)), qr/report withheld/,
+    'I committed it: https://github.com/burt-agent/r/commit/'.('f'x40)), qr/report withheld/,
     'a commit URL without a receipt is withheld');
 
   my $fresh=bless {pending=>pending()}, 'GitHubBot';
