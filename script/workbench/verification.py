@@ -3,12 +3,16 @@ import hashlib
 import json
 from pathlib import Path
 
-from repository import validate_destination, validate_files
+from repository import validate_source, validate_files
 from runner import validate
 
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+# Exact operator opt-ins, not a branch pattern or publication authorization.
+CURRENT_VERIFIED_KEYS = frozenset({'burt/dictionary:dictionary', 'main:dictionary'})
 
 
 class Verification:
@@ -18,7 +22,8 @@ class Verification:
         self.runtime = self.runtime_identity()
         for key, policy in self.policies.items():
             branch, project = key.split(':')
-            validate_destination(branch, project, policy['base_sha'])
+            # main is a test source only; retain destination validation unchanged.
+            validate_source(branch, project, policy['base_sha'])
             validate_files(policy['baseline'])
             validate_files(policy['checks'])
             validate({'files': policy['checks'], 'argv': policy['argv']})
@@ -28,7 +33,7 @@ class Verification:
                     or any(p not in ('tests/', 't/') for p in policy['additions'])
                     or policy.get('source_baseline') not in (None, 'current_verified')
                     or (policy.get('source_baseline') == 'current_verified'
-                        and key != 'burt/dictionary:dictionary')
+                        and key not in CURRENT_VERIFIED_KEYS)
                     or not any(a.startswith('/checks/') for a in policy['argv'])):
                 raise ValueError('invalid verification policy')
 
@@ -45,7 +50,7 @@ class Verification:
             raise ValueError('operator verification policy required for this project')
         policy = self.policies[key]
         if policy.get('source_baseline') == 'current_verified':
-            # Dictionary's explicit opt-in advances only the effective baseline.
+            # An explicit allowlisted opt-in advances only the effective baseline.
             # The policy/checks themselves remain frozen; source comes only from
             # the broker-owned snapshot and its identity binds each test/publish.
             policy = json.loads(json.dumps(policy))
