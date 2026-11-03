@@ -159,7 +159,8 @@ sub finish_task {
     : 'Saved jobs: ' . join(', ',map { "$_->{id} ($_->{state})" } @$jobs) . '.';
   my $receipt=ref($checkpoint) eq 'HASH' && ($checkpoint->{checkpoint_id}//'') =~ /\A[a-f0-9]{32}\z/
     ? " Checkpoint: $checkpoint->{checkpoint_id}." : '';
-  return $saved . $receipt . ' This task is not continuing.';
+  my $blocked=$pending->{coding_policy_block}//'';
+  return $blocked . (length($blocked) ? ' ' : '') . $saved . $receipt . ' This task is not continuing.';
 }
 
 # The broker is authoritative; this mirrors BURT_GITHUB_WRITERS only to fail
@@ -251,6 +252,15 @@ sub report_result {
         $notice.="; GitHub HTTP $status: $message" . (length($request_id) ? " [request $request_id]" : '');
       }
     }
+    if (exists($r->{retryable}) && !$r->{retryable} && ($r->{disposition}//'') eq 'terminal') {
+      # Only broker-controlled policy metadata, never source/output or exceptions.
+      my $detail=join('; ',grep { defined && !ref && length } $r->{reason},$r->{required_action});
+      $detail =~ s/\s+/ /g;
+      $detail =~ s/[^[:print:]]//g;
+      $detail=substr($detail,0,700);
+      $notice.="; $detail; not retryable; do not repeat this request; tell the requester";
+      $pending->{coding_policy_block}="$action blocked: $detail. Not retried; operator action required.";
+    }
     if (($r->{disposition}//'') eq 'terminal') {
       $pending->{coding_stop_reason}='Workbench request cannot be retried in this task';
     }
@@ -302,6 +312,7 @@ sub report_result {
 sub verified_final_report {
   my ($self,$pending,$answer)=@_;
   return $answer unless $pending && $pending->{coding_task};
+  return $pending->{coding_policy_block} if $pending->{coding_policy_block};
   my $receipts=$pending->{coding_receipts}//{};
   my $claims_pass=0;
   while ($answer =~ /\b(?:tests?|suite|verification)\s+(?:all\s+)?pass(?:ed|es)?\b/gi) {
@@ -525,9 +536,19 @@ sub tool_specs {
           require_admitted_task($self,$action) if $action =~ /\A(?:run|repo_(?:run|repair|diagnose))\z/;
           die "GitHub writes require an allowlisted trusted requester\n"
             if github_write_request($action,$args) && !github_writer($requester);
-          task_notice($self,$self->_pending_raid,"$action started.") unless $action =~ /\A(?:repo_(?:read|inspect)|reference|github_\w+)\z/;
           $publication_attempted=1 if $action eq 'publish';
-          my $raw=broker_call({%$args,action=>$action,scope=>$scope,requester=>$requester,channel=>lc($pending->{channel}),network=>'irc.perl.org'});
+          my $request={%$args,action=>$action,scope=>$scope,requester=>$requester,channel=>lc($pending->{channel}),network=>'irc.perl.org'};
+          my $fingerprint=JSON::PP->new->canonical->encode($request);
+          my $blocked=$pending->{coding_rejected_requests}//={};
+          return $tool->text_result($blocked->{$fingerprint}) if exists $blocked->{$fingerprint};
+          task_notice($self,$self->_pending_raid,"$action started.") unless $action =~ /\A(?:repo_(?:read|inspect)|reference|github_\w+)\z/;
+          my $raw=broker_call($request);
+          my $rejection=eval { JSON::PP::decode_json($raw) };
+          if (ref($rejection) eq 'HASH' && ($rejection->{rejection_schema}//'') eq '1'
+              && exists($rejection->{retryable}) && !$rejection->{retryable}
+              && ($rejection->{disposition}//'') eq 'terminal') {
+            $blocked->{$fingerprint}=$raw;
+          }
           report_result($self,$action,$raw,
             $action =~ /\A(?:repo_(?:read|inspect)|reference|github_\w+)\z/);
           $raw;

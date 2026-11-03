@@ -13,6 +13,19 @@ import test_verification as fixtures
 
 class RejectionAuditTests(unittest.TestCase):
     setUp = fixtures.VerificationTests.setUp
+    def test_operator_policy_rejections_are_immediately_terminal(self):
+        from broker import NON_RETRYABLE_POLICY
+        for reason, action in NON_RETRYABLE_POLICY.items():
+            result = self.b.record_rejection(self.req, ValueError(reason))
+            self.assertEqual(result['reason'], reason)
+            self.assertEqual(result['required_action'], action)
+            self.assertFalse(result['retryable'])
+            self.assertEqual(result['disposition'], 'terminal')
+            self.assertIn('do not repeat', result['instruction'])
+        transient = self.b.record_rejection(self.req | {'scope': 'f' * 64}, TimeoutError('temporary'))
+        self.assertEqual(transient['disposition'], 'retryable')
+        self.assertNotIn('retryable', transient)
+
     def records(self):
         return [dict(row) for row in self.b.db.execute('SELECT * FROM rejections ORDER BY seq')]
 
