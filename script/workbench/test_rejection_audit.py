@@ -22,7 +22,7 @@ class RejectionAuditTests(unittest.TestCase):
             self.assertFalse(result['retryable'])
             self.assertEqual(result['disposition'], 'terminal')
             self.assertIn('do not repeat', result['instruction'])
-        transient = self.b.record_rejection(self.req, TimeoutError('temporary'))
+        transient = self.b.record_rejection(self.req | {'scope': 'f' * 64}, TimeoutError('temporary'))
         self.assertEqual(transient['disposition'], 'retryable')
         self.assertNotIn('retryable', transient)
 
