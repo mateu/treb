@@ -354,7 +354,10 @@ sub verified_final_report {
   };
   my $plain=$answer;
   $plain =~ s{https://[^\s<>]+}{}g;
-  while ($plain =~ /(?<![a-z0-9])([a-f0-9]{32})(?![a-z0-9])/gi) { $check_job->($1) }
+  # Explicit commit labels disambiguate even a 32-hex SHA prefix from a job.
+  my $job_plain=$plain;
+  $job_plain =~ s/\bcommit(?:\s+SHA)?\s+[a-f0-9]{7,40}(?![a-z0-9])//gi;
+  while ($job_plain =~ /(?<![a-z0-9])([a-f0-9]{32})(?![a-z0-9])/gi) { $check_job->($1) }
   while ($plain =~ /\bjob\s+([a-f0-9]{8,32})(?![a-z0-9])/gi) { $check_job->($1) }
   while ($plain =~ /\bcommit(?:\s+SHA)?\s+([a-f0-9]{7,40})(?![a-z0-9])/gi) {
     my $sha=lc $1;

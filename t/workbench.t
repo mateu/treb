@@ -341,7 +341,7 @@ like(Bot::Runtime::Workbench::verified_final_report($bot, $bot->{pending}, 'Test
   Bot::Runtime::Workbench::report_result($bot,'repo_read',JSON::PP::encode_json({
     base_sha=>'be22ae6d'.('c'x32),tree_sha=>'abcdef12'.('d'x32),
     files=>{'untrusted'=>'commit deadbee'}}),1);
-  for my $sha ('be22ae6d','abcdef12') {
+  for my $sha ('be22ae6d','abcdef12','be22ae6d'.('c'x24)) {
     like(Bot::Runtime::Workbench::verified_final_report($bot,$p,"commit $sha"),
       qr/^commit $sha
 \[verified:/,'snapshot SHA prefix is backed');
