@@ -763,9 +763,9 @@ for my $ending (qw(error silent empty deadline report)) {
     input=>'code',messages=>[{nick=>'mateu',channel=>'#ai',msg=>'run tests',source_kind=>'conversation'}]};
   my $bot=Local::RaidFlowBot->new(pending=>$pending,replies=>['Tests passed.']);
   do_raid(self=>$bot);
-  like($bot->{sent}[-1]{msg},qr/report withheld/,'unverified report is withheld before delivery');
-  like($bot->{memory}{rows}[0]{response},qr/report withheld/,'stored history matches withheld delivery');
-  unlike($bot->{memory}{rows}[0]{response},qr/^Tests passed\.$/,'unsupported claim is never stored');
+  like($bot->{sent}[-1]{msg},qr/^Tests passed\.\n\[verified: tests: no runs recorded/,'prose gets authoritative status before delivery');
+  like($bot->{memory}{rows}[0]{response},qr/\[verified: tests: no runs recorded/,'stored history includes authoritative status');
+  unlike($bot->{memory}{rows}[0]{response},qr/^Tests passed\.$/,'bare prose is never stored without status');
 }
 
 done_testing;
