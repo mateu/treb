@@ -78,6 +78,12 @@ def validate_destination(branch, project, base_sha=None):
         raise ValueError('invalid base commit')
 
 
+def validate_source(branch, project, base_sha=None):
+    """Read-only main dictionary source; never use for publication."""
+    validate_destination('burt/dictionary' if (branch, project) == ('main', 'dictionary')
+                         else branch, project, base_sha)
+
+
 def validate_files(files):
     if not isinstance(files, dict) or not 1 <= len(files) <= 32:
         raise ValueError('project requires 1..32 text files')
@@ -320,7 +326,7 @@ class Repository:
             if root:
                 safe_file_path(root)
         else:
-            validate_destination(branch, project)
+            validate_source(branch, project)
             repo, root = REPO, 'projects/' + project
         self.deadline = time.monotonic() + 14
         if explicit:
@@ -379,6 +385,9 @@ class Repository:
             content = base64.b64decode(blob['content']).decode('utf-8')
             files[relative] = content
             validate_files(files)
+        # Only the canonical workspace's exact project root maps to a policy key.
+        if explicit and repo == REPO and re.fullmatch(r'projects/[a-z0-9][a-z0-9-]{0,59}', root):
+            project = root.split('/')[1]
         result = dict(repository=repo, repo=repo, ref=branch, path=root, default_branch=default_branch,
                       explicit_repo=explicit, branch=branch, project=project or '', base_sha=sha,
                       exists=exists, tree_sha=tree_sha, files=files)

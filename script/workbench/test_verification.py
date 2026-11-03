@@ -96,6 +96,77 @@ class VerificationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'protected baseline file changed'):
             self.b.handle(self.req | {'changes': {'data.txt': 'weakened'}, 'title': 'tamper'})
 
+    def test_explicit_workspace_snapshots_resolve_policy_project_only_at_exact_root(self):
+        self.repo.exists = True
+        for branch in ('burt/dictionary', 'main'):
+            policy = copy.deepcopy(self.policy)
+            policy['source_baseline'] = 'current_verified'
+            self.b.verification = Verification({branch + ':dictionary': policy})
+            original = self.repo.api
+            with patch.object(self.repo, 'api', wraps=original) as api:
+                api.side_effect = lambda path, *a, **kw: (
+                    {'default_branch': 'main'} if path == '/repos/burt-agent/workspace'
+                    else original(path, *a, **kw))
+                snapshot = self.b.handle(self.request('repo_read') | {
+                    'repo': 'burt-agent/workspace', 'ref': branch, 'path': 'projects/dictionary'})
+                self.assertEqual(snapshot['project'], 'dictionary')
+                job = self.b.handle(self.req | {'snapshot_id': snapshot['snapshot_id'], 'title': branch})
+                self.assertEqual(job['state'], 'failed')  # frozen failing checks actually ran
+
+    def test_unrelated_explicit_roots_do_not_inherit_policy(self):
+        self.repo.exists = True
+        for repo, root in (('other/workspace', 'projects/dictionary'),
+                           ('burt-agent/workspace', 'projects/dictionary/nested'),
+                           ('burt-agent/workspace', 'other/dictionary')):
+            original = self.repo.api
+            def api(path, *args, **kwargs):
+                if path == '/repos/' + repo:
+                    return {'default_branch': 'main'}
+                if '/git/trees/' in path:
+                    return {'tree': [dict(path=root + '/file.txt', mode='100644',
+                                         type='blob', size=8, sha='1' * 40)], 'truncated': False}
+                return original(path.replace('/repos/' + repo, '/repos/burt-agent/workspace'), *args, **kwargs)
+            with patch.object(self.repo, 'api', side_effect=api):
+                snapshot = self.repo.snapshot(repo=repo, ref='burt/dictionary', path=root)
+                self.assertEqual(snapshot['project'], '')
+                with self.assertRaisesRegex(ValueError, 'policy required'):
+                    self.gate.policy(snapshot)
+
+    def test_main_current_snapshot_is_test_only(self):
+        policy = copy.deepcopy(self.policy)
+        policy['source_baseline'] = 'current_verified'
+        self.b.verification = Verification({'main:dictionary': policy})
+        self.repo.head = 'b' * 40
+        self.repo.files['data.txt'] = 'advanced main fixture'
+        self.snapshot = self.b.handle(self.request('repo_read') | {
+            'branch': 'main', 'project': 'dictionary'})
+        self.req['snapshot_id'] = self.snapshot['snapshot_id']
+        self.b.verify_execute = lambda job, checks: {'reason': 'exited', 'exit_code': 0}
+        job = self.b.handle(self.req | {'changes': {'main.py': 'print(2)'}})
+        self.assertEqual(job['state'], 'passed')
+        self.assertEqual(self.executions, [])
+        with self.assertRaisesRegex(ValueError, 'protected baseline'):
+            self.b.handle(self.req | {'changes': {'data.txt': 'tamper'}, 'title': 'tamper'})
+        for branch in ('main', 'burt/dictionary', 'other'):
+            with self.assertRaisesRegex(ValueError, 'test-only'):
+                self.b.tested_commit_candidate(self.request('github_commit_files') | {
+                    'from_job': job['id'], 'repo': 'burt-agent/workspace', 'branch': branch})
+        with self.assertRaisesRegex(ValueError, 'destination does not match'):
+            self.b.handle(self.request('publish') | {'id': job['id']})
+        self.assertEqual(self.b.db.execute('SELECT count(*) FROM repository_candidates').fetchone()[0], 0)
+        with self.assertRaisesRegex(ValueError, 'unambiguous'):
+            self.b.direct_repository_publication_job(self.request('github_commit_files'))
+        with self.assertRaisesRegex(ValueError, 'main is never writable'):
+            self.repo.publish(self.snapshot, self.files, 'no')
+
+    def test_dictionary_passed_job_still_supplies_tested_commit(self):
+        self.b.verify_execute = lambda job, checks: {'reason': 'exited', 'exit_code': 0}
+        job = self.b.handle(self.req)
+        candidate = self.b.tested_commit_candidate(self.request('github_commit_files') | {
+            'from_job': job['id'], 'repo': 'burt-agent/workspace', 'branch': 'burt/dictionary'})
+        self.assertEqual(candidate['job_id'], job['id'])
+        self.assertFalse(candidate['require_new_branch'])
+
     def test_invalid_source_baseline_mode_fails_closed(self):
         invalid = copy.deepcopy(self.policy)
         invalid['source_baseline'] = 'anything'

@@ -14,7 +14,7 @@ import urllib.request
 import uuid
 
 from runner import run, validate, MAX_JSON_BYTES, MAX_INPUT_BYTES, MAX_GIST_INPUT_BYTES, InputSizeError
-from repository import GitHubHTTPRejected, Repository, validate_destination, validate_files
+from repository import GitHubHTTPRejected, Repository, validate_destination, validate_source, validate_files
 from github import GitHub, GitHubError, GitHubHTTPError, GitHubPolicyError, GitHubTransportError, classify
 from verification import Verification
 from references import References, CATALOG
@@ -698,6 +698,8 @@ class Broker:
             destination = json.loads(self.db.execute('SELECT destination FROM repo_jobs WHERE id=?',
                                                      (job['id'],)).fetchone()['destination'])
             key = self.repository_candidate_key(destination)
+            if destination.get('branch') == 'main':
+                continue
             indexed_destinations.add(key)
             if job['state'] in ('publishing', 'uncertain'):
                 blocked_destinations.add(key)
@@ -712,7 +714,7 @@ class Broker:
         for row in rows:
             destination = json.loads(self.db.execute('SELECT destination FROM repo_jobs WHERE id=?',
                                                      (row['id'],)).fetchone()['destination'])
-            if destination.get('diagnostic_only'):
+            if destination.get('diagnostic_only') or destination.get('branch') == 'main':
                 continue
             key = self.repository_candidate_key(destination)
             if destination.get('candidate_material') is True:
@@ -758,7 +760,8 @@ class Broker:
         lineage. The candidate remains bound to the originating requester,
         IRC channel/network, and fixed repository destination.
         """
-        if destination.get('diagnostic_only') or not destination.get('candidate_material'):
+        if (destination.get('branch') == 'main' or destination.get('diagnostic_only')
+                or not destination.get('candidate_material')):
             return
         binding = self.task_binding(req['scope'])
         # An identity-bound task receipt is required for cross-request
@@ -960,6 +963,8 @@ class Broker:
         if not row or job['state'] != 'passed':
             raise GitHubError('from_job requires a passed repository job')
         destination = json.loads(row['destination'])
+        if destination.get('branch') == 'main':
+            raise GitHubError('main verification jobs are test-only')
         if destination.get('diagnostic_only'):
             raise GitHubError('diagnostic jobs cannot supply tested commits')
         snapshot = self.load_snapshot(req, destination['snapshot_id'], require_active=False)
@@ -1274,7 +1279,7 @@ class Broker:
             if 'repo' not in req:
                 if 'ref' in req or 'path' in req:
                     raise ValueError('ref/path require repo')
-                validate_destination(req.get('branch'), req.get('project'))
+                validate_source(req.get('branch'), req.get('project'))
             return self.create_snapshot(req)
         if action == 'repo_run':
             snapshot = self.load_snapshot(req, req['snapshot_id'], require_active=not _saved_snapshot)

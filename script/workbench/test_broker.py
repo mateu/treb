@@ -25,6 +25,20 @@ class BrokerTests(unittest.TestCase):
                         files={'main.py': 'print(42)\n', 'test.py': 'assert 6*7==42\n'},
                         argv=['/usr/bin/python3', '/work/test.py'], title='test')
 
+    def test_main_dictionary_read_does_not_approve_execution(self):
+        from test_repository import FakeRepository
+        from verification import Verification
+        self.b.repository = FakeRepository()
+        self.b.repository.files = {'main.py': 'print(1)'}
+        self.b.verification = Verification({})
+        snapshot = self.b.handle(self.envelope('repo_read') | {
+            'branch': 'main', 'project': 'dictionary'})
+        with self.assertRaisesRegex(ValueError, 'operator verification policy required for this project'):
+            self.b.handle(self.envelope('repo_run') | {
+                'snapshot_id': snapshot['snapshot_id'], 'changes': {}, 'delete': [],
+                'argv': ['/usr/bin/python3', '/work/main.py'], 'title': 'unapproved'})
+        self.assertEqual(self.runs, [])
+
     def post(self, payload):
         self.posts.append(payload)
         return 'https://gist.github.com/burt-agent/abcdef'
