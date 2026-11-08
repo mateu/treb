@@ -520,3 +520,23 @@ The optional local::lib mount requires an absolute source (override with
 on the source, `lib`, and `lib/perl5`; symlinks at these directories
 are rejected. Missing/unsafe trees are skipped; runner
 results report `perl5: mounted|skipped` without disclosing the host path.
+
+### Limit report
+
+A daily operator report summarizes new `WORKBENCH_LIMIT` journal lines (see
+above) without a model. Install it with
+`install -m 600 script/workbench/limit_report.py ~/.local/share/burt-workbench/limit_report.py`,
+then create one OpenClaw command job: daily `0 8 * * *` `--tz America/Denver`,
+`--name burt-workbench-limit-report`, argv
+`["/usr/bin/python3","-I","/home/hunter/.local/share/burt-workbench/limit_report.py"]`,
+`--announce --channel telegram --to 8197479972`. A quiet run prints exactly
+`NO_REPLY`, which OpenClaw's command-job delivery suppresses; a run with new
+events prints a plain-text summary.
+
+The script tracks its own position with a cursor file, default
+`~/.local/share/burt-workbench/limit-report.cursor`, overridable with
+`--cursor-file`. On the first run (cursor file missing or empty) it reads the
+last 24 hours; afterwards it resumes from the saved `journalctl` cursor. The
+cursor only advances after a successful `journalctl` run that returned at
+least one record; a failed run or a quiet run leaves it unchanged. Delete the
+cursor file to reset the report to the last 24 hours.
