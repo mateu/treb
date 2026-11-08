@@ -350,5 +350,62 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(result['state'],'failed')
         with self.assertRaises(ValueError): self.publish(result)
 
+
+class LimitLoggingTests(unittest.TestCase):
+    """AC-3: each of six limit kinds writes exactly one metadata-only line."""
+    setUp = BrokerTests.setUp
+    envelope = BrokerTests.envelope
+    post = BrokerTests.post
+
+    def captured_limit_lines(self, fn):
+        import contextlib
+        import io
+        buf = io.StringIO()
+        result = None
+        with contextlib.redirect_stderr(buf):
+            try:
+                result = fn()
+            except Exception as exc:
+                result = exc
+        lines = [line for line in buf.getvalue().splitlines() if line.startswith('WORKBENCH_LIMIT ')]
+        return result, [json.loads(line[len('WORKBENCH_LIMIT '):]) for line in lines]
+
+    def test_time_limit_event(self):
+        self.b.execute = lambda job: {'reason': 'time_limit', 'exit_code': 1, 'output': '',
+                                      'elapsed_seconds': 20.1}
+        job, events = self.captured_limit_lines(lambda: self.b.handle(self.req))
+        self.assertEqual(events, [{'action': 'run', 'channel': '#ai', 'job': job['id'], 'kind': 'time_limit',
+                                   'limit': 20, 'scope': self.req['scope'][:12], 'unit': 's', 'value': 20.1}])
+
+    def test_memory_limit_event(self):
+        self.b.execute = lambda job: {'reason': 'memory_limit', 'exit_code': 1, 'output': ''}
+        job, events = self.captured_limit_lines(lambda: self.b.handle(self.req))
+        self.assertEqual(events, [{'action': 'run', 'channel': '#ai', 'job': job['id'], 'kind': 'memory_limit',
+                                   'limit': 268435456, 'scope': self.req['scope'][:12], 'unit': 'bytes', 'value': None}])
+
+    def test_output_limit_event(self):
+        self.b.execute = lambda job: {'reason': 'output_limit', 'exit_code': 0, 'output': 'x' * 100}
+        job, events = self.captured_limit_lines(lambda: self.b.handle(self.req))
+        self.assertEqual(events, [{'action': 'run', 'channel': '#ai', 'job': job['id'], 'kind': 'output_limit',
+                                   'limit': 65536, 'scope': self.req['scope'][:12], 'unit': 'bytes', 'value': None}])
+
+    def test_input_bytes_event(self):
+        from runner import InputSizeError
+        oversized = self.req | {'files': {'main.py': 'x' * 65537}, 'title': 'too big'}
+        exc, events = self.captured_limit_lines(lambda: self.b.handle(oversized))
+        self.assertIsInstance(exc, InputSizeError)
+        self.assertEqual(events, [{'action': 'run', 'channel': '#ai', 'job': None, 'kind': 'input_bytes',
+                                   'limit': 65536, 'scope': self.req['scope'][:12], 'unit': 'bytes', 'value': 65537}])
+        self.assertEqual(exc.rejection['reason'], str(exc))
+
+    def test_file_count_event(self):
+        too_many = self.req | {'files': {f'f{i}.py': 'x' for i in range(33)}, 'title': 'too many'}
+        exc, events = self.captured_limit_lines(lambda: self.b.handle(too_many))
+        self.assertIsInstance(exc, ValueError)
+        self.assertEqual(str(exc), 'files must contain 1..32 text files')
+        self.assertEqual(events, [{'action': 'run', 'channel': '#ai', 'job': None, 'kind': 'file_count',
+                                   'limit': 32, 'scope': self.req['scope'][:12], 'unit': 'files', 'value': None}])
+        self.assertEqual(exc.rejection['reason'], 'files must contain 1..32 text files')
+
 if __name__ == '__main__':
     unittest.main()
