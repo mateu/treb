@@ -19,6 +19,8 @@ import sys
 import threading
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from broker import Broker, Handler
 from repository import validate_destination, validate_files
 from runner import run, validate
@@ -170,8 +172,8 @@ def namespace_command(repo, state, ipc, config, env_file, perl_root):
                            (repo / 'burt.persona.txt', '/app/burt.persona.txt'),
                            (repo / 'burt.mission.txt', '/app/burt.mission.txt'),
                            (env_file, '/app/burt.env'),
-                           (repo / 'script/workbench/reliability-trial.pl', '/trial.pl'),
-                           (repo / 'script/workbench/ExperimentPlugin.pm', '/ExperimentPlugin.pm'),
+                           (repo / 'script/workbench/research/reliability-trial.pl', '/trial.pl'),
+                           (repo / 'script/workbench/research/ExperimentPlugin.pm', '/ExperimentPlugin.pm'),
                            (config, '/trial.json'), (ipc, '/broker')):
         args += ['--ro-bind', str(source), target]
     args += ['--bind', str(state), '/state', '--size', '33554432', '--tmpfs', '/tmp',
@@ -226,7 +228,8 @@ def usage_summary(state):
     return responses
 
 
-def run_trial(task_path, arm, model, output, repo, env_file, perl_root, trial_identity=None,
+def run_trial(task_path, arm, model, output, repo, env_file, perl_root, evaluate, score_candidate,
+              broker_class=ExperimentBroker, trial_identity=None,
               experiment_manifest_sha256=None, expected_effective_route=None):
     task = load_task(task_path)
     output.mkdir(parents=True, mode=0o700, exist_ok=False)
@@ -248,7 +251,7 @@ def run_trial(task_path, arm, model, output, repo, env_file, perl_root, trial_id
         scope='offline seeded-repository repair, production mission + no-publish Workbench subset',
         usage_cost='Provider token usage recorded when exposed; monetary cost unavailable')
     write_json(output / 'manifest.json', manifest)
-    b = ExperimentBroker(output, task, deadline)
+    b = broker_class(output, task, deadline)
     socket_path = ipc / 'broker.sock'
     # AF_UNIX path length is limited; require a short output root.
     if len(str(socket_path).encode()) >= 104:

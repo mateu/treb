@@ -14,6 +14,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from broker import reconcile_pending_pull_request
 from repository import TOKEN, PULL_TOKEN, GitHubHTTPRejected, Repository, validate_destination, validate_files
+from workbench_test_support import envelope as _envelope
 import test_broker
 
 A, B, C, D = (c*40 for c in 'abcd')
@@ -293,8 +294,8 @@ class RepositoryBrokerTests(unittest.TestCase):
                   argv=['/bin/sh','-c','true'],title='repository test')
 
     def envelope(self, action, scope=None, channel=None, network=None, requester='mateu'):
-        return {'action': action, 'scope': scope or self.req['scope'], 'requester': requester,
-                'channel': channel or self.req['channel'], 'network': network or self.req['network']}
+        return _envelope(action, scope or self.req['scope'], channel or self.req['channel'],
+                         network or self.req['network'], requester)
 
     def request(self, action):
         return self.envelope(action)

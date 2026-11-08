@@ -3,6 +3,7 @@ import json
 import unittest
 
 from runner import validate, InputSizeError, MAX_INPUT_BYTES, MAX_JSON_BYTES
+from workbench_test_support import envelope
 import test_repository
 import test_rejection_audit
 
@@ -52,14 +53,9 @@ class InputLimitTests(unittest.TestCase):
         self.assertLess(len(json.dumps(job).encode()), MAX_JSON_BYTES)
 
 
-def envelope(action, scope, channel, network, requester='mateu'):
-    return {'action': action, 'scope': scope, 'requester': requester,
-            'channel': channel, 'network': network}
-
-
 class LargeBundleBrokerTests(unittest.TestCase):
-    envelope = staticmethod(envelope)
     setUp = test_repository.RepositoryBrokerTests.setUp
+    envelope = test_repository.RepositoryBrokerTests.envelope
     post = test_repository.RepositoryBrokerTests.post
     repair = test_repository.RepositoryBrokerTests.repair
     def test_repair_inspect_publish_and_overflow(self):

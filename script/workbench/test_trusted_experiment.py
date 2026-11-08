@@ -1,6 +1,11 @@
+from pathlib import Path
+import sys
 import tempfile
 import time
 import unittest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / 'research'))
+
 from trusted_experiment import TrialBroker, score, evaluator_verdict, req
 from broker import Broker
 from trial_support import Snapshot

@@ -160,12 +160,6 @@ sub install_shared_delegates {
         allow_bare => $self->_handles_bare_utility_commands,
       );
     },
-    _send_to_channel_max_line => sub {
-      return $ENV{MAX_LINE_LENGTH} || 400;
-    },
-    _send_to_channel_return_cumulative => sub {
-      return 0;
-    },
     _send_to_channel => sub {
       my ($self, $channel, $text) = @_;
       return Bot::Runtime::Dispatch::send_to_channel(
@@ -219,10 +213,6 @@ sub install_shared_delegates {
       my ($self, $key) = @_;
       return Bot::Runtime::PersonaTools::persona_trait($self->_persona_runtime_args, key => $key);
     },
-    _persona_stats_text => sub {
-      my ($self) = @_;
-      return Bot::Runtime::PersonaTools::persona_stats_text($self->_persona_runtime_args);
-    },
     _persona_text => sub {
       my ($self) = @_;
       return Bot::Runtime::PersonaTools::persona_text($self->_persona_runtime_args);
@@ -266,9 +256,6 @@ sub install_shared_delegates {
     },
     _store_empty_response_rows_enabled => sub {
       return Bot::Runtime::Policy::store_empty_response_rows_enabled();
-    },
-    _cleanup_logging_enabled => sub {
-      return Bot::Runtime::Policy::cleanup_logging_enabled();
     },
     _cleanup_log_preview => sub {
       my ($self, $text) = @_;
