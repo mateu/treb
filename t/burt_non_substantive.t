@@ -2,9 +2,9 @@ use strict;
 use warnings;
 use utf8;
 use Test::More;
+use File::Temp qw(tempdir);
 
-local $ENV{DB_FILE} = 't/burt_non_substantive.sqlite';
-unlink $ENV{DB_FILE} if -f $ENV{DB_FILE};
+local $ENV{DB_FILE} = tempdir(CLEANUP => 1) . '/burt_non_substantive.sqlite';
 local $ENV{IRC_NICKNAME} = 'burt_bot';
 local $ENV{BOT_IDENTITY_SLUG} = 'burt';
 

@@ -106,11 +106,18 @@ process exits with a 10-second delay, and preserves the original sandbox.
 The existing `run-burt.sh` still loads Perl dependencies and `burt.env`.
 The IRC library's Connector plugin retries lost/failed IRC connections.
 
-Install/update the unit from this checkout (expected at `~/dev/treb`):
+`script/burt-sandbox.service` is fail-closed: its base `ExecStart` only prints a
+refusal and exits 1. It only starts the real bot once
+`script/burt-sandbox.service.d/80-workbench.conf.example` is installed as a
+drop-in with `RELEASE` filled in (see the "Deployment record" section of
+`note/BURT_WORKBENCH.md`). Install/update the unit and drop-in from this
+checkout (expected at `~/dev/treb`):
 
 ```sh
-mkdir -p ~/.config/systemd/user
+mkdir -p ~/.config/systemd/user/burt-sandbox.service.d
 install -m 644 script/burt-sandbox.service ~/.config/systemd/user/burt-sandbox.service
+sed 's/RELEASE/<12-char-release-dir>/' script/burt-sandbox.service.d/80-workbench.conf.example \
+  > ~/.config/systemd/user/burt-sandbox.service.d/80-workbench.conf
 systemctl --user daemon-reload
 systemctl --user enable --now burt-sandbox.service
 ```
