@@ -238,6 +238,14 @@ attribution, the bot's own questions and offers, unanswered questions, and open
 threads. Older exact lines remain reachable through `search_quotes`, which the
 base persona tells the bot to use before answering about earlier conversation.
 
+### History budget
+
+Each bot summarizes its stored Raider history once a prompt passes 75% of its
+token budget. Set `CONTEXT_TOKENS` (8192–65536, default 32768) in any profile's
+environment to change it; an invalid value stops startup. Burt also still
+accepts its original `BURT_CONTEXT_TOKENS`, which `CONTEXT_TOKENS` overrides.
+Larger budgets mean fewer summaries but a larger prompt on every reply.
+
 ### Open-question ledger
 
 Tools: `create_question`, `list_questions`, and `update_question`.

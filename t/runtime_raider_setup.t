@@ -138,7 +138,7 @@ use Bot::Runtime::RaiderSetup (qw(setup_raider));
 subtest 'setup_raider wires mcp, mission, and raider with defaults' => sub {
     local %ENV = %ENV;
     delete $ENV{FALLBACK_MODELS};
-    delete @ENV{qw(ENGINE MODEL API_KEY OLLAMA_URL SYSTEM_PROMPT)};
+    delete @ENV{qw(ENGINE MODEL API_KEY OLLAMA_URL SYSTEM_PROMPT CONTEXT_TOKENS BURT_CONTEXT_TOKENS)};
 
     my @loaded;
     no warnings 'redefine';
@@ -161,7 +161,7 @@ subtest 'setup_raider wires mcp, mission, and raider with defaults' => sub {
     ok($bot->{mcp}{initialized}, 'mcp initialize awaited');
 
     ok($raider, 'raider returned');
-    is($raider->{max_context_tokens}, 8192, 'default max context tokens used');
+    is($raider->{max_context_tokens}, 32768, 'default max context tokens used');
     is($raider->{engine}{model}, 'llama-3.3-70b-versatile', 'default model applied');
     is_deeply($raider->{engine}{mcp_servers}, [$bot->{mcp}], 'engine receives mcp server list');
 
@@ -233,7 +233,7 @@ subtest 'setup_raider respects Ollama-specific args and custom context' => sub {
 
 subtest 'operator Burt budget is opt-in and does not affect other profiles' => sub {
     local %ENV = %ENV;
-    delete $ENV{FALLBACK_MODELS};
+    delete @ENV{qw(FALLBACK_MODELS CONTEXT_TOKENS)};
     no warnings 'redefine';
     local *Bot::Runtime::RaiderSetup::use_module = sub { return 1 };
     my $bot = TestRuntimeSetupBot->new;
@@ -241,10 +241,11 @@ subtest 'operator Burt budget is opt-in and does not affect other profiles' => s
                 script_file => '/tmp/burt.pl');
     $bot->{bot_slug} = 'burt';
     delete $ENV{BURT_CONTEXT_TOKENS};
-    is(setup_raider(%args)->{max_context_tokens}, 8192, 'unset leaves Burt unchanged');
+    is(setup_raider(%args)->{max_context_tokens}, 32768, 'unset gives Burt the shared default');
+    $ENV{BURT_CONTEXT_TOKENS} = '16384';
+    is(setup_raider(%args)->{max_context_tokens}, 16384, 'Burt receives configured compactor budget');
     $ENV{BURT_CONTEXT_TOKENS} = '32768';
     my $raider = setup_raider(%args);
-    is($raider->{max_context_tokens}, 32768, 'Burt receives configured compactor budget');
     is($raider->{max_iterations}, 26, 'Burt receives the expanded tool iteration limit');
     like($bot->{infos}[-1], qr/32768 tokens; max iterations: 26/, 'effective Burt budget is observable');
     is(setup_raider(%args, max_context_tokens => 4096)->{max_context_tokens}, 4096,
@@ -254,14 +255,40 @@ subtest 'operator Burt budget is opt-in and does not affect other profiles' => s
     eval { setup_raider(%args, max_iterations => 14) };
     like($@, qr/max_iterations must be 13 or 26/, 'unsupported iteration override rejected');
     $bot->{bot_slug} = 'bert';
+    $ENV{BURT_CONTEXT_TOKENS} = '16384';
     my $other = setup_raider(%args);
-    is($other->{max_context_tokens}, 8192, 'other bots ignore Burt setting');
+    is($other->{max_context_tokens}, 32768, 'other bots ignore Burt setting');
     is($other->{max_iterations}, 13, 'other bots retain the default iteration limit');
     $bot->{bot_slug} = 'burt';
     for my $invalid ('', '0', '32768x', '32768.5', '65537', '-1') {
         $ENV{BURT_CONTEXT_TOKENS} = $invalid;
         eval { setup_raider(%args) };
         like($@, qr/BURT_CONTEXT_TOKENS must be/, 'invalid budget rejected before model setup');
+    }
+};
+
+subtest 'CONTEXT_TOKENS sets the budget for every bot' => sub {
+    local %ENV = %ENV;
+    delete @ENV{qw(FALLBACK_MODELS CONTEXT_TOKENS BURT_CONTEXT_TOKENS)};
+    no warnings 'redefine';
+    local *Bot::Runtime::RaiderSetup::use_module = sub { return 1 };
+    my $bot = TestRuntimeSetupBot->new;
+    my %args = (self => $bot, owner => 'mateu', max_line => 320,
+                script_file => '/tmp/treb.pl');
+    $ENV{CONTEXT_TOKENS} = '65536';
+    for my $slug (qw(treb critic astrid burt)) {
+        $bot->{bot_slug} = $slug;
+        is(setup_raider(%args)->{max_context_tokens}, 65536, "$slug honors CONTEXT_TOKENS");
+    }
+    $ENV{BURT_CONTEXT_TOKENS} = '16384';
+    is(setup_raider(%args)->{max_context_tokens}, 65536, 'CONTEXT_TOKENS overrides BURT_CONTEXT_TOKENS');
+    is(setup_raider(%args, max_context_tokens => 4096)->{max_context_tokens}, 4096,
+       'explicit caller budget overrides CONTEXT_TOKENS');
+    $bot->{bot_slug} = 'treb';
+    for my $invalid ('', '0', '8191', '32768x', '32768.5', '65537', '-1') {
+        $ENV{CONTEXT_TOKENS} = $invalid;
+        eval { setup_raider(%args) };
+        like($@, qr/^CONTEXT_TOKENS must be/, "invalid CONTEXT_TOKENS '$invalid' rejected");
     }
 };
 
