@@ -16,6 +16,11 @@ ok($bot->_is_trivial_parenthetical('(…)'), 'unicode ellipsis parenthetical is 
 ok($bot->_is_trivial_parenthetical('(pause)'), 'pause parenthetical is trivial');
 ok(!$bot->_is_trivial_parenthetical('(the chickens are in, by the way)'), 'real content parenthetical not trivial');
 my @non_substantive_cases = (
+  ['...', 'bare ellipsis dots are non-substantive'],
+  ['…', 'unicode ellipsis character is non-substantive'],
+  ['.', 'single period is non-substantive'],
+  ['ok', 'bare ok acknowledgment is non-substantive'],
+  ['yep', 'bare yep acknowledgment is non-substantive'],
   ['( ... )', 'trivial parenthetical is non-substantive'],
   ['(Silent - Treb\'s greeting is bot-to-bot banter, no human involved.)', 'silent policy narration is non-substantive'],
   ['(Silent - continuing bot-to-bot banter without human involvement.)', 'continued silent-policy narration is non-substantive'],
@@ -55,6 +60,12 @@ for my $case (@non_substantive_cases) {
 }
 
 my @substantive_cases = (
+  ['wtf', 'three-letter wtf remains substantive'],
+  ['lol', 'three-letter lol remains substantive'],
+  ['yes', 'three-letter yes remains substantive'],
+  ['42!', 'three-character 42! remains substantive'],
+  ['no.', 'three-character no. remains substantive'],
+  ['Hmm', 'three-letter Hmm remains substantive'],
   ['mateu: the chickens are in ok.', 'substantive line not non-substantive'],
   ['Use cpanm.', 'brief actionable answer remains substantive'],
   ['No output file was generated because the command failed.', 'diagnostic no-output explanation remains substantive'],

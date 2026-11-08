@@ -71,9 +71,22 @@ sub _wrap_query_for_named_graphs {
   return $query;
 }
 
+sub _fuseki_enabled {
+  my ($self) = @_;
+  return 0 unless $self && $self->can('_bot_name_slug');
+  return 0 unless $self->_bot_name_slug eq 'treb';
+  return 0 unless ($ENV{TREB_FUSEKI_ENABLED} // '') eq '1';
+  return 1;
+}
+
 sub _tool_specs {
   my (%args) = @_;
   my $self = $args{self};
+  my $fuseki_enabled = _fuseki_enabled($self);
+
+  my $search_web_description = 'Use for general web lookups when the human explicitly asks to search, look up, or find something on the web, or when recent web information is needed. Returns up to 5 search results and defaults to 2.';
+  $search_web_description .= ' Do NOT use this for structured venue-database questions that belong in Fuseki, including named venues, museums, castles, cinemas, theaters, theme parks, or requests for architect, opening date, heritage, coordinates, or location facts when the local `wikidata_venues` graph is the intended source. For those, prefer `fuseki_sparql_query`.'
+    if $fuseki_enabled;
 
   return [
     {
@@ -132,7 +145,7 @@ sub _tool_specs {
     },
     {
       name         => 'search_web',
-      description  => 'Use for general web lookups when the human explicitly asks to search, look up, or find something on the web, or when recent web information outside the local venue graph is needed. Returns up to 5 search results and defaults to 2. Do NOT use this for structured venue-database questions that belong in Fuseki, including named venues, museums, castles, cinemas, theaters, theme parks, or requests for architect, opening date, heritage, coordinates, or location facts when the local `wikidata_venues` graph is the intended source. For those, prefer `fuseki_sparql_query`.',
+      description  => $search_web_description,
       input_schema => {
         type       => 'object',
         properties => {
@@ -156,7 +169,7 @@ sub _tool_specs {
         return $tool->text_result($line);
       },
     },
-    {
+    ($fuseki_enabled ? ({
       name         => 'fuseki_sparql_query',
       description  => 'Executes a SPARQL query against the configured `wikidata_venues` Jena Fuseki dataset. CRITICAL RULES: 1. The dataset is organized into named graphs like `urn:wgraph:norway`, `urn:wgraph:france`, `urn:wgraph:spain`, and `urn:wgraph:italy`. The default graph may be empty, so venue-matching queries should normally use `GRAPH ?graph { ... }` or a specific graph like `GRAPH <urn:wgraph:spain> { ... }`. 2. Use only known venue classes when you are confident the class is correct: Theater (wd:Q24354), Cinema (wd:Q41253), Theme Park (wd:Q194195), Museum (wd:Q33506), Castle/Château/Fort/Palace (wd:Q23413). Do not invent or guess type IDs. 3. CLASS FILTERING: the current venue graph includes both `rdf:type` and `wdt:P31` class assertions; prefer `wdt:P31` for venue-class filtering. 4. LABELS: data may have @en, @fr, and/or other labels. Do not assume English-only labels. Use `STR()` and `LCASE()`, for example `FILTER(CONTAINS(LCASE(STR(?cityLabel)), "marseille"))`, and prefer `FILTER(LANG(?label) IN ("en", "fr"))` when fetching labels. 5. NAME MATCHING: accented and unaccented spellings may differ (for example `château` vs `chateau`, `Pastré` vs `Pastre`, `Astérix` vs `Asterix`). If a name-based query returns empty, do at most one broader follow-up using lowercase string matching on labels, and consider both accented and unaccented variants. 6. PROPERTIES: wdt:P131 (location), wdt:P571 (date), wdt:P84 (architect), wdt:P625 (GPS), wdt:P1435 (heritage status). Use OPTIONAL for dates, architects, coordinates, and heritage. 7. GEOSPATIAL: Coordinates (P625) look like `Point(Long Lat)`. Use `replace(str(?coords), "Point\\((.*) (.*)\\)", "$2")` to get Latitude as a number when needed. 8. SEARCH: do not rely on guessed Wikidata IDs for locations. Prefer filtering locations by label string using `rdfs:label`. 9. LABEL FETCHING: NEVER use `SERVICE wikibase:label`. Always fetch `rdfs:label` manually. 10. QUERY DISCIPLINE: if an exact class-based query returns empty or obviously wrong rows, do at most one broader follow-up query. Do not keep iterating near-duplicate queries. 11. NAMED-ENTITY WORKFLOW (all venue types): when asked about a specific named place, first try a name/class or name/location discovery query; if you find a plausible item, follow with an item-bound detail query for architect/date/coords/heritage instead of answering from the discovery query alone. 12. ABSENCE CLAIMS: an empty first query does NOT prove the place is absent. Before saying a named place is missing/not in the database, you MUST run at least one Fuseki query in the current turn; if the first query is empty, run one broader follow-up (for example name-only or name+city) before concluding that you could not verify a reliable match from the database. Prefer "I could not verify a reliable match from the database" over "it is not in the database" unless the evidence is strong. 13. ARCHITECT HANDLING: architect existence is determined by a raw `?item wdt:P84 ?architect` binding. Query `?architect` directly first. `?architectLabel` or name fields are optional enrichment only. If `?architect` exists but no readable label/name is available, report that architect data exists in the graph but a human-readable architect label is unavailable. Multiple architect rows are allowed. Deduplicate repeated rows caused by multiple labels or heritage values. Do not say architect data is missing unless no `wdt:P84` bindings are returned for the matched item. 14. CONSISTENCY RULE: architect statuses are mutually exclusive. If no `?architect` binding exists for the matched item, say architect data is unavailable and do NOT also say architect data exists in the graph. Only use the "architect data exists but no human-readable architect label is available" wording when at least one raw `?architect` binding is present for that same matched item. 15. IMPORTANT: Always start your final response by addressing the user (e.g., "mateu: I found...").',
       input_schema => {
@@ -173,7 +186,10 @@ sub _tool_specs {
         # Strip any PREFIX lines the LLM may have included; inject canonical prefixes below.
         $llm_query =~ s/^PREFIX.*?\n//gmi;
         $llm_query =~ s/^\s+|\s+$//g;
-        print STDERR "\n\n>>>>>> KIMI WROTE THIS QUERY <<<<<<\n$llm_query\n>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n\n";
+        my $debug_fuseki = $ENV{TREB_FUSEKI_DEBUG} ? 1 : 0;
+        if ($debug_fuseki) {
+            print STDERR "\n\n>>>>>> SPARQL QUERY <<<<<<\n$llm_query\n>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n\n";
+        }
         return $tool->text_result('SPARQL query is empty.') unless length $llm_query;
 
         my $prefixes = "PREFIX wd: <http://www.wikidata.org/entity/>\n" .
@@ -192,7 +208,6 @@ sub _tool_specs {
         my $url  = _fuseki_dataset_url();
 
         my $query_octets = Encode::encode('UTF-8', $full_query);
-        my $debug_fuseki = $ENV{TREB_FUSEKI_DEBUG} ? 1 : 0;
         if ($debug_fuseki) {
             my $query_hex_preview = unpack('H*', substr($query_octets, 0, 256));
             my $query_char_len = length($full_query);
@@ -212,8 +227,8 @@ sub _tool_specs {
         my $response_len = defined $response->{content} ? length($response->{content}) : 0;
         if ($debug_fuseki) {
             print STDERR "[FUSEKI DEBUG] status=" . ($response->{status} // 'undef') . " success=" . ($response->{success} ? 1 : 0) . " reason=" . ($response->{reason} // 'undef') . " content_len=$response_len\n";
+            print STDERR "\n>>>>>> FUSEKI RESPONSE <<<<<<\n" . ($response->{content} // 'NO CONTENT') . "\n>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n\n";
         }
-        print STDERR "\n>>>>>> FUSEKI RESPONSE <<<<<<\n" . ($response->{content} // 'NO CONTENT') . "\n>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n\n";
 
         if ( $response->{success} ) {
             my $parsed_json;
@@ -238,7 +253,7 @@ sub _tool_specs {
             return $tool->text_result("SPARQL Error HTTP $status: $reason. Details: $error_body");
         }
       },
-    },
+    }) : ()),
     {
       name         => 'current_time',
       description  => 'Get the current local date and time in America/Denver. Use this when you need exact time awareness instead of guessing.',
