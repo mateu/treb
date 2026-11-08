@@ -307,6 +307,8 @@ sub report_result {
     my $exit=$r->{result}{exit_code};
     $notice.="; exit $exit" if defined($exit) && "$exit" =~ /\A-?\d{1,3}\z/;
     my $limit_reason=$r->{result}{reason}//'';
+    # Source of truth for these limit values: script/workbench/runner.py
+    # (TIME_LIMIT_SECONDS, MEMORY_LIMIT_BYTES, MAX_OUTPUT_BYTES).
     my %limit_notice=(time_limit=>'stopped by the 20 s sandbox time limit',
       memory_limit=>'stopped by the 256 MiB sandbox memory limit',
       output_limit=>'stopped by the 64 KiB sandbox output limit');

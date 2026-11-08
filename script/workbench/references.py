@@ -5,6 +5,7 @@ from html.parser import HTMLParser
 import urllib.request
 
 from repository import NoRedirect
+from runner import BrokerRejection
 
 CATALOG = {
     'python-json': 'https://docs.python.org/3/library/json.html',
@@ -43,11 +44,11 @@ class References:
             started = time.monotonic()
             with opener.open(req, timeout=5) as response:
                 if response.geturl() != CATALOG[key]:
-                    raise ValueError('reference URL changed')
+                    raise BrokerRejection('reference URL changed')
                 raw = bytearray()
                 while len(raw) <= 262144:
                     if time.monotonic() - started > 10:
-                        raise ValueError('reference deadline exceeded')
+                        raise BrokerRejection('reference deadline exceeded')
                     chunk = response.read1(min(4096, 262145 - len(raw)))
                     if not chunk: break
                     raw.extend(chunk)

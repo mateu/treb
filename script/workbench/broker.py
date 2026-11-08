@@ -14,7 +14,8 @@ import urllib.error
 import urllib.request
 import uuid
 
-from runner import run, validate, MAX_JSON_BYTES, MAX_INPUT_BYTES, MAX_GIST_INPUT_BYTES, MAX_OUTPUT_BYTES, InputSizeError
+from runner import (run, validate, MAX_JSON_BYTES, MAX_INPUT_BYTES, MAX_GIST_INPUT_BYTES,
+                    MAX_OUTPUT_BYTES, InputSizeError, BrokerRejection, TIME_LIMIT_SECONDS, MEMORY_LIMIT_BYTES)
 from repository import GitHubHTTPRejected, Repository, validate_destination, validate_source, validate_files
 from github import GitHub, GitHubError, GitHubHTTPError, GitHubPolicyError, GitHubTransportError, classify
 from verification import Verification
@@ -145,10 +146,25 @@ def log_limit(kind, action, job, scope, channel, value, limit, unit):
     sys.stderr.flush()
 
 
+def log_runner_error(action, job, scope, channel, exc):
+    """D4: one metadata-only WORKBENCH_ERROR line when the sandbox runner raises.
+
+    Never file contents, argv or output; only the exception type and a
+    whitespace-collapsed, 200-character excerpt of its message.
+    """
+    error = re.sub(r'\s+', ' ', str(exc)).strip()[:200]
+    sys.stderr.write('WORKBENCH_ERROR ' + json.dumps(
+        {'action': action, 'channel': channel, 'job': job, 'kind': 'runner_error',
+         'scope': scope[:12] if isinstance(scope, str) else None,
+         'error_type': type(exc).__name__, 'error': error},
+        sort_keys=True, separators=(',', ':')) + '\n')
+    sys.stderr.flush()
+
+
 def reconcile_pending_pull_request(db, repository, task_id):
     """Reconcile one persisted PR-create operation without issuing a GitHub write."""
     if not isinstance(task_id, str) or not re.fullmatch(r'[a-f0-9]{64}', task_id):
-        raise ValueError('invalid pull request reconciliation task id')
+        raise BrokerRejection('invalid pull request reconciliation task id')
 
     receipt = db.execute('SELECT * FROM reconciled_pull_request_operations WHERE task_id=?',
                          (task_id,)).fetchone()
@@ -158,16 +174,16 @@ def reconcile_pending_pull_request(db, repository, task_id):
     pending = db.execute('SELECT * FROM pending_pull_request_operations WHERE task_id=?',
                          (task_id,)).fetchone()
     if not pending:
-        raise ValueError('pending pull request operation not found')
+        raise BrokerRejection('pending pull request operation not found')
     if pending['operation'] != 'repo_pr_create':
-        raise ValueError('only pending pull request creation can be reconciled')
+        raise BrokerRejection('only pending pull request creation can be reconciled')
 
     # The lookup validates the fixed repository, main base, burt/* branch and
     # exact stored SHA. It performs only GET requests; absence is not evidence
     # that the original POST did not succeed and therefore remains blocked.
     pull = repository.find_pull_request(pending['branch'], pending['head_sha'])
     if pull is None:
-        raise ValueError('no identity-matching pull request found; record remains pending; do not retry')
+        raise BrokerRejection('no identity-matching pull request found; record remains pending; do not retry')
 
     db.execute('BEGIN IMMEDIATE')
     try:
@@ -181,7 +197,7 @@ def reconcile_pending_pull_request(db, repository, task_id):
                              (task_id,)).fetchone()
         if (not current or current['operation'] != 'repo_pr_create'
                 or (current['branch'], current['head_sha']) != (pull['branch'], pull['head_sha'])):
-            raise ValueError('pending pull request operation changed; inspect before reconciling')
+            raise BrokerRejection('pending pull request operation changed; inspect before reconciling')
 
         budget = db.execute('SELECT terminal_reason FROM task_phase_budgets WHERE task_id=?',
                             (task_id,)).fetchone()
@@ -216,7 +232,7 @@ def reconcile_pending_pull_request(db, repository, task_id):
                                 WHERE task_id=? AND branch=? AND head_sha=? AND operation='repo_pr_create' ''',
                              (task_id, pull['branch'], pull['head_sha']))
         if cleared.rowcount != 1:
-            raise ValueError('pending pull request operation changed; inspect before reconciling')
+            raise BrokerRejection('pending pull request operation changed; inspect before reconciling')
         db.commit()
     except Exception:
         db.rollback()
@@ -229,9 +245,9 @@ def reconcile_pending_pull_request(db, repository, task_id):
 def confirm_absent_pending_pull_request(db, repository, task_id, operator, commit=False):
     """Operator-only, GET-verified retirement of one absent PR-create receipt."""
     if not isinstance(task_id, str) or not re.fullmatch(r'[a-f0-9]{64}', task_id):
-        raise ValueError('invalid pull request reconciliation task id')
+        raise BrokerRejection('invalid pull request reconciliation task id')
     if not isinstance(operator, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,63}', operator):
-        raise ValueError('invalid reconciliation operator')
+        raise BrokerRejection('invalid reconciliation operator')
 
     confirmed = db.execute('SELECT * FROM absent_pull_request_confirmations WHERE task_id=?',
                            (task_id,)).fetchone()
@@ -240,7 +256,7 @@ def confirm_absent_pending_pull_request(db, repository, task_id, operator, commi
     pending = db.execute('SELECT * FROM pending_pull_request_operations WHERE task_id=?',
                          (task_id,)).fetchone()
     if not pending or pending['operation'] != 'repo_pr_create':
-        raise ValueError('pending pull request creation not found')
+        raise BrokerRejection('pending pull request creation not found')
 
     # Preview always reaches the GitHub authority and never opens a write transaction.
     evidence = repository.absent_pull_request_evidence(pending['branch'], pending['head_sha'])
@@ -263,7 +279,7 @@ def confirm_absent_pending_pull_request(db, repository, task_id, operator, commi
                              (task_id,)).fetchone()
         if (not current or current['operation'] != 'repo_pr_create'
                 or (current['branch'], current['head_sha']) != (pending['branch'], pending['head_sha'])):
-            raise ValueError('pending pull request operation changed; record remains pending')
+            raise BrokerRejection('pending pull request operation changed; record remains pending')
         now = time.time()
         budget = db.execute('SELECT 1 FROM task_phase_budgets WHERE task_id=?', (task_id,)).fetchone()
         if budget:
@@ -283,7 +299,7 @@ def confirm_absent_pending_pull_request(db, repository, task_id, operator, commi
         cleared = db.execute("DELETE FROM pending_pull_request_operations WHERE task_id=? AND branch=? AND head_sha=? AND operation='repo_pr_create'",
                              (task_id, pending['branch'], pending['head_sha']))
         if cleared.rowcount != 1:
-            raise ValueError('pending pull request operation changed; record remains pending')
+            raise BrokerRejection('pending pull request operation changed; record remains pending')
         remaining = db.execute("SELECT 1 FROM pending_pull_request_operations WHERE branch=? AND head_sha=? AND operation='repo_pr_create' LIMIT 1",
                                (pending['branch'], pending['head_sha'])).fetchone()
         if not remaining:
@@ -520,17 +536,17 @@ class Broker:
 
     def load_snapshot(self, req, snapshot_id, require_active=True):
         if not isinstance(snapshot_id, str) or not re.fullmatch(r'[a-f0-9]{32}', snapshot_id):
-            raise ValueError('invalid repository snapshot id')
+            raise BrokerRejection('invalid repository snapshot id')
         row = self.db.execute('SELECT * FROM repo_snapshots WHERE id=?', (snapshot_id,)).fetchone()
         if not row or not self.resource_scope_authorized(req, row['scope'], row['channel'], row['network']):
-            raise ValueError('repository snapshot not found in this request')
+            raise BrokerRejection('repository snapshot not found in this request')
         if row['state'] == 'active' and row['expires'] <= time.time():
             self.db.execute('UPDATE repo_snapshots SET state="expired" WHERE id=?', (snapshot_id,))
             self.resource_checkpoint('snapshot', snapshot_id, req, 'expired')
             self.db.commit()
             row = self.db.execute('SELECT * FROM repo_snapshots WHERE id=?', (snapshot_id,)).fetchone()
         if require_active and row['state'] != 'active':
-            raise ValueError('repository snapshot expired; read project again')
+            raise BrokerRejection('repository snapshot expired; read project again')
         return json.loads(row['snapshot']) | {'snapshot_id': snapshot_id}
 
     @staticmethod
@@ -538,9 +554,9 @@ class Broker:
         if (not isinstance(changes, dict) or not isinstance(deleted, list)
                 or any(not isinstance(name, str) for name in deleted)
                 or len(deleted) != len(set(deleted))):
-            raise ValueError('repository test requires file replacements and an explicit deletion list')
+            raise BrokerRejection('repository test requires file replacements and an explicit deletion list')
         if any(name not in base or name in changes for name in deleted):
-            raise ValueError('delete only existing files, without also replacing them')
+            raise BrokerRejection('delete only existing files, without also replacing them')
         files = dict(base)
         files.update(changes)
         for name in deleted:
@@ -586,7 +602,7 @@ class Broker:
             ('transport_unavailable', 'broker unavailable; operator inspection required', 'retryable') if isinstance(exc, (TimeoutError, OSError)) else
             ('invalid_request', 'request rejected by Workbench policy', 'retryable'))
         reason = (exc.audit_reason() if github_http else message if github_policy else
-                  message if message in SAFE_REASONS or isinstance(exc, InputSizeError) else 'unclassified broker error')
+                  message if message in SAFE_REASONS or isinstance(exc, (InputSizeError, BrokerRejection)) else 'unclassified broker error')
         for prefix in ('baseline files cannot be deleted: ', 'protected baseline file changed: ',
                        'new files restricted to approved regression directories: ', 'unknown reference; available: '):
             if message.startswith(prefix): reason = prefix.rstrip(': ')
@@ -676,7 +692,7 @@ class Broker:
     def remember_task_execution_selection(self, req, job_id, state, now=None):
         """Persist the latest non-diagnostic execution verdict for recovery."""
         if state not in ('passed', 'failed'):
-            raise ValueError('invalid execution selection state')
+            raise BrokerRejection('invalid execution selection state')
         task_id = self.task_binding(req['scope'])['task_id']
         self.db.execute('''INSERT INTO task_execution_selections
                          (task_id,job_id,execution_state,selected) VALUES (?,?,?,?)
@@ -706,16 +722,16 @@ class Broker:
         """Return the job durably bound to this direct IRC publication request."""
         requester = req.get('requester')
         if not isinstance(requester, str) or not REQUESTER_IDENTITY.fullmatch(requester):
-            raise ValueError('direct repository publication requires the trusted requester')
+            raise BrokerRejection('direct repository publication requires the trusted requester')
         bound = self.db.execute('SELECT * FROM direct_repo_publications WHERE scope=?',
                                 (req['scope'],)).fetchone()
         if bound:
             if (bound['requester'], bound['channel'], bound['network']) != (
                     requester, req['channel'], req['network']):
-                raise ValueError('direct repository publication binding does not match request')
+                raise BrokerRejection('direct repository publication binding does not match request')
             row = self.db.execute('SELECT * FROM jobs WHERE id=?', (bound['job_id'],)).fetchone()
             if not row:
-                raise ValueError('direct repository publication binding is unavailable')
+                raise BrokerRejection('direct repository publication binding is unavailable')
             return row
         # Indexed candidates are fast-path evidence, but legacy passed work
         # predates that index. Recover both sets before deciding that a single
@@ -778,9 +794,9 @@ class Broker:
                 # a candidate. Leave it unavailable rather than guessing.
                 continue
         if blocked_destinations:
-            raise ValueError('publication outcome requires operator reconciliation')
+            raise BrokerRejection('publication outcome requires operator reconciliation')
         if len(eligible) != 1:
-            raise ValueError('direct repository publication needs one unambiguous saved project candidate')
+            raise BrokerRejection('direct repository publication needs one unambiguous saved project candidate')
         job, destination = next(iter(eligible.values()))
         self.remember_repository_candidate(req, job['id'], destination)
         self.db.execute('INSERT INTO direct_repo_publications VALUES (?,?,?,?,?,?)',
@@ -863,7 +879,7 @@ class Broker:
         # its original task before enforcing its migrated publication allowance.
         row = self.ensure_task_phase_budget(task_id, now)
         if row['public_writes'] >= MAX_PUBLIC_WRITES:
-            raise ValueError('limit: one submission per IRC request')
+            raise BrokerRejection('limit: one submission per IRC request')
         self.db.execute('UPDATE task_phase_budgets SET public_writes=public_writes+1,updated=? WHERE task_id=?',
                         (now, task_id))
 
@@ -899,15 +915,15 @@ class Broker:
                 and not (recording_publication_uncertainty
                          or (allow_after_final_report and operation == 'public_write'
                              and row['terminal_reason'] == 'final_report'))):
-            raise ValueError('task is terminal; operator inspection required')
+            raise BrokerRejection('task is terminal; operator inspection required')
         if operation not in ('status', 'checkpoint', 'terminal_report', 'terminal') and now >= row['deadline']:
             self.db.execute('UPDATE task_phase_budgets SET phase=?,terminal_reason=?,updated=? WHERE task_id=?',
                             ('stopped', 'deadline', now, task_id))
-            raise ValueError('task deadline reached; terminal report reserved')
+            raise BrokerRejection('task deadline reached; terminal report reserved')
         updates = {'phase': row['phase'], 'terminal_reason': row['terminal_reason']}
         if model_iterations is not None:
             if not isinstance(model_iterations, int) or not 0 <= model_iterations <= MAX_MODEL_ITERATIONS:
-                raise ValueError('invalid model iteration count')
+                raise BrokerRejection('invalid model iteration count')
             updates['model_iterations'] = max(row['model_iterations'], model_iterations)
         if operation == 'sandbox':
             if row['sandbox_attempts'] >= self.max_attempts():
@@ -924,7 +940,7 @@ class Broker:
             updates['public_writes'] = row['public_writes'] + 1
         elif operation == 'progress':
             if row['progress_notices'] >= MAX_PROGRESS_NOTICES:
-                raise ValueError('limit: progress notice budget exhausted')
+                raise BrokerRejection('limit: progress notice budget exhausted')
             updates['progress_notices'] = row['progress_notices'] + 1
         elif operation == 'terminal':
             updates['phase'] = 'stopped'
@@ -1061,7 +1077,7 @@ class Broker:
             if requester not in self.github_writers():
                 raise GitHubError('GitHub writes require an allowlisted trusted requester')
             if used >= cap:
-                raise ValueError('limit: GitHub write cap reached for this task')
+                raise BrokerRejection('limit: GitHub write cap reached for this task')
             # Reserve before sending: a lost response still spends the slot.
             used += 1
             self.db.execute('INSERT INTO github_write_budgets VALUES (?,?,?) ON CONFLICT(task_id) '
@@ -1124,7 +1140,7 @@ class Broker:
 
     def _handle(self, req, _diagnostic=False, _saved_snapshot=False):
         if not isinstance(req, dict):
-            raise ValueError('object required')
+            raise BrokerRejection('object required')
         action = req.get('action')
         allowed = {'action', 'scope', 'requester', 'channel', 'network'}
         fields = {'run': {'files','argv','title'}, 'publish': {'id'},
@@ -1150,15 +1166,15 @@ class Broker:
         allowed |= fields.get(action, set()) | optional_fields.get(action, set())
         if (action not in fields or not {'action', 'scope', 'requester', 'channel', 'network'} <= set(req)
               or not fields[action] <= set(req) or set(req) - allowed):
-            raise ValueError('invalid action or fields')
+            raise BrokerRejection('invalid action or fields')
         if req['channel'] not in ('#ai', '#mateu-test') or req['network'] != 'irc.perl.org':
-            raise ValueError('workbench is restricted to irc.perl.org #ai or #mateu-test')
+            raise BrokerRejection('workbench is restricted to irc.perl.org #ai or #mateu-test')
         scope = req['scope']
         if not isinstance(scope, str) or not re.fullmatch(r'[a-f0-9]{64}', scope):
-            raise ValueError('invalid turn scope')
+            raise BrokerRejection('invalid turn scope')
         requester = req['requester']
         if not isinstance(requester, str) or not REQUESTER_IDENTITY.fullmatch(requester):
-            raise ValueError('invalid requester identity')
+            raise BrokerRejection('invalid requester identity')
         self.db.execute('INSERT INTO dispatches (created,scope,requester,channel,network,action) VALUES (?,?,?,?,?,?)',
                         (time.time(), scope, requester, req['channel'], req['network'], action))
         # Every operation in an admitted task observes the same durable
@@ -1170,34 +1186,34 @@ class Broker:
         if action in ('task_checkpoint', 'checkpoint_status', 'task_resume'):
             requester = req['requester']
             if not isinstance(requester, str) or not REQUESTER_IDENTITY.fullmatch(requester):
-                raise ValueError('invalid requester identity')
+                raise BrokerRejection('invalid requester identity')
             if action != 'task_checkpoint':
                 checkpoint_id = req['checkpoint_id']
                 if not isinstance(checkpoint_id, str) or not re.fullmatch(r'[a-f0-9]{32}', checkpoint_id):
-                    raise ValueError('invalid checkpoint id')
+                    raise BrokerRejection('invalid checkpoint id')
                 checkpoint = self.db.execute('SELECT * FROM task_checkpoints WHERE id=?', (checkpoint_id,)).fetchone()
                 if (not checkpoint or checkpoint['requester'] != requester or checkpoint['channel'] != req['channel']
                         or checkpoint['network'] != req['network']):
-                    raise ValueError('checkpoint not found for this requester')
+                    raise BrokerRejection('checkpoint not found for this requester')
                 if action == 'checkpoint_status':
                     return self.checkpoint_summary(checkpoint)
                 # A resume always derives authority from this new envelope. Old
                 # old envelopes are not accepted, and an ambiguous public write is an
                 # absorbing terminal state until an operator reconciles it.
                 if req['scope'] == checkpoint['scope']:
-                    raise ValueError('resume requires a fresh task scope')
+                    raise BrokerRejection('resume requires a fresh task scope')
                 if self.task_budget_status(checkpoint['task_id'])['terminal_reason'] == 'publication_uncertain':
-                    raise ValueError('publication outcome requires operator reconciliation')
+                    raise BrokerRejection('publication outcome requires operator reconciliation')
                 if (any(job['state'] in ('publishing', 'uncertain') for job in self.task_job_rows(checkpoint['task_id']))
                         or self.pending_pull_request(checkpoint['task_id'])):
-                    raise ValueError('publication outcome requires operator reconciliation')
+                    raise BrokerRejection('publication outcome requires operator reconciliation')
                 existing = self.db.execute('SELECT * FROM task_scopes WHERE scope=?', (req['scope'],)).fetchone()
                 if existing:
-                    raise ValueError('fresh task scope is already bound')
+                    raise BrokerRejection('fresh task scope is already bound')
                 now = time.time()
                 deadline = req.get('deadline')
                 if deadline is not None and (not isinstance(deadline, (int, float)) or not now < deadline <= now + 3600):
-                    raise ValueError('invalid resume deadline')
+                    raise BrokerRejection('invalid resume deadline')
                 if deadline is not None:
                     # A resume has fresh human authority and a new bounded
                     # runtime lifetime, but preserves task-wide spend counters.
@@ -1210,15 +1226,15 @@ class Broker:
             if (req['phase'] not in ('started', 'stopped', 'reported') or req['reason'] not in
                     ('admitted', 'deadline', 'iteration_limit', 'runtime_error', 'no_report',
                      'final_report', 'execution_limit')):
-                raise ValueError('invalid task status')
+                raise BrokerRejection('invalid task status')
             binding = self.task_binding(scope)
             if 'requester' in binding.keys() and (binding['requester'] != requester or binding['channel'] != req['channel']
                                                    or binding['network'] != req['network']):
-                raise ValueError('task identity mismatch')
+                raise BrokerRejection('task identity mismatch')
             now = time.time()
             deadline = req.get('deadline')
             if deadline is not None and (not isinstance(deadline, (int, float)) or deadline > now + 3600):
-                raise ValueError('invalid task deadline')
+                raise BrokerRejection('invalid task deadline')
             terminal = req['phase'] == 'reported' and req['reason'] == 'final_report'
             self.admit_transition(binding['task_id'], 'terminal_report' if terminal else 'checkpoint', now,
                                   deadline=deadline, terminal_reason=req['reason'] if terminal else None)
@@ -1242,14 +1258,14 @@ class Broker:
             if (req['phase'] not in ('started', 'stopped', 'reported') or req['reason'] not in
                     ('admitted', 'deadline', 'iteration_limit', 'runtime_error', 'no_report',
                      'final_report', 'execution_limit')):
-                raise ValueError('invalid task status')
+                raise BrokerRejection('invalid task status')
             old = self.db.execute('SELECT channel FROM task_status WHERE scope=?', (scope,)).fetchone()
             if old and old['channel'] != req['channel']:
-                raise ValueError('task channel mismatch')
+                raise BrokerRejection('task channel mismatch')
             now = time.time()
             deadline = req.get('deadline')
             if deadline is not None and (not isinstance(deadline, (int, float)) or deadline > now + 3600):
-                raise ValueError('invalid task deadline')
+                raise BrokerRejection('invalid task deadline')
             # A final answer or no-report fallback spends the independent
             # terminal direct-report reservation; status-only stop markers
             # remain recoverable and do not poison a later admitted execution.
@@ -1276,24 +1292,24 @@ class Broker:
         if action == 'job_inspect':
             job_id = req['id']
             if not isinstance(job_id, str) or not re.fullmatch(r'[a-f0-9]{32}', job_id):
-                raise ValueError('invalid job id')
+                raise BrokerRejection('invalid job id')
             job = self.load_job(req, job_id, 'saved job not found in this request')
             return self.result(job) | {'files': json.loads(job['files'])}
         if action in ('repo_inspect', 'repo_repair', 'repo_diagnose'):
             job_id = req['id']
             if not isinstance(job_id, str) or not re.fullmatch(r'[a-f0-9]{32}', job_id):
-                raise ValueError('invalid job id')
+                raise BrokerRejection('invalid job id')
             job = self.load_job(req, job_id, 'repository job not found in this request')
             dest = self.db.execute('SELECT destination FROM repo_jobs WHERE id=?', (job_id,)).fetchone()
             if not job or not dest:
-                raise ValueError('repository job not found in this request')
+                raise BrokerRejection('repository job not found in this request')
             destination = json.loads(dest['destination'])
             if action == 'repo_inspect':
                 return self.result(job) | {'files': json.loads(job['files']), 'destination': destination}
             if job['state'] not in ('passed', 'failed'):
-                raise ValueError('only an unsubmitted completed job can be repaired')
+                raise BrokerRejection('only an unsubmitted completed job can be repaired')
             if destination.get('diagnostic_only'):
-                raise ValueError('use the original repository test job, not a diagnostic')
+                raise BrokerRejection('use the original repository test job, not a diagnostic')
             if action == 'repo_diagnose':
                 # Same exact source, different diagnostic argv. This job can NEVER
                 # publish, even if its command exits zero.
@@ -1315,7 +1331,7 @@ class Broker:
         if action == 'repo_read':
             if 'repo' not in req:
                 if 'ref' in req or 'path' in req:
-                    raise ValueError('ref/path require repo')
+                    raise BrokerRejection('ref/path require repo')
                 validate_source(req.get('branch'), req.get('project'))
             return self.create_snapshot(req)
         if action == 'repo_run':
@@ -1323,7 +1339,7 @@ class Broker:
             current = (self.repository.snapshot(repo=snapshot['repository'], ref=snapshot['branch'], path=snapshot['path'])
                        if snapshot.get('explicit_repo') else self.repository.snapshot(snapshot['branch'], snapshot['project']))
             if any(current[key] != snapshot[key] for key in ('base_sha', 'tree_sha', 'exists', 'files')):
-                raise ValueError('branch changed; read project and retest against the new base')
+                raise BrokerRejection('branch changed; read project and retest against the new base')
             files = self.materialize_files(snapshot['files'], req['changes'], req['delete'])
             candidate_changes, candidate_deleted = self.candidate_delta(snapshot['files'], files)
             destination = {k: snapshot[k] for k in ('branch','project','base_sha','tree_sha','exists','snapshot_id')}
@@ -1346,10 +1362,10 @@ class Broker:
                     self.verification.prepare(snapshot, files)
             elif any(not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}', n)
                    or '\x00' in v for n, v in files.items()):
-                raise ValueError('use flat ASCII filenames and text without NUL')
+                raise BrokerRejection('use flat ASCII filenames and text without NUL')
             title = req['title']
             if not isinstance(title, str) or not 1 <= len(title) <= 200 or any(ord(c) < 32 for c in title):
-                raise ValueError('invalid title')
+                raise BrokerRejection('invalid title')
             digest = hashlib.sha256(json.dumps([files, argv, title, destination], sort_keys=True).encode()).hexdigest()
             old = self.db.execute('SELECT * FROM jobs WHERE scope=? AND digest=?', (scope, digest)).fetchone()
             if old:
@@ -1370,14 +1386,14 @@ class Broker:
             trusted_verification = action == 'repo_run' and policy is not None and not _diagnostic
             if (self.verification is not None and not trusted_verification
                     and self.task_attempt_count(task_id) >= self.max_attempts() - 1):
-                raise ValueError('last execution reserved for trusted project verification')
+                raise BrokerRejection('last execution reserved for trusted project verification')
             now = time.time()
             # Retain a bounded journal; ambiguous submissions remain for manual reconciliation.
             # Retain checkpointed bundles as well as uncertain publications.
             self.prune_jobs(now)
             count = self.db.execute('SELECT COUNT(*) FROM jobs WHERE created>?', (now - 3600,)).fetchone()[0]
             if count >= 30:
-                raise ValueError('global limit: 30 sandbox runs per hour')
+                raise BrokerRejection('global limit: 30 sandbox runs per hour')
             self.admit_transition(task_id, 'sandbox', now)
             job_id = uuid.uuid4().hex
             self.db.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?)',
@@ -1401,12 +1417,13 @@ class Broker:
                                               'argv': policy['argv'], 'kind': 'trusted_checks'}
                 else:
                     result = self.execute({'files': files, 'argv': argv})
-            except Exception:
+            except Exception as exc:
                 result = {'reason': 'runner_error', 'exit_code': None, 'output': ''}
+                log_runner_error(action, job_id, scope, req['channel'], exc)
             # D6: the runner's labeled kills (D1) and output cutoff are
             # sandbox-stopped jobs, not code failures; log one line each.
             if result.get('reason') in ('time_limit', 'memory_limit', 'output_limit'):
-                limit, unit = {'time_limit': (20, 's'), 'memory_limit': (268435456, 'bytes'),
+                limit, unit = {'time_limit': (TIME_LIMIT_SECONDS, 's'), 'memory_limit': (MEMORY_LIMIT_BYTES, 'bytes'),
                               'output_limit': (MAX_OUTPUT_BYTES, 'bytes')}[result['reason']]
                 value = result.get('elapsed_seconds') if result['reason'] == 'time_limit' else None
                 log_limit(result['reason'], action, job_id, scope, req['channel'], value, limit, unit)
@@ -1430,27 +1447,27 @@ class Broker:
             return self.result(self.db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())
         job_id = req['id']
         if not isinstance(job_id, str) or not re.fullmatch(r'[a-f0-9]{32}', job_id):
-            raise ValueError('invalid job id')
+            raise BrokerRejection('invalid job id')
         job = self.load_job(req, job_id)
         job_id = job['id']
         repo_job = self.db.execute('SELECT destination FROM repo_jobs WHERE id=?', (job_id,)).fetchone()
         if repo_job:
-            raise ValueError('job publication destination does not match tool')
+            raise BrokerRejection('job publication destination does not match tool')
         job_task_id = self.task_binding(job['scope'])['task_id']
         if any(row['state'] in ('publishing', 'uncertain') for row in
                self.task_job_rows(job_task_id)):
-            raise ValueError('publication outcome requires operator reconciliation')
+            raise BrokerRejection('publication outcome requires operator reconciliation')
         if job['state'] == 'published':
             return self.result(job)
         if job['state'] != 'passed' or (not repo_job and job['created'] < time.time() - 900):
-            raise ValueError('only a successful, recent, unsubmitted job can be published')
+            raise BrokerRejection('only a successful, recent, unsubmitted job can be published')
         if not self.token.is_file():
-            raise ValueError('Burt gist credential is not installed; ask the operator')
+            raise BrokerRejection('Burt gist credential is not installed; ask the operator')
         if self.token.stat().st_mode & 0o077:
-            raise ValueError('gist credential must have mode 600')
+            raise BrokerRejection('gist credential must have mode 600')
         # Check rate budget before crossing the irreversible network boundary.
         if self.publication_attempt_count() >= 10:
-            raise ValueError('global limit: 10 gist submissions per day')
+            raise BrokerRejection('global limit: 10 gist submissions per day')
         task_id = self.task_binding(scope)['task_id']
         self.admit_transition(task_id, 'public_write', limit_message='limit: one gist submission per IRC request')
         self.consume_task_publication(task_id, time.time())
@@ -1468,7 +1485,7 @@ class Broker:
             self.admit_transition(self.task_binding(scope)['task_id'], 'terminal', terminal_reason='publication_uncertain')
             self.resource_checkpoint('publication', job_id, req, 'uncertain')
             self.db.commit()
-            raise ValueError('gist submission failed or response was lost; operator reconciliation required; do not retry') from None
+            raise BrokerRejection('gist submission failed or response was lost; operator reconciliation required; do not retry') from None
         self.db.execute("UPDATE jobs SET state='published',url=? WHERE id=?", (url, job_id))
         self.resource_checkpoint('publication', job_id, req, 'published')
         self.db.commit()
@@ -1483,14 +1500,14 @@ class Broker:
         with opener.open(urllib.request.Request('https://api.github.com/user', headers=headers), timeout=10) as response:
             identity = json.loads(response.read(100000))
         if identity.get('login') != 'burt-agent':
-            raise ValueError('gist credential is not owned by burt-agent')
+            raise BrokerRejection('gist credential is not owned by burt-agent')
         request = urllib.request.Request('https://api.github.com/gists',
                                          data=json.dumps(payload).encode(), headers=headers)
         with opener.open(request, timeout=15) as response:
             data = json.loads(response.read(300000))
         url = data.get('html_url', '')
         if data.get('owner', {}).get('login') != 'burt-agent' or not re.fullmatch(r'https://gist.github.com/burt-agent/[a-f0-9]+', url):
-            raise ValueError('unexpected gist owner or URL')
+            raise BrokerRejection('unexpected gist owner or URL')
         return url
 
     def result(self, job):
@@ -1513,7 +1530,7 @@ class Handler(socketserver.StreamRequestHandler):
         try:
             raw = self.rfile.readline(MAX_REQUEST + 1)
             if len(raw) > MAX_REQUEST or not raw.endswith(b'\n'):
-                raise ValueError('oversized or unterminated request')
+                raise BrokerRejection('oversized or unterminated request')
             req = json.loads(raw)
             dispatched = True
             result = self.server.broker.handle(req)
