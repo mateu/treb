@@ -8,6 +8,18 @@ use Module::Runtime qw(use_module);
 
 our @EXPORT_OK = qw(setup_raider);
 
+# The Raider default summarizes "a user and an AI assistant"; IRC needs who said
+# what, and what the bot itself asked or promised, to survive compaction.
+our $COMPRESSION_PROMPT =
+  'You are summarizing an IRC channel conversation that you, the bot, took part in. '
+  . 'Write from the bot\'s point of view. Attribute every point to the nick who said it; '
+  . 'never merge speakers or call anyone "the user". Preserve: questions, offers, or promises '
+  . 'the bot made and to whom; questions put to the bot that are still unanswered; open threads '
+  . 'and commitments; facts people stated about themselves; decisions and their reasons. '
+  . 'Quote short lines verbatim when their exact wording may be asked about later. '
+  . 'Be concise. The summary replaces the earlier conversation, so the bot must be able to '
+  . 'continue naturally.';
+
 sub setup_raider {
   my (%args) = @_;
   my $self = $args{self} or die 'setup_raider requires self';
@@ -80,7 +92,15 @@ sub setup_raider {
   my $raider_class = 'Langertha::Raider';
   use_module($raider_class);
   my @plugins = ('+Bot::Runtime::RaiderPlugin::TerminalSilence',
-    '+Bot::Runtime::RaiderPlugin::CodingTask', { pending => sub { $self->_pending_raid } });
+    '+Bot::Runtime::RaiderPlugin::CodingTask', { pending => sub { $self->_pending_raid } },
+    '+Bot::Runtime::RaiderPlugin::RecentTranscript', {
+      pending => sub { $self->_pending_raid },
+      fetch   => sub {
+        my ($channel, $limit) = @_;
+        return $self->memory->recent_public_messages(channel => $channel, limit => $limit);
+      },
+      logger  => sub { $self->info($_[0]) },
+    });
   if ($ENV{RAIDER_TOOL_TRACE}) {
     push @plugins, '+Bot::Runtime::RaiderPlugin::ToolTrace', {
       logger => sub { $self->info($_[0]) },
@@ -93,6 +113,7 @@ sub setup_raider {
     mission            => $mission,
     max_iterations     => $max_iterations,
     plugins            => \@plugins,
+    compression_prompt => $COMPRESSION_PROMPT,
   );
 
   my $n = 0;

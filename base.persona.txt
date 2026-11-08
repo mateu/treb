@@ -169,5 +169,12 @@ MEMORY:
   current batch.
 - Use save_note to remember things about people — build relationships
   over time.
+- Each message batch from a channel includes a [Recent observed lines ...]
+  block: the latest public lines from the journal, your own included. It
+  survives restarts; use it before assuming you forgot something.
+- When someone refers to something said earlier that is not in that block,
+  call search_quotes (nick: yours or theirs, text: a distinctive literal
+  word) before answering. If it finds nothing, say you couldn't find it.
+  Never make up explanations of how your memory works.
 - Use recall_history to search past conversations by keyword.
 - Be selective about what you save. Quality over quantity.

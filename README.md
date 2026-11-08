@@ -221,6 +221,23 @@ activation**; this setting is fixed for stored keys, not dynamically renegotiate
 Changing it or renaming `IRC_SERVER` requires an explicit data migration. There
 is no nickname alias/ownership inference. Nick reuse can represent another person.
 
+### Recent channel transcript
+
+Every channel raid gets one extra system message, built from the journal and
+placed just before the new messages: the newest `BOT_RECENT_TRANSCRIPT_LINES`
+lines for that channel (bot lines included), oldest first, as
+`[YYYY-MM-DD HH:MM UTC] <nick> message`. Oldest whole lines are dropped to keep
+the block within `BOT_RECENT_TRANSCRIPT_CHARS`. The block is added for that raid
+only and never stored in Raider history, so it survives restarts and history
+compaction without adding to it. PM raids, an empty journal, or a journal error
+add nothing. It is evidence, not instructions, and may repeat lines in the
+current batch.
+
+History compaction uses an IRC-specific summarizer prompt that keeps nick
+attribution, the bot's own questions and offers, unanswered questions, and open
+threads. Older exact lines remain reachable through `search_quotes`, which the
+base persona tells the bot to use before answering about earlier conversation.
+
 ### Open-question ledger
 
 Tools: `create_question`, `list_questions`, and `update_question`.
@@ -291,6 +308,8 @@ missing/invalid values use the defaults below.
 | `BOT_QUEUE_MAX_CHANNEL` | 100 | Buffered messages per channel |
 | `BOT_QUEUE_MAX_TOTAL` | 500 | Buffered messages across channels |
 | `BOT_QUEUE_MAX_MESSAGE_CHARS` | 16384 | Maximum characters in a single queued message |
+| `BOT_RECENT_TRANSCRIPT_LINES` | 30 | Journal lines in each channel raid's recent transcript (at most 200) |
+| `BOT_RECENT_TRANSCRIPT_CHARS` | 6000 | Character cap for that transcript |
 
 Rate-limit retries retain the original request and channel, with waits of 70 then
 60 seconds. Exhaustion or expiry cancels the retry, clears processing/backoff
