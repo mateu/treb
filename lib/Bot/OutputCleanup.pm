@@ -116,7 +116,7 @@ sub is_non_substantive_output {
   my $lc = lc $text;
   $lc =~ s/\s+/ /g;
 
-  return 1 if $lc =~ /^(?:ok|okay|kk|noted|understood|got it|roger|sure|fine|yep|yeah|...|\.)$/;
+  return 1 if $lc =~ /^(?:ok|okay|kk|noted|understood|got it|roger|sure|fine|yep|yeah|\.{3}|…|\.)$/;
   return 1 if $lc =~ /^\((?:[^()]|\([^)]*\)){0,120}\)$/ && $lc !~ /[a-z0-9].*[a-z0-9].*[a-z0-9]/;
   return 1 if $lc =~ /^(?:\*.*\*|_.*_)$/ && length($lc) < 80;
   return 1 if $lc =~ /^\(?\s*silent\s*[-:]/;

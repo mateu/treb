@@ -72,6 +72,7 @@ launches queue behind a lock in `log/connect-slot/` and start
   - or individually: `script/with-burt-env.sh perl -c burt.pl`
 
 ## Current venue-graph status summary
+- The `fuseki_sparql_query` tool is treb-only and off by default. It is registered only when the bot's profile slug is `treb` and `TREB_FUSEKI_ENABLED=1` is set; this work is deferred, so no env file or example sets it today.
 - The cumulative `wgraph` bundle workflow is now live and reloadable into Fuseki.
 - Generated venue data now includes both `rdf:type` (`a`) and `wdt:P31` class triples so loader verification and Treb's live MCP queries agree.
 - Confirmed live online successes after the `wdt:P31` fix include:

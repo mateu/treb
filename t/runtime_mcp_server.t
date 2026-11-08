@@ -55,7 +55,7 @@ use Bot::Runtime::MCPServer qw(build_mcp_server);
     package TestRuntimeBot;
 
     sub new {
-        my ($class) = @_;
+        my ($class, %args) = @_;
         my $self = bless {
             memory   => TestRuntimeMemory->new,
             irc      => TestRuntimeIRC->new,
@@ -64,10 +64,12 @@ use Bot::Runtime::MCPServer qw(build_mcp_server);
             cpan     => [],
             urls     => [],
             searches => [],
+            slug     => $args{slug},
         }, $class;
         return $self;
     }
 
+    sub _bot_name_slug { return $_[0]->{slug} }
     sub _default_channel { return '#test' }
     sub _mcp_tool_logging_enabled { return 1 }
     sub _cpan_lookup {
@@ -104,7 +106,8 @@ use Bot::Runtime::MCPServer qw(build_mcp_server);
     }
 }
 
-my $bot = TestRuntimeBot->new;
+local $ENV{TREB_FUSEKI_ENABLED} = '1';
+my $bot = TestRuntimeBot->new(slug => 'treb');
 my $tool = TestRuntimeTool->new;
 my $server = build_mcp_server(self => $bot, server_name => 'unit-tools');
 ok($server, 'server built');
@@ -175,6 +178,36 @@ like($tools{fuseki_sparql_query}{description}, qr/Only use the "architect data e
         query => 'SELECT ?venue WHERE { GRAPH <urn:wgraph:spain> { ?venue wdt:P31 wd:Q33506 . } } LIMIT 5',
     });
     unlike($posts[0][1], qr/GRAPH \?graph \{ .* GRAPH <urn:wgraph:spain>/s, 'fuseki tool does not double-wrap explicit GRAPH queries');
+
+    @posts = ();
+    {
+        local $ENV{TREB_FUSEKI_DEBUG};
+        delete $ENV{TREB_FUSEKI_DEBUG};
+        my $stderr = '';
+        {
+            local *STDERR;
+            open(STDERR, '>', \$stderr) or die "cannot redirect STDERR: $!";
+            $tools{fuseki_sparql_query}{code}->($tool, {
+                query => 'SELECT ?venue WHERE { ?venue wdt:P31 wd:Q33506 . } LIMIT 5',
+            });
+        }
+        is($stderr, '', 'fuseki tool writes nothing to STDERR when TREB_FUSEKI_DEBUG is unset');
+    }
+
+    {
+        local $ENV{TREB_FUSEKI_DEBUG} = '1';
+        my $stderr = '';
+        {
+            local *STDERR;
+            open(STDERR, '>', \$stderr) or die "cannot redirect STDERR: $!";
+            $tools{fuseki_sparql_query}{code}->($tool, {
+                query => 'SELECT ?venue WHERE { ?venue wdt:P31 wd:Q33506 . } LIMIT 5',
+            });
+        }
+        like($stderr, qr/SPARQL QUERY/, 'fuseki tool logs the query dump when TREB_FUSEKI_DEBUG is set');
+        like($stderr, qr/FUSEKI RESPONSE/, 'fuseki tool logs the response dump when TREB_FUSEKI_DEBUG is set');
+        unlike($stderr, qr/KIMI/i, 'fuseki tool debug output no longer labels the query as KIMI-written');
+    }
 }
 
 like($tools{current_time}{code}->($tool, {}), qr/^Current local time:/, 'current_time returns formatted line');
@@ -203,5 +236,35 @@ is($tools{send_private_message}{code}->($tool, { nick => 'alice', message => '  
 like($tools{whois}{code}->($tool, { nick => '  alice  ' }), qr/WHOIS request sent/, 'whois trims nick and acknowledges request');
 is_deeply($bot->{irc}{events}[0], ['whois', 'alice'], 'whois delegated to IRC client');
 is($tools{whois}{code}->($tool, { nick => '   ' }), 'Nick is required.', 'whois requires nick');
+
+for my $case (
+    { slug => 'burt',   env => undef, expect => 0 },
+    { slug => 'burt',   env => '1',   expect => 0 },
+    { slug => 'critic', env => '1',   expect => 0 },
+    { slug => 'astrid', env => '1',   expect => 0 },
+    { slug => 'treb',   env => undef, expect => 0 },
+    { slug => 'treb',   env => '0',   expect => 0 },
+    { slug => 'treb',   env => '1',   expect => 1 },
+) {
+    local $ENV{TREB_FUSEKI_ENABLED};
+    if (defined $case->{env}) {
+        $ENV{TREB_FUSEKI_ENABLED} = $case->{env};
+    }
+    else {
+        delete $ENV{TREB_FUSEKI_ENABLED};
+    }
+    my $other_bot = TestRuntimeBot->new(slug => $case->{slug});
+    my $other_server = build_mcp_server(self => $other_bot, server_name => 'matrix-tools');
+    my %other_tools = map { ($_->{name} => $_) } @{ $other_server->{tools} || [] };
+    my $label = "slug=$case->{slug} env=" . ($case->{env} // 'unset');
+    if ($case->{expect}) {
+        ok($other_tools{fuseki_sparql_query}, "fuseki_sparql_query registered for $label");
+    }
+    else {
+        ok(!$other_tools{fuseki_sparql_query}, "fuseki_sparql_query not registered for $label");
+        unlike($other_tools{search_web}{description}, qr/fuseki/i, "search_web description omits fuseki for $label");
+        unlike($other_tools{search_web}{description}, qr/venue/i, "search_web description omits venue for $label");
+    }
+}
 
 done_testing;
