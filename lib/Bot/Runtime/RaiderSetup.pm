@@ -27,15 +27,20 @@ sub setup_raider {
   my $max_line = $args{max_line};
   die 'setup_raider requires max_line' unless defined $max_line;
   my $script_file = $args{script_file} or die 'setup_raider requires script_file';
-  my $max_context_tokens = defined $args{max_context_tokens} ? $args{max_context_tokens} : 8192;
-  # Operator opt-in for the Burt rollout. Other bots and explicit caller budgets
-  # retain their existing settings. This is a compactor budget, not an API cap.
-  if (!defined $args{max_context_tokens} && $self->can('_bot_name_slug')
-      && $self->_bot_name_slug eq 'burt' && exists $ENV{BURT_CONTEXT_TOKENS}) {
-    my $budget = $ENV{BURT_CONTEXT_TOKENS};
-    die 'BURT_CONTEXT_TOKENS must be an integer from 8192 to 65536'
-      unless $budget =~ /\A[0-9]+\z/ && $budget >= 8192 && $budget <= 65536;
-    $max_context_tokens = 0 + $budget;
+  # Compactor budget, not an API cap. An explicit caller budget wins, then
+  # CONTEXT_TOKENS for any bot, then Burt's original BURT_CONTEXT_TOKENS.
+  my $max_context_tokens = $args{max_context_tokens};
+  unless (defined $max_context_tokens) {
+    $max_context_tokens = 32768;
+    my @names = ('CONTEXT_TOKENS');
+    push @names, 'BURT_CONTEXT_TOKENS'
+      if $self->can('_bot_name_slug') && $self->_bot_name_slug eq 'burt';
+    if (my ($name) = grep { exists $ENV{$_} } @names) {
+      my $budget = $ENV{$name};
+      die "$name must be an integer from 8192 to 65536"
+        unless $budget =~ /\A[0-9]+\z/ && $budget >= 8192 && $budget <= 65536;
+      $max_context_tokens = 0 + $budget;
+    }
   }
 
   # Controlled experiments may pin their historical 13-iteration budget even
