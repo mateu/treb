@@ -5,8 +5,6 @@ use warnings;
 
 use Exporter 'import';
 our @EXPORT_OK = qw(
-  persona_trait_meta
-  persona_trait_order
   clamp_persona_value
   load_persona_cache
   persona_text
@@ -16,58 +14,16 @@ our @EXPORT_OK = qw(
   apply_persona_preset
 );
 
-my %PERSONA_TRAIT_META = (
-  join_greet_pct => {
-    kind => 'pct',
-    default => 0,
-  },
-  ambient_public_reply_pct => {
-    kind => 'pct',
-    default => 0,
-  },
-  public_thread_window_seconds => {
-    kind => 'seconds',
-    default => 45,
-  },
-  bot_reply_pct => {
-    kind => 'pct',
-    default => 50,
-  },
-  bot_reply_max_turns => {
-    kind => 'turns',
-    default => 1,
-  },
-  non_substantive_allow_pct => {
-    kind => 'pct',
-    default => 0,
-  },
-);
-
-my @PERSONA_TRAIT_ORDER = qw(
-  join_greet_pct
-  ambient_public_reply_pct
-  public_thread_window_seconds
-  bot_reply_pct
-  bot_reply_max_turns
-  non_substantive_allow_pct
-);
-
-sub persona_trait_meta {
-  return \%PERSONA_TRAIT_META;
-}
-
-sub persona_trait_order {
-  return @PERSONA_TRAIT_ORDER;
-}
-
 sub _trait_meta {
   my ($args) = @_;
-  return $args->{trait_meta} || \%PERSONA_TRAIT_META;
+  die 'trait_meta required' unless $args->{trait_meta};
+  return $args->{trait_meta};
 }
 
 sub _trait_order {
   my ($args) = @_;
-  return $args->{trait_order} || \@PERSONA_TRAIT_ORDER;
+  die 'trait_order required' unless $args->{trait_order};
+  return $args->{trait_order};
 }
 
 sub clamp_persona_value {

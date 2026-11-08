@@ -8,6 +8,7 @@ from urllib.error import HTTPError
 
 from broker import confirm_absent_pending_pull_request, reconcile_pending_pull_request
 from repository import Repository
+from workbench_test_support import envelope as _envelope
 import test_repository
 import test_broker
 
@@ -41,8 +42,8 @@ class ConfirmAbsentTests(unittest.TestCase):
         test_repository.RepositoryBrokerTests.setUp(self)
 
     def envelope(self, action, scope=None, channel=None, network=None, requester='mateu'):
-        return {'action': action, 'scope': scope or self.req['scope'], 'requester': requester,
-                'channel': channel or self.req['channel'], 'network': network or self.req['network']}
+        return _envelope(action, scope or self.req['scope'], channel or self.req['channel'],
+                         network or self.req['network'], requester)
 
     def request(self, action):
         return self.envelope(action)

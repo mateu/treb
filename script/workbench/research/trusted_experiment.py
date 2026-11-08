@@ -6,8 +6,11 @@ import os
 from pathlib import Path
 import random
 import subprocess
+import sys
 import time
 import uuid
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import trial_support as r
 from experiment_tasks import tasks, solutions
@@ -180,7 +183,7 @@ def main():
     parser.add_argument('--perl-root',type=Path,default=Path.home()/'perl5')
     args=parser.parse_args()
     os.umask(0o077)
-    repo=Path(__file__).resolve().parents[2]
+    repo=Path(__file__).resolve().parents[3]
     root=args.root.resolve()
     if args.action=='prepare':
         root.mkdir(mode=0o700,parents=True,exist_ok=False)
@@ -221,7 +224,6 @@ def main():
         environment_sha256=r.digest(args.env_file.read_bytes().hex()),preflight=pre,schedule=plan,
         model='deepseek-v4.1-flash:1017-cloud',limits=r.LIMITS)
     r.write_json(root/'manifest.json',manifest)
-    r.ExperimentBroker=TrialBroker;r.evaluate=assess;r.score_candidate=score
     r.ARM_SETTINGS['gated32k']=dict(context_tokens=32768,workflow='current',notebook=False)
     summaries=[]
     for i,item in enumerate(plan):
@@ -231,8 +233,8 @@ def main():
         if json.loads((root/'tasks'/item['task']/'task.json').read_text()) != SPECS[item['task']]['task']:
             raise ValueError('model-visible task drift')
         trial=r.run_trial(root/'tasks'/item['task']/'task.json',ARM,manifest['model'],out/('t%03d'%i),repo,
-            args.env_file,args.perl_root,trial_identity=item,experiment_manifest_sha256=r.digest(manifest),
-            expected_effective_route=pre['expected_common_route'])
+            args.env_file,args.perl_root,assess,score,broker_class=TrialBroker,trial_identity=item,
+            experiment_manifest_sha256=r.digest(manifest),expected_effective_route=pre['expected_common_route'])
         summaries.append(trial)
         r.write_json(root/'summary.json',summaries)
         print(json.dumps(dict(completed=len(summaries),total=len(plan),identity=item,score=trial['score'])),flush=True)

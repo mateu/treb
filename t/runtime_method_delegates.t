@@ -13,6 +13,7 @@ use Bot::Runtime::MethodDelegates qw(install_shared_delegates);
   sub _default_filtered_bot_nicks { 'rude_bot' }
   sub _buffer_delay_seconds { 17 }
   sub _send_to_channel_max_line { 321 }
+  sub _send_to_channel_return_cumulative { 0 }
   sub _handles_bare_utility_commands { 1 }
   sub _entrypoint_runtime_config {
     return {
@@ -261,6 +262,7 @@ my $bot = TestDelegateBot->new;
 {
   package TestDelegateBurtBot;
 
+  sub _send_to_channel_max_line { 400 }
   sub _send_to_channel_return_cumulative { 1 }
   sub _is_non_substantive_output { return 'custom' }
   sub _build_mcp_server { return 'custom-mcp' }

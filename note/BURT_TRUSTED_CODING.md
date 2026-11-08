@@ -41,8 +41,8 @@ for backward compatibility. Such results carry `command_only_unverified`, **not
 independent correctness evidence**. Enabling gated mode cannot grandfather old
 passed jobs into trusted acceptance or publication.
 
-The example experimental contract and launcher are in
-`script/workbench/{verification.py,trusted_experiment.py,experiment_tasks.py}`.
+The example experimental contract is `script/workbench/verification.py`. The frozen
+launcher and tasks live in `script/workbench/research/{trusted_experiment.py,experiment_tasks.py}`.
 Do not mount the operator task/solution/evaluator files into the model namespace.
 The gate's regression discovery runs `tests/**/test*.py` and `t/**/*.t`, in addition
 to the fixed original baseline and operator acceptance cases. A policy for a
@@ -79,10 +79,10 @@ interactive servers and real API integrations are not covered by this pilot.
 Use a clean committed checkout on clawd with its existing Perl dependency root:
 
 ```sh
-python3 script/workbench/trusted_experiment.py prepare --root /tmp/NEW-SHORT-ROOT
-python3 script/workbench/trusted_experiment.py preflight --root /tmp/NEW-SHORT-ROOT
+python3 script/workbench/research/trusted_experiment.py prepare --root /tmp/NEW-SHORT-ROOT
+python3 script/workbench/research/trusted_experiment.py preflight --root /tmp/NEW-SHORT-ROOT
 # Independently audit the controls and frozen source before:
-python3 script/workbench/trusted_experiment.py run --root /tmp/NEW-SHORT-ROOT
+python3 script/workbench/research/trusted_experiment.py run --root /tmp/NEW-SHORT-ROOT
 ```
 
 Run detached for long comparisons. Use a fresh root; never rerun a scored trial

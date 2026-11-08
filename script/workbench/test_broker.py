@@ -4,6 +4,7 @@ import tempfile
 import time
 import unittest
 from broker import Broker
+from workbench_test_support import envelope as _envelope
 
 
 class BrokerTests(unittest.TestCase):
@@ -44,8 +45,7 @@ class BrokerTests(unittest.TestCase):
         return 'https://gist.github.com/burt-agent/abcdef'
 
     def envelope(self, action, scope=None, channel='#ai', network='irc.perl.org', requester='mateu'):
-        return {'action': action, 'scope': scope or self.req['scope'], 'requester': requester,
-                'channel': channel, 'network': network}
+        return _envelope(action, scope or self.req['scope'], channel, network, requester)
 
     def publish(self, job):
         return self.b.handle(self.envelope('publish') | {'id': job['id']})

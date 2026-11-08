@@ -3,7 +3,8 @@ use warnings;
 use Test::More;
 
 use lib 'lib';
-use Bot::Persona qw(persona_trait_meta persona_trait_order);
+use Bot::Persona ();
+use Bot::Runtime::EntrypointConfig qw(persona_trait_meta persona_trait_order);
 use Bot::Runtime::PersonaTools ();
 
 {
@@ -140,8 +141,8 @@ local $ENV{BOT_REPLY_PCT} = 44;
 local $ENV{BOT_REPLY_MAX_TURNS} = 5;
 local $ENV{NON_SUBSTANTIVE_ALLOW_PCT} = 6;
 
-my %meta = %{ Bot::Persona::persona_trait_meta() };
-my @order = Bot::Persona::persona_trait_order();
+my %meta = %{ Bot::Runtime::EntrypointConfig::persona_trait_meta() };
+my @order = Bot::Runtime::EntrypointConfig::persona_trait_order();
 
 my $memory = Local::Memory->new(db_file => ':memory:');
 my $bot = Local::PersonaTestBot->new(memory => $memory);
@@ -187,5 +188,8 @@ like($stats, qr/persona=\{.*bot_reply_max_turns=3/s, 'db_stats_text includes per
 is(Bot::Runtime::PersonaTools::notes_text(self => $bot, nick => 'mateu'), '#1 [mateu] keeps things practical', 'notes_text returns stored notes');
 is(Bot::Runtime::PersonaTools::notes_text(self => $bot, nick => 'nobody'), 'No notes for nobody.', 'notes_text handles missing notes');
 is(Bot::Runtime::PersonaTools::notes_text(self => $bot, nick => '   '), 'Usage: :notes <nick>', 'notes_text validates nick');
+
+eval { Bot::Persona::clamp_persona_value('bot_reply_pct', 50) };
+like($@, qr/trait_meta required/, 'Bot::Persona dies without trait_meta');
 
 done_testing;
