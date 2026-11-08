@@ -126,6 +126,23 @@ class ReportFormatTests(unittest.TestCase):
         self.assertLessEqual(len(text), limit_report.MAX_CHARS)
         self.assertIn("50 events", text)
 
+    def test_dst_fall_back_ordered_by_absolute_time_not_wall_clock(self):
+        # 2026-11-01: America/Denver falls back from MDT (UTC-6) to MST
+        # (UTC-7) at 2:00 AM MDT, so 1:00-1:59 AM local happens twice. Both
+        # events below render as "01:30" local, but EARLY (07:30 UTC, still
+        # MDT) happened a full hour before LATE (08:30 UTC, already MST).
+        early = event_line({"kind": "time_limit", "action": "run_code", "job": "early111",
+                             "channel": "#ai", "value": 1, "limit": 2, "unit": "s"},
+                            "1793518200000000")
+        late = event_line({"kind": "time_limit", "action": "run_code", "job": "late2222",
+                            "channel": "#ai", "value": 1, "limit": 2, "unit": "s"},
+                           "1793521800000000")
+        text = build_report([late, early], first_run=False)
+        latest_block = text.split("Latest:\n", 1)[1].split("\nDetails:", 1)[0].splitlines()
+        self.assertEqual(len(latest_block), 2)
+        self.assertIn("late2222", latest_block[0])
+        self.assertIn("early111", latest_block[1])
+
 
 class CursorHelperTests(unittest.TestCase):
     def test_no_lines_returns_none(self):

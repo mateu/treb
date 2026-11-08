@@ -64,14 +64,18 @@ def _iter_events(lines):
         if not isinstance(payload, dict):
             continue
         try:
-            when = datetime.fromtimestamp(int(entry["__REALTIME_TIMESTAMP"]) / 1_000_000, tz=TZ)
+            timestamp_us = int(entry["__REALTIME_TIMESTAMP"])
         except (KeyError, TypeError, ValueError):
             continue
-        yield when, payload
+        yield timestamp_us, payload
 
 
 def build_report(lines, first_run):
     """Pure: turn journalctl -o json lines into report text, or NO_REPLY."""
+    # Sort by the raw epoch value, not the Denver-zoned datetime: comparing two
+    # aware datetimes that share one ZoneInfo instance takes a same-tzinfo
+    # fast path that compares wall-clock time and ignores DST fold, which can
+    # misorder events across the one ambiguous hour on the fall-back day.
     events = sorted(_iter_events(lines), key=lambda item: item[0])
     if not events:
         return "NO_REPLY"
@@ -81,7 +85,8 @@ def build_report(lines, first_run):
     for kind, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
         out.append(f"- {kind}: {count}")
     out.append("Latest:")
-    for when, payload in reversed(events[-MAX_LATEST:]):
+    for timestamp_us, payload in reversed(events[-MAX_LATEST:]):
+        when = datetime.fromtimestamp(timestamp_us / 1_000_000, tz=TZ)
         out.append(_format_event(when, payload))
     out.append("Details: journalctl --user -u burt-workbench.service --grep WORKBENCH_LIMIT")
     text = "\n".join(out)
