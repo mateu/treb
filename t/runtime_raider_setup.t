@@ -120,6 +120,19 @@ use Bot::Runtime::RaiderSetup (qw(setup_raider));
         push @{ $self->{infos} }, $line;
         return 1;
     }
+
+    sub memory { return $_[0]->{memory} }
+}
+
+{
+    package TestRuntimeMemory;
+
+    sub new { bless {}, shift }
+    sub recent_public_messages {
+        my ($self, %args) = @_;
+        $self->{recent} = [map { $_ => $args{$_} } qw(channel limit)];
+        return [];
+    }
 }
 
 subtest 'setup_raider wires mcp, mission, and raider with defaults' => sub {
@@ -160,6 +173,19 @@ subtest 'setup_raider wires mcp, mission, and raider with defaults' => sub {
     is($mission->{channels}, '#ai, #bots', 'channels joined into mission payload');
 
     like($bot->{infos}[0], qr/^Raider ready: Langertha::Engine::Groq/, 'ready log line emitted');
+
+    my @plugins = @{ $raider->{plugins} };
+    my ($at) = grep { !ref($plugins[$_]) && $plugins[$_] eq '+Bot::Runtime::RaiderPlugin::RecentTranscript' } 0 .. $#plugins;
+    my $transcript = defined($at) ? $plugins[$at + 1] : undef;
+    ok($transcript, 'recent transcript plugin registered');
+    is_deeply([sort keys %$transcript], [qw(fetch logger pending)], 'transcript plugin gets pending, fetch, and logger');
+    $bot->{memory} = TestRuntimeMemory->new;
+    $transcript->{fetch}->('#ai', 7);
+    is_deeply($bot->{memory}{recent}, [channel => '#ai', limit => 7], 'fetch reads this channel from the journal');
+    like($raider->{compression_prompt}, qr/IRC channel conversation/, 'IRC-specific compression prompt passed');
+    like($raider->{compression_prompt}, qr/Attribute every point to the nick/, 'compression keeps nick attribution');
+    like($raider->{compression_prompt}, qr/questions, offers, or promises\s+the bot made and to whom/, 'compression keeps the bot\'s own questions');
+    like($raider->{compression_prompt}, qr/still unanswered/, 'compression keeps unanswered questions');
 
     is_deeply(
         \@loaded,

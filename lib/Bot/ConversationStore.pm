@@ -72,6 +72,16 @@ sub record_public_message {
   return $self->_dbh->sqlite_last_insert_rowid;
 }
 
+# Newest rows for one channel, returned oldest first for transcript rendering.
+sub recent_public_messages {
+  my ($self, %a) = @_;
+  my ($network, $channel) = irc_scope(%a);
+  my $limit = _integer($a{limit} // 30, 'limit', 1, 200);
+  my $rows = $self->_dbh->selectall_arrayref(q{SELECT * FROM public_messages
+    WHERE network=? AND channel=? ORDER BY id DESC LIMIT ?}, {Slice=>{}}, $network, $channel, $limit);
+  return [ map { _message_row($_) } reverse @$rows ];
+}
+
 sub search_quotes {
   my ($self, %a) = @_;
   my ($network, $channel) = irc_scope(%a);
