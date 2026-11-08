@@ -1,9 +1,9 @@
 use strict;
 use warnings;
 use Test::More;
+use File::Temp qw(tempdir);
 
-local $ENV{DB_FILE} = 't/persona_set_treb.sqlite';
-unlink $ENV{DB_FILE} if -f $ENV{DB_FILE};
+local $ENV{DB_FILE} = tempdir(CLEANUP => 1) . '/persona_set_treb.sqlite';
 local $ENV{IRC_NICKNAME} = 'treb_bot';
 local $ENV{BOT_IDENTITY_SLUG} = 'treb';
 require './treb.pl';

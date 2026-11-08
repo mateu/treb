@@ -4,14 +4,12 @@ StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-WorkingDirectory=%h/dev/treb
-ExecStart=/usr/bin/bash -lc 'exec "$HOME/dev/treb/script/run-burt.sh"'
+ExecStart=/usr/bin/bash -lc 'echo "burt-sandbox requires the isolated release drop-in (80-workbench.conf); refusing to start unsandboxed" >&2; exit 1'
 Restart=always
 RestartSec=10s
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ReadWritePaths=%h/dev/treb
 # Non-secret GitHub writer allowlist; run-burt-isolated.sh forwards only
 # BURT_GITHUB_WRITERS into the bot namespace. The token stays with the broker.
 EnvironmentFile=-%h/.config/burt-github/workbench.env

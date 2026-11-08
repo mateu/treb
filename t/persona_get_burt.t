@@ -1,9 +1,9 @@
 use strict;
 use warnings;
 use Test::More;
+use File::Temp qw(tempdir);
 
-local $ENV{DB_FILE} = 't/persona_get_burt.sqlite';
-unlink $ENV{DB_FILE} if -f $ENV{DB_FILE};
+local $ENV{DB_FILE} = tempdir(CLEANUP => 1) . '/persona_get_burt.sqlite';
 local $ENV{IRC_NICKNAME} = 'burt_bot';
 local $ENV{BOT_IDENTITY_SLUG} = 'burt';
 local $ENV{JOIN_GREET_PCT} = 23;

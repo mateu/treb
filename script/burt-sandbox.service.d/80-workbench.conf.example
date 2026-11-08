@@ -1,0 +1,18 @@
+# Install as ~/.config/systemd/user/burt-sandbox.service.d/80-workbench.conf
+# with RELEASE replaced by the live 12-character release directory name under
+# ~/.local/share/burt-irc/releases/ (see deployment.json's active_runtime.release).
+# Without this drop-in, the base burt-sandbox.service refuses to start (D1).
+[Unit]
+Requires=burt-workbench.service
+After=burt-workbench.service
+
+[Service]
+ExecStart=
+ExecStart=%h/.local/share/burt-irc/releases/RELEASE/script/run-burt-isolated.sh
+Environment=BURT_SOURCE_ROOT=%h/.local/share/burt-irc/releases/RELEASE
+WorkingDirectory=%h/.local/share/burt-irc/releases/RELEASE
+ReadWritePaths=%h/.local/share/burt-irc/data
+UMask=0077
+MemoryMax=512M
+MemorySwapMax=0
+TasksMax=64

@@ -2,9 +2,9 @@ use strict;
 use warnings;
 use Test::More;
 use DBI;
+use File::Temp qw(tempdir);
 
-my $db = 't/persona.sqlite';
-unlink $db if -f $db;
+my $db = tempdir(CLEANUP => 1) . '/persona.sqlite';
 
 local $ENV{DB_FILE} = $db;
 local $ENV{IRC_NICKNAME} = 'treb_bot';
