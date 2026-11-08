@@ -27,6 +27,16 @@ Example in irc.perl.org `#ai`:
   cgroup limits (256 MiB RAM/no swap/32 tasks/20 seconds), 64 KiB output and
   bounded text inputs. Absolute Python/Perl/sh argv only, executed inside the
   sandbox. Never an unsandboxed fallback; missing dependencies fail the job.
+  A job killed by the time or memory limit is labeled `time_limit` or
+  `memory_limit` instead of the generic `exited`, by querying the transient
+  unit's systemd `Result` before it is stopped and reset-failed; burt is told
+  which limit stopped the job and is told not to treat it as a code failure.
+  The broker writes one `WORKBENCH_LIMIT <json>` line to its stderr (journal)
+  per limit event (`time_limit`, `memory_limit`, `output_limit`, `input_bytes`,
+  `file_count`, `project_near_limit`), with sorted compact-JSON keys `kind`,
+  `action`, `job`, `scope` (first 12 hex characters), `channel`, `value`,
+  `limit`, `unit`. These lines are metadata only: never file contents, output,
+  argv, requester or raw request bytes.
 * **Publisher:** a separate host-side service owns the narrow Unix socket API.
   It runs the isolated runner, journals jobs in SQLite and posts only stored
   immutable **input source/test files**, never host paths, symlinks, generated

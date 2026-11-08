@@ -112,3 +112,77 @@ class LargeWireTests(unittest.TestCase):
         with self.assertRaisesRegex(InputSizeError, 'submitted_bytes=65537 allowed_bytes=65536 excess_bytes=1'):
             self.b.handle(req)
         self.assertEqual(self.b.db.execute('SELECT COUNT(*) FROM jobs').fetchone()[0], 0)
+
+
+class RejectionReasonTests(unittest.TestCase):
+    """AC-5: InputSizeError and file-count refusals carry a fixed `reason`."""
+    setUp = test_repository.RepositoryBrokerTests.setUp
+    envelope = test_repository.RepositoryBrokerTests.envelope
+    post = test_repository.RepositoryBrokerTests.post
+
+    def test_input_size_error_carries_reason_unchanged_code_and_message(self):
+        oversized = self.repo_req | {'changes': {'big.txt': 'x' * (MAX_INPUT_BYTES + 1)}, 'title': 'too big'}
+        with self.assertRaises(InputSizeError) as caught:
+            self.b.handle(oversized)
+        rejection = caught.exception.rejection
+        self.assertEqual(rejection['reason'], str(caught.exception))
+        self.assertEqual(rejection['code'], 'invalid_request')
+        self.assertEqual(rejection['message'], 'request rejected by Workbench policy')
+        self.assertEqual(rejection['disposition'], 'retryable')
+        audit_reason = self.b.db.execute('SELECT reason FROM rejections ORDER BY seq DESC LIMIT 1').fetchone()[0]
+        self.assertEqual(audit_reason, str(caught.exception))
+
+    def test_file_count_refusal_carries_reason_unchanged_code_and_message(self):
+        # validate()'s generic file-count check runs before repository.validate_files(),
+        # so repo_run's own 33-file case surfaces the shared runner message first.
+        too_many = self.repo_req | {'changes': {f'f{i}.txt': 'x' for i in range(33)}, 'title': 'too many'}
+        with self.assertRaisesRegex(ValueError, 'files must contain 1..32 text files') as caught:
+            self.b.handle(too_many)
+        rejection = caught.exception.rejection
+        self.assertEqual(rejection['reason'], 'files must contain 1..32 text files')
+        self.assertEqual(rejection['code'], 'invalid_request')
+        self.assertEqual(rejection['message'], 'request rejected by Workbench policy')
+
+    def test_project_file_count_message_also_carries_reason(self):
+        # 'project requires 1..32 text files' (repository.validate_files) is the
+        # other fixed file-count refusal named by D3; record_rejection treats it
+        # identically to the runner's own message exercised above.
+        rejection = self.b.record_rejection(self.repo_req, ValueError('project requires 1..32 text files'))
+        self.assertEqual(rejection['reason'], 'project requires 1..32 text files')
+        self.assertEqual(rejection['code'], 'invalid_request')
+        self.assertEqual(rejection['message'], 'request rejected by Workbench policy')
+
+
+class ProjectNearLimitTests(unittest.TestCase):
+    """AC-4: an 80%-or-more project logs one line; 79% logs none."""
+    setUp = test_repository.RepositoryBrokerTests.setUp
+    envelope = test_repository.RepositoryBrokerTests.envelope
+    post = test_repository.RepositoryBrokerTests.post
+
+    def captured_limit_lines(self, fn):
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            result = fn()
+        lines = [line for line in buf.getvalue().splitlines() if line.startswith('WORKBENCH_LIMIT ')]
+        return result, [json.loads(line[len('WORKBENCH_LIMIT '):]) for line in lines]
+
+    def test_at_80_percent_logs_one_line(self):
+        req = self.repo_req | {'changes': {'big.txt': 'x' * 104858}, 'title': 'at 80 percent'}
+        job, events = self.captured_limit_lines(lambda: self.b.handle(req))
+        self.assertEqual(events, [{'action': 'repo_run', 'channel': '#ai', 'job': job['id'],
+                                   'kind': 'project_near_limit', 'limit': MAX_INPUT_BYTES,
+                                   'scope': self.req['scope'][:12], 'unit': 'bytes', 'value': 104858}])
+
+    def test_below_80_percent_logs_nothing(self):
+        req = self.repo_req | {'changes': {'big.txt': 'x' * 104857}, 'title': 'just under 80 percent'}
+        job, events = self.captured_limit_lines(lambda: self.b.handle(req))
+        self.assertEqual(events, [])
+
+    def test_replayed_job_does_not_log_again(self):
+        req = self.repo_req | {'changes': {'big.txt': 'x' * 104858}, 'title': 'replay check'}
+        first, _ = self.captured_limit_lines(lambda: self.b.handle(req))
+        second, events = self.captured_limit_lines(lambda: self.b.handle(req))
+        self.assertEqual(second['id'], first['id'])
+        self.assertEqual(events, [])

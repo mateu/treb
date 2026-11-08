@@ -69,4 +69,28 @@ for my $name (qw(publish_gist)) {
 Bot::Runtime::Workbench::report_result($bot,'repo_run',JSON::PP::encode_json({error=>'INJECTED'}));
 unlike($bot->{sent}[-1],$warning,'test errors are not misreported as public writes');
 unlike($bot->{sent}[-1],qr/INJECTED/,'test error text is not echoed');
+
+# D4: report_result appends the labeled-kill text after the exit code, and
+# nothing extra for an ordinary exited result.
+for my $case (
+  [time_limit=>'stopped by the 20 s sandbox time limit'],
+  [memory_limit=>'stopped by the 256 MiB sandbox memory limit'],
+  [output_limit=>'stopped by the 64 KiB sandbox output limit'],
+) {
+  my ($reason,$text)=@$case;
+  Bot::Runtime::Workbench::report_result($bot,'run',JSON::PP::encode_json({
+    id=>'a'x32,state=>'failed',result=>{exit_code=>1,reason=>$reason}}));
+  like($bot->{sent}[-1],qr/\Qexit 1; $text\E/,"run notice names the $reason limit");
+}
+Bot::Runtime::Workbench::report_result($bot,'run',JSON::PP::encode_json({
+  id=>'a'x32,state=>'failed',result=>{exit_code=>1,reason=>'exited'}}));
+unlike($bot->{sent}[-1],qr/sandbox (?:time|memory|output) limit/,
+  'an ordinary exited failure gets no limit text');
+
+# D5: the four tool descriptions carry the shared limit-reason sentence.
+my $limit_sentence=qr/result\.reason time_limit\/memory_limit\/output_limit means the sandbox stopped the job at that limit, not that the code failed its tests; do not rewrite code to fix it; tell the requester which limit was hit\./;
+for my $name (qw(run_code run_repo_project repair_repo_project diagnose_repo_job)) {
+  like($tools{$name}{description},$limit_sentence,"$name describes sandbox limit reasons");
+}
+
 done_testing;

@@ -101,7 +101,7 @@ def run(job, seconds=20, checks=None):
                 target = checks_dir / name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(content)
-        cmd = ['/usr/bin/systemd-run', '--user', '--quiet', '--wait', '--pipe', '--collect',
+        cmd = ['/usr/bin/systemd-run', '--user', '--quiet', '--wait', '--pipe',
                '--unit=' + unit, '-p', 'RuntimeMaxSec=' + str(seconds),
                '-p', 'TimeoutStopSec=2', '-p', 'KillMode=control-group',
                '-p', 'MemoryMax=256M', '-p', 'MemorySwapMax=0', '-p', 'TasksMax=32',
@@ -163,8 +163,29 @@ def run(job, seconds=20, checks=None):
             if reason == 'exited':
                 proc.wait(timeout=3)
         finally:
-            # Stop the whole cgroup, not merely the systemd-run client.
+            # Without --collect the transient unit survives for this query.
+            # output_limit and supervisor_timeout are detected here already
+            # and are never overwritten by the systemd Result.
+            if reason == 'exited':
+                try:
+                    probe = subprocess.run(
+                        ['/usr/bin/systemctl', '--user', 'show', unit + '.service',
+                         '-p', 'Result', '--value'],
+                        env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=8)
+                    value = (probe.stdout.decode('utf-8', errors='replace').strip()
+                             if probe.returncode == 0 else '')
+                except (OSError, subprocess.SubprocessError):
+                    value = ''
+                if value == 'timeout':
+                    reason = 'time_limit'
+                elif value == 'oom-kill':
+                    reason = 'memory_limit'
+            # Stop the whole cgroup, not merely the systemd-run client, then
+            # clear the failed unit so no burt-workbench-* units accumulate.
             subprocess.run(['/usr/bin/systemctl', '--user', 'stop', unit + '.service'],
+                                     env=env, stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL, timeout=8)
+            subprocess.run(['/usr/bin/systemctl', '--user', 'reset-failed', unit + '.service'],
                                      env=env, stdout=subprocess.DEVNULL,
                                      stderr=subprocess.DEVNULL, timeout=8)
             if proc.poll() is None:

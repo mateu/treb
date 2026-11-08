@@ -8,12 +8,13 @@ from pathlib import Path
 import re
 import socketserver
 import sqlite3
+import sys
 import time
 import urllib.error
 import urllib.request
 import uuid
 
-from runner import run, validate, MAX_JSON_BYTES, MAX_INPUT_BYTES, MAX_GIST_INPUT_BYTES, InputSizeError
+from runner import run, validate, MAX_JSON_BYTES, MAX_INPUT_BYTES, MAX_GIST_INPUT_BYTES, MAX_OUTPUT_BYTES, InputSizeError
 from repository import GitHubHTTPRejected, Repository, validate_destination, validate_source, validate_files
 from github import GitHub, GitHubError, GitHubHTTPError, GitHubPolicyError, GitHubTransportError, classify
 from verification import Verification
@@ -134,6 +135,15 @@ NON_RETRYABLE_POLICY = {
     'verification policy must not be symlink/group/world writable':
         'The operator must correct the verification policy file permissions.',
 }
+
+def log_limit(kind, action, job, scope, channel, value, limit, unit):
+    """D6: one metadata-only WORKBENCH_LIMIT line per sandbox/size limit event."""
+    sys.stderr.write('WORKBENCH_LIMIT ' + json.dumps(
+        {'action': action, 'channel': channel, 'job': job, 'kind': kind, 'limit': limit,
+         'scope': scope[:12] if isinstance(scope, str) else None, 'unit': unit, 'value': value},
+        sort_keys=True, separators=(',', ':')) + '\n')
+    sys.stderr.flush()
+
 
 def reconcile_pending_pull_request(db, repository, task_id):
     """Reconcile one persisted PR-create operation without issuing a GitHub write."""
@@ -598,6 +608,15 @@ class Broker:
                   'action': action, 'disposition': disposition,
                   'reconciliation': 'required' if uncertain else None,
                   'repeat_count': min(repeated, REPEAT_REJECTION_LIMIT)}
+        # D3: burt sees why an InputSizeError or file-count refusal fired,
+        # without changing code/message/disposition or the stored audit reason.
+        if isinstance(exc, InputSizeError):
+            result['reason'] = message
+            log_limit('input_bytes', action, None, scope, channel,
+                      exc.submitted_bytes, exc.allowed_bytes, 'bytes')
+        elif message in ('files must contain 1..32 text files', 'project requires 1..32 text files'):
+            result['reason'] = message
+            log_limit('file_count', action, None, scope, channel, None, 32, 'files')
         if message in NON_RETRYABLE_POLICY:
             result.update(reason=message, message=message, disposition='terminal',
                           retryable=False, required_action=NON_RETRYABLE_POLICY[message],
@@ -1319,8 +1338,10 @@ class Broker:
                                    max_input_bytes=MAX_INPUT_BYTES if action == 'repo_run' else MAX_GIST_INPUT_BYTES)
             # Gists use flat filenames. No extraction, generated paths, symlinks,
             # stdout-as-files, or host file reads are part of publishing.
+            project_total = None
             if action == 'repo_run':
                 validate_files(files)
+                project_total = sum(len(v.encode('utf-8')) for v in files.values())
                 if policy is not None and not _diagnostic:
                     self.verification.prepare(snapshot, files)
             elif any(not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}', n)
@@ -1361,6 +1382,11 @@ class Broker:
             job_id = uuid.uuid4().hex
             self.db.execute('INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?,?)',
                             (job_id, scope, digest, now, json.dumps(files), title, '{}', 'running', None))
+            # D7: a repo_run/repo_repair project at >=80% of MAX_INPUT_BYTES
+            # logs one warning per job; below that threshold logs nothing.
+            if project_total is not None and project_total * 5 >= MAX_INPUT_BYTES * 4:
+                log_limit('project_near_limit', action, job_id, scope, req['channel'],
+                          project_total, MAX_INPUT_BYTES, 'bytes')
             self.consume_task_attempt(task_id, now)
             self.resource_checkpoint('job', job_id, req, 'running', now)
             if destination:
@@ -1377,6 +1403,13 @@ class Broker:
                     result = self.execute({'files': files, 'argv': argv})
             except Exception:
                 result = {'reason': 'runner_error', 'exit_code': None, 'output': ''}
+            # D6: the runner's labeled kills (D1) and output cutoff are
+            # sandbox-stopped jobs, not code failures; log one line each.
+            if result.get('reason') in ('time_limit', 'memory_limit', 'output_limit'):
+                limit, unit = {'time_limit': (20, 's'), 'memory_limit': (268435456, 'bytes'),
+                              'output_limit': (MAX_OUTPUT_BYTES, 'bytes')}[result['reason']]
+                value = result.get('elapsed_seconds') if result['reason'] == 'time_limit' else None
+                log_limit(result['reason'], action, job_id, scope, req['channel'], value, limit, unit)
             result['argv'] = policy['argv'] if policy is not None and not _diagnostic else argv
             if action == 'repo_run' and policy is None:
                 result['verification'] = {'kind': 'command_only_unverified'}
