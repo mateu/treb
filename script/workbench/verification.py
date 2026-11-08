@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from repository import validate_source, validate_files
-from runner import validate
+from runner import validate, BrokerRejection
 
 
 def digest(value):
@@ -35,19 +35,19 @@ class Verification:
                     or (policy.get('source_baseline') == 'current_verified'
                         and key not in CURRENT_VERIFIED_KEYS)
                     or not any(a.startswith('/checks/') for a in policy['argv'])):
-                raise ValueError('invalid verification policy')
+                raise BrokerRejection('invalid verification policy')
 
     @classmethod
     def load(cls, path):
         path = Path(path)
         if path.is_symlink() or path.stat().st_mode & 0o022:
-            raise ValueError('verification policy must not be symlink/group/world writable')
+            raise BrokerRejection('verification policy must not be symlink/group/world writable')
         return cls(json.loads(path.read_text()))
 
     def policy(self, snapshot):
         key = snapshot['branch'] + ':' + snapshot['project']
         if key not in self.policies:
-            raise ValueError('operator verification policy required for this project')
+            raise BrokerRejection('operator verification policy required for this project')
         policy = self.policies[key]
         if policy.get('source_baseline') == 'current_verified':
             # An explicit allowlisted opt-in advances only the effective baseline.
@@ -58,12 +58,12 @@ class Verification:
             policy['baseline'] = snapshot['files']
         elif (policy['base_sha'] != snapshot['base_sha']
                 or policy['baseline'] != snapshot['files']):
-            raise ValueError('verification baseline changed; operator review required')
+            raise BrokerRejection('verification baseline changed; operator review required')
         return policy
 
     def identity(self, policy):
         if self.runtime != self.runtime_identity():
-            raise ValueError('verification runtime changed; restart/review required')
+            raise BrokerRejection('verification runtime changed; restart/review required')
         return digest({'policy': policy, 'runtime': self.runtime})
 
     @staticmethod

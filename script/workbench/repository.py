@@ -10,7 +10,7 @@ import urllib.error
 import urllib.request
 
 from github import GitHub, safe_repo, safe_branch, safe_file_path
-from runner import MAX_INPUT_BYTES, MAX_JSON_BYTES, InputSizeError
+from runner import MAX_INPUT_BYTES, MAX_JSON_BYTES, InputSizeError, BrokerRejection
 
 REPO = 'burt-agent/workspace'
 TOKEN = Path(os.environ.get('BURT_GITHUB_TOKEN_FILE') or Path.home() / '.config/burt-github/token')
@@ -32,7 +32,7 @@ class GitHubHTTPRejected(ValueError):
     def from_http_error(cls, error):
         status = error.code
         if not isinstance(status, int) or not 400 <= status < 500:
-            raise ValueError('not a deterministic GitHub HTTP rejection')
+            raise BrokerRejection('not a deterministic GitHub HTTP rejection')
         try:
             body = error.read(8193)
             data = json.loads(body.decode('utf-8'))
@@ -63,19 +63,19 @@ class PullRequestUncertain(ValueError):
 
 def validate_pull_request(branch, expected_head_sha=None):
     if not isinstance(branch, str) or not re.fullmatch(r'burt/[a-z0-9][a-z0-9-]{0,59}', branch):
-        raise ValueError('use a burt/<lowercase-slug> head branch for a pull request')
+        raise BrokerRejection('use a burt/<lowercase-slug> head branch for a pull request')
     if expected_head_sha is not None and (not isinstance(expected_head_sha, str)
                                           or not re.fullmatch(SHA, expected_head_sha)):
-        raise ValueError('invalid expected branch head')
+        raise BrokerRejection('invalid expected branch head')
 
 
 def validate_destination(branch, project, base_sha=None):
     if not isinstance(branch, str) or not re.fullmatch(r'burt/[a-z0-9][a-z0-9-]{0,59}', branch):
-        raise ValueError('use a burt/<lowercase-slug> branch; main is never writable')
+        raise BrokerRejection('use a burt/<lowercase-slug> branch; main is never writable')
     if not isinstance(project, str) or not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,59}', project):
-        raise ValueError('invalid project slug')
+        raise BrokerRejection('invalid project slug')
     if base_sha is not None and (not isinstance(base_sha, str) or not re.fullmatch(SHA, base_sha)):
-        raise ValueError('invalid base commit')
+        raise BrokerRejection('invalid base commit')
 
 
 def validate_source(branch, project, base_sha=None):
@@ -86,15 +86,15 @@ def validate_source(branch, project, base_sha=None):
 
 def validate_files(files):
     if not isinstance(files, dict) or not 1 <= len(files) <= 32:
-        raise ValueError('project requires 1..32 text files')
+        raise BrokerRejection('project requires 1..32 text files')
     total = 0
     for name, content in files.items():
         if (not isinstance(name, str) or len(name) > 160
                 or not all(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}', p) for p in name.split('/'))
                 or not isinstance(content, str) or '\x00' in content):
-            raise ValueError('use safe relative text paths; no hidden files, traversal or NUL')
+            raise BrokerRejection('use safe relative text paths; no hidden files, traversal or NUL')
         if any(other.startswith(name + '/') for other in files):
-            raise ValueError('file/directory collision')
+            raise BrokerRejection('file/directory collision')
         total += len(content.encode('utf-8'))
     if total > MAX_INPUT_BYTES:
         raise InputSizeError(total, 'project')
@@ -125,22 +125,22 @@ class Repository:
             except FileNotFoundError:
                 pass
             except OSError:
-                raise ValueError('account credential requires an owner-only mode 600 file') from None
+                raise BrokerRejection('account credential requires an owner-only mode 600 file') from None
             else:
                 # Same contract as GitHub.token(): owner-only regular file in a
                 # directory that is not group/world writable.
                 if (not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077
                         or info.st_uid != os.getuid() or parent.st_mode & 0o022):
-                    raise ValueError('account credential requires an owner-only mode 600 file')
+                    raise BrokerRejection('account credential requires an owner-only mode 600 file')
                 return self.pull_token
         try:
             info = os.lstat(token)
             parent = os.stat(token.parent)
         except OSError:
-            raise ValueError('account credential requires an owner-only mode 600 file') from None
+            raise BrokerRejection('account credential requires an owner-only mode 600 file') from None
         if (not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077
                 or info.st_uid != os.getuid() or parent.st_mode & 0o022):
-            raise ValueError('account credential requires an owner-only mode 600 file')
+            raise BrokerRejection('account credential requires an owner-only mode 600 file')
         return token
 
     def api(self, path, payload=None, method=None):
@@ -153,26 +153,26 @@ class Repository:
                     data=None if payload is None else json.dumps(payload).encode(), method=method)
         remaining = 8 if self.deadline is None else min(8, self.deadline - time.monotonic())
         if remaining <= 0:
-            raise ValueError('repository operation deadline exceeded')
+            raise BrokerRejection('repository operation deadline exceeded')
         with opener.open(request, timeout=remaining) as response:
             raw = response.read(1500001)
             request_id = response.headers.get('X-GitHub-Request-Id')
         if isinstance(request_id, str) and re.fullmatch(r'[A-Za-z0-9_.:-]{1,128}', request_id):
             self.request_ids.append(request_id)
         if len(raw) > 1500000:
-            raise ValueError('repository response exceeds bound')
+            raise BrokerRejection('repository response exceeds bound')
         return json.loads(raw)
 
     def verify(self):
         if self.api('/user').get('login') != 'burt-agent':
-            raise ValueError('repository credential must belong to burt-agent')
+            raise BrokerRejection('repository credential must belong to burt-agent')
         repo = self.api('/repos/' + REPO)
         if repo.get('full_name') != REPO or repo.get('private') is not False or not repo.get('permissions', {}).get('push'):
-            raise ValueError('expected public writable burt-agent/workspace')
+            raise BrokerRejection('expected public writable burt-agent/workspace')
 
     def pull_request(self, number):
         if not isinstance(number, int) or isinstance(number, bool) or number < 1:
-            raise ValueError('invalid pull request number')
+            raise BrokerRejection('invalid pull request number')
         self.deadline = time.monotonic() + 14
         self.verify()
         return self._validated_pull(self.api('/repos/' + REPO + '/pulls/' + str(number)))
@@ -180,7 +180,7 @@ class Repository:
     @staticmethod
     def _validated_pull(data):
         if not isinstance(data, dict):
-            raise ValueError('invalid pull request response')
+            raise BrokerRejection('invalid pull request response')
         number, head, base, url = data.get('number'), data.get('head', {}), data.get('base', {}), data.get('html_url', '')
         if (not isinstance(number, int) or not isinstance(head, dict) or not isinstance(base, dict)
                 or not re.fullmatch(r'burt/[a-z0-9][a-z0-9-]{0,59}', head.get('ref', ''))
@@ -188,18 +188,18 @@ class Repository:
                 or base.get('ref') != 'main' or base.get('repo', {}).get('full_name') != REPO
                 or head.get('repo', {}).get('full_name') != REPO
                 or not re.fullmatch(r'https://github\.com/burt-agent/workspace/pull/[1-9][0-9]*', url)):
-            raise ValueError('unexpected pull request response')
+            raise BrokerRejection('unexpected pull request response')
         return {'number': number, 'branch': head['ref'], 'head_sha': head['sha'], 'base': 'main',
                 'state': data['state'], 'merged': bool(data.get('merged')), 'mergeable': data.get('mergeable'), 'url': url}
 
     def _find_pull(self, branch, expected_head_sha):
         data = self.api('/repos/' + REPO + '/pulls?state=all&head=burt-agent:' + branch + '&base=main')
         if not isinstance(data, list) or len(data) > 100:
-            raise ValueError('invalid pull request list response')
+            raise BrokerRejection('invalid pull request list response')
         matches = [self._validated_pull(item) for item in data]
         matches = [item for item in matches if item['branch'] == branch and item['head_sha'] == expected_head_sha]
         if len(matches) > 1:
-            raise ValueError('ambiguous pull request response')
+            raise BrokerRejection('ambiguous pull request response')
         return matches[0] if matches else None
 
     def find_pull_request(self, branch, expected_head_sha):
@@ -218,7 +218,7 @@ class Repository:
         prefix = '/repos/' + REPO
         head = self.api(prefix + '/git/ref/heads/' + branch).get('object', {}).get('sha', '')
         if head != expected_head_sha:
-            raise ValueError('branch head changed or is missing; record remains pending')
+            raise BrokerRejection('branch head changed or is missing; record remains pending')
         # Absence must cover every base: a PR created against main can later be
         # retargeted, so filter only by head and treat any listed PR as present.
         # Items are not identity-validated here; an unexpected shape or base is
@@ -228,27 +228,27 @@ class Repository:
             data = self.api(prefix + '/pulls?state=all&head=burt-agent:' + branch
                             + '&per_page=100&page=' + str(page))
             if not isinstance(data, list) or len(data) > 100:
-                raise ValueError('invalid pull request list response')
+                raise BrokerRejection('invalid pull request list response')
             pulls.extend(data)
             if len(data) < 100:
                 break
         else:
-            raise ValueError('pull request pagination exceeds bound')
+            raise BrokerRejection('pull request pagination exceeds bound')
         if pulls:
-            raise ValueError('pull request exists for branch; record remains pending')
+            raise BrokerRejection('pull request exists for branch; record remains pending')
         return {'branch': branch, 'head_sha': expected_head_sha, 'branch_sha': head,
                 'pr_count': 0, 'request_ids': list(self.request_ids)}
 
     def create_pull_request(self, branch, expected_head_sha, title):
         validate_pull_request(branch, expected_head_sha)
         if not isinstance(title, str) or not 1 <= len(title) <= 200 or '\x00' in title:
-            raise ValueError('invalid pull request title')
+            raise BrokerRejection('invalid pull request title')
         self.deadline = time.monotonic() + 16
         self.verify()
         prefix = '/repos/' + REPO
         head = self.api(prefix + '/git/ref/heads/' + branch).get('object', {}).get('sha', '')
         if head != expected_head_sha:
-            raise ValueError('branch head changed; reread and retest before creating a pull request')
+            raise BrokerRejection('branch head changed; reread and retest before creating a pull request')
         existing = self._find_pull(branch, expected_head_sha)
         if existing:
             return existing | {'created': False}
@@ -270,7 +270,7 @@ class Repository:
                 existing = None
             if existing:
                 return existing | {'created': False}
-            raise ValueError('pull request submission outcome is uncertain; inspect before retrying') from None
+            raise BrokerRejection('pull request submission outcome is uncertain; inspect before retrying') from None
         result = self._validated_pull(created)
         if result['branch'] != branch or result['head_sha'] != expected_head_sha:
             # GitHub accepted the write, but its resource no longer matches the
@@ -283,11 +283,11 @@ class Repository:
         current = self.pull_request(number)
         validate_pull_request(current['branch'], expected_head_sha)
         if current['head_sha'] != expected_head_sha:
-            raise ValueError('pull request head changed; inspect and retest before merging')
+            raise BrokerRejection('pull request head changed; inspect and retest before merging')
         if current['merged']:
             return current | {'merged_now': False}
         if current['state'] != 'open' or current['mergeable'] is False:
-            raise ValueError('pull request is not mergeable under normal GitHub protections')
+            raise BrokerRejection('pull request is not mergeable under normal GitHub protections')
         try:
             merged = self.api('/repos/' + REPO + '/pulls/' + str(number) + '/merge',
                               {'sha': expected_head_sha, 'merge_method': 'squash'}, 'PUT')
@@ -306,9 +306,9 @@ class Repository:
                 reconciled = None
             if reconciled and reconciled['merged'] and reconciled['head_sha'] == expected_head_sha:
                 return reconciled | {'merged_now': False}
-            raise ValueError('pull request merge outcome is uncertain; inspect before retrying') from None
+            raise BrokerRejection('pull request merge outcome is uncertain; inspect before retrying') from None
         if not isinstance(merged, dict) or merged.get('merged') is not True or not re.fullmatch(SHA, merged.get('sha', '')):
-            raise ValueError('pull request was not merged under normal GitHub protections')
+            raise BrokerRejection('pull request was not merged under normal GitHub protections')
         # A validated merge response is authoritative even if the optional
         # readback is unavailable. Preserve it rather than losing a confirmed
         # outcome to a later transport error.
@@ -319,10 +319,10 @@ class Repository:
         if explicit:
             safe_repo(repo)
             if branch is not None or project is not None:
-                raise ValueError('use ref/path with repo, or branch/project without repo')
+                raise BrokerRejection('use ref/path with repo, or branch/project without repo')
             root = '' if path is None else path
             if not isinstance(root, str) or root.startswith('/'):
-                raise ValueError('path must be a relative directory')
+                raise BrokerRejection('path must be a relative directory')
             if root:
                 safe_file_path(root)
         else:
@@ -345,7 +345,7 @@ class Repository:
         except urllib.error.HTTPError as exc:
             if explicit:
                 if exc.code in (404, 409):
-                    raise ValueError('ref missing or repository empty; create with auto_init:true and use an existing ref') from None
+                    raise BrokerRejection('ref missing or repository empty; create with auto_init:true and use an existing ref') from None
                 raise
             if exc.code != 404:
                 raise
@@ -353,35 +353,35 @@ class Repository:
             ref = self.api(prefix + '/git/ref/heads/main')
         sha = ref.get('object', {}).get('sha', '')
         if not re.fullmatch(SHA, sha):
-            raise ValueError('invalid branch head')
+            raise BrokerRejection('invalid branch head')
         commit = self.api(prefix + '/git/commits/' + sha)
         tree_sha = commit.get('tree', {}).get('sha', '')
         if not re.fullmatch(SHA, tree_sha):
-            raise ValueError('invalid commit tree')
+            raise BrokerRejection('invalid commit tree')
         tree = self.api(prefix + '/git/trees/' + tree_sha + '?recursive=1')
         if tree.get('truncated') or not isinstance(tree.get('tree'), list) or len(tree['tree']) > 5000:
-            raise ValueError('repository tree exceeds bound')
+            raise BrokerRejection('repository tree exceeds bound')
         files = {}
         prefixes = {'/'.join(root.split('/')[:i]) for i in range(1, len(root.split('/')) + 1)} if root else set()
         for entry in tree['tree']:
             name = entry.get('path', '')
             # Reject symlink/submodule/file at a directory prefix too.
             if name in prefixes and entry.get('type') != 'tree':
-                raise ValueError('project directory is not a tree')
+                raise BrokerRejection('project directory is not a tree')
             if (root and not name.startswith(root + '/')) or entry.get('type') == 'tree':
                 continue
             if (entry.get('mode') != '100644' or entry.get('type') != 'blob'
                     or not re.fullmatch(SHA, entry.get('sha', ''))
                     or not isinstance(entry.get('size'), int)
                     or len(files) >= 32):
-                raise ValueError('project contains unsupported or oversized files')
+                raise BrokerRejection('project contains unsupported or oversized files')
             if entry['size'] > MAX_INPUT_BYTES:
                 raise InputSizeError(sum(len(v.encode('utf-8')) for v in files.values()) + entry['size'], 'project')
             relative = name[len(root)+1:] if root else name
             validate_files({relative: ''})
             blob = self.api(prefix + '/git/blobs/' + entry['sha'])
             if blob.get('encoding') != 'base64':
-                raise ValueError('unsupported blob encoding')
+                raise BrokerRejection('unsupported blob encoding')
             content = base64.b64decode(blob['content']).decode('utf-8')
             files[relative] = content
             validate_files(files)
@@ -392,7 +392,7 @@ class Repository:
                       explicit_repo=explicit, branch=branch, project=project or '', base_sha=sha,
                       exists=exists, tree_sha=tree_sha, files=files)
         if len(json.dumps(result).encode()) > MAX_JSON_BYTES:
-            raise ValueError('encoded project response exceeds transport bound')
+            raise BrokerRejection('encoded project response exceeds transport bound')
         return result
 
     def publish(self, snapshot, files, title):
@@ -410,12 +410,12 @@ class Repository:
                     for n in sorted(set(snapshot['files']) - set(files))]
         tree = self.api(prefix + '/git/trees', {'base_tree':snapshot['tree_sha'], 'tree':entries})
         if not re.fullmatch(SHA, tree.get('sha', '')):
-            raise ValueError('invalid created tree')
+            raise BrokerRejection('invalid created tree')
         commit = self.api(prefix + '/git/commits', {'message':title, 'tree':tree['sha'],
                             'parents':[snapshot['base_sha']]})
         sha = commit.get('sha', '')
         if not re.fullmatch(SHA, sha):
-            raise ValueError('invalid created commit')
+            raise BrokerRejection('invalid created commit')
         branch = snapshot['branch']
         if snapshot['exists']:
             # Never force: concurrent branch changes reject this sibling commit.
@@ -423,5 +423,5 @@ class Repository:
         else:
             result = self.api(prefix + '/git/refs', {'ref':'refs/heads/' + branch, 'sha':sha})
         if result.get('ref') != 'refs/heads/' + branch or result.get('object', {}).get('sha') != sha:
-            raise ValueError('unexpected updated ref')
+            raise BrokerRejection('unexpected updated ref')
         return 'https://github.com/' + REPO + '/commit/' + sha

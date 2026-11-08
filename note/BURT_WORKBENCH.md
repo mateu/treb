@@ -37,6 +37,13 @@ Example in irc.perl.org `#ai`:
   `action`, `job`, `scope` (first 12 hex characters), `channel`, `value`,
   `limit`, `unit`. These lines are metadata only: never file contents, output,
   argv, requester or raw request bytes.
+  If the sandbox runner itself raises instead of returning a result, the job
+  result is still the generic `runner_error`, and the broker additionally
+  writes one `WORKBENCH_ERROR <json>` line to the same stderr journal, with
+  sorted compact-JSON keys `action`, `channel`, `job`, `kind` (`runner_error`),
+  `scope` (first 12 hex characters), `error_type` (exception class name) and
+  `error` (a whitespace-collapsed, 200-character excerpt of the exception
+  text). This line is metadata only too: never file contents, argv or output.
 * **Publisher:** a separate host-side service owns the narrow Unix socket API.
   It runs the isolated runner, journals jobs in SQLite and posts only stored
   immutable **input source/test files**, never host paths, symlinks, generated
@@ -351,7 +358,10 @@ can still use the same jobs database):
   over the bounded bytes actually read, without inventing a scope. Known dynamic
   validation reasons omit path suffixes. Unknown exception messages are discarded
   as `unclassified broker error`, not persisted verbatim. Extend `SAFE_REASONS`
-  when adding new fixed validation messages.
+  when adding new fixed validation messages. A raised `BrokerRejection` (the
+  broker's own fixed-string refusal, defined in `runner.py` and never
+  caller-controlled bytes) is always audited verbatim, whether or not its
+  message is also listed in `SAFE_REASONS`.
 - `task_status`: admitted scope/channel, creation/update times, and fixed lifecycle
   phase/reason. `reported` means a final model report, **not** verified completion.
   Join the scope to `jobs` and `rejections` to reconcile the actual outcome. A

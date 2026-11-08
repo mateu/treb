@@ -18,6 +18,18 @@ MAX_GIST_INPUT_BYTES = 64 * 1024
 # Worst-case JSON escaping for source + 32 argv entries (4096 chars each),
 # plus filenames/envelope. This is a transport bound, not extra source space.
 MAX_JSON_BYTES = 2 * 1024 * 1024
+# Sandbox limits: the single source of truth for the broker's log_limit
+# mapping and for Workbench.pm's hand-written tool/notice text (D6 checks them).
+TIME_LIMIT_SECONDS = 20
+MEMORY_LIMIT_BYTES = 256 * 1024 * 1024
+
+
+class BrokerRejection(ValueError):
+    """A fixed, broker-authored refusal message; never caller-controlled bytes.
+
+    Safe to record verbatim in the operator audit. Subclasses ValueError so
+    existing `except ValueError` paths and tests keep working unchanged.
+    """
 
 
 class InputSizeError(ValueError):
@@ -33,23 +45,23 @@ class InputSizeError(ValueError):
 
 def validate(job, max_input_bytes=MAX_INPUT_BYTES):
     if not isinstance(job, dict) or set(job) != {'files', 'argv'}:
-        raise ValueError('job requires exactly files and argv')
+        raise BrokerRejection('job requires exactly files and argv')
     files, argv = job['files'], job['argv']
     if not isinstance(files, dict) or not 1 <= len(files) <= 32:
-        raise ValueError('files must contain 1..32 text files')
+        raise BrokerRejection('files must contain 1..32 text files')
     total = 0
     for name, content in files.items():
         path = PurePosixPath(name)
         if (not name or path.is_absolute() or any(p in ('.', '..', '') for p in name.split('/'))
                 or len(name) > 200 or not isinstance(content, str)):
-            raise ValueError('invalid text file')
+            raise BrokerRejection('invalid text file')
         total += len(content.encode())
     if total > max_input_bytes:
         raise InputSizeError(total, allowed_bytes=max_input_bytes)
     if (not isinstance(argv, list) or not 1 <= len(argv) <= 32
             or any(not isinstance(a, str) or '\x00' in a or len(a) > 4096 for a in argv)
             or argv[0] not in ('/usr/bin/python3', '/usr/bin/perl', '/bin/sh')):
-        raise ValueError('invalid command; use absolute python3, perl, or sh')
+        raise BrokerRejection('invalid command; use absolute python3, perl, or sh')
     return files, argv
 
 
@@ -77,7 +89,7 @@ def sandbox_perl5():
         return None
 
 
-def run(job, seconds=20, checks=None):
+def run(job, seconds=TIME_LIMIT_SECONDS, checks=None):
     files, argv = validate(job)
     if checks is not None:
         validate({'files': checks, 'argv': argv})
@@ -104,7 +116,7 @@ def run(job, seconds=20, checks=None):
         cmd = ['/usr/bin/systemd-run', '--user', '--quiet', '--wait', '--pipe',
                '--unit=' + unit, '-p', 'RuntimeMaxSec=' + str(seconds),
                '-p', 'TimeoutStopSec=2', '-p', 'KillMode=control-group',
-               '-p', 'MemoryMax=256M', '-p', 'MemorySwapMax=0', '-p', 'TasksMax=32',
+               '-p', 'MemoryMax=' + str(MEMORY_LIMIT_BYTES), '-p', 'MemorySwapMax=0', '-p', 'TasksMax=32',
                '-p', 'LimitFSIZE=1048576', '-p', 'LimitCORE=0', '-p', 'LimitNOFILE=64',
                '-p', 'NoNewPrivileges=yes', '/usr/bin/bwrap', '--unshare-all',
                '--die-with-parent', '--new-session', '--cap-drop', 'ALL',
@@ -202,7 +214,7 @@ if __name__ == '__main__':
     try:
         raw = sys.stdin.buffer.read(MAX_JSON_BYTES + 1)
         if len(raw) > MAX_JSON_BYTES:
-            raise ValueError('job JSON exceeds 2 MiB')
+            raise BrokerRejection('job JSON exceeds 2 MiB')
         print(json.dumps(run(json.loads(raw))))
     except Exception as exc:
         print(json.dumps({'error': str(exc)}))

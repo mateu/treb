@@ -8,6 +8,7 @@ import sys
 
 from broker import BASE, confirm_absent_pending_pull_request, reconcile_pending_pull_request
 from repository import Repository
+from runner import BrokerRejection
 
 
 def main():
@@ -31,7 +32,7 @@ def main():
     database = BASE / 'jobs.sqlite'
     if (not database.is_file() or database.is_symlink()
             or database.stat().st_mode & 0o077):
-        raise ValueError('expected private Burt workbench database')
+        raise BrokerRejection('expected private Burt workbench database')
     db = sqlite3.connect(database, timeout=10)
     db.row_factory = sqlite3.Row
     try:
