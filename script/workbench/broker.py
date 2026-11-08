@@ -106,6 +106,8 @@ SAFE_REASONS = frozenset({
     'repository submission failed or response lost; operator reconciliation required; do not retry',
     'repository tree exceeds bound',
     'task channel mismatch',
+    'task deadline reached; terminal report reserved',
+    'task is terminal; operator inspection required',
     'trusted verification receipt missing or stale; retest',
     'unexpected gist owner or URL',
     'unexpected updated ref',

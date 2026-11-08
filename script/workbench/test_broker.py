@@ -203,6 +203,11 @@ class BrokerTests(unittest.TestCase):
         self.b.db.commit()
         with self.assertRaisesRegex(ValueError, 'task deadline reached'):
             self.b.handle(self.req)
+        with self.assertRaisesRegex(ValueError, 'task is terminal'):
+            self.b.handle(self.req)
+        reasons = [row[0] for row in self.b.db.execute('SELECT reason FROM rejections ORDER BY seq')]
+        self.assertEqual(reasons[-2:], ['task deadline reached; terminal report reserved',
+                                        'task is terminal; operator inspection required'])
         final = self.b.handle(status | {'phase': 'reported', 'reason': 'final_report'})
         self.assertEqual(final['budget']['terminal_reason'], 'deadline')
         self.assertEqual(final['budget']['remaining_budget']['terminal_reports'], 0)

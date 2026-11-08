@@ -27,7 +27,7 @@ case "$mode" in
       --ro-bind "$repo/script/workbench/repair-fixture.json" /repair-fixture.json)
     command=(/usr/bin/perl -I/app/lib /smoke.pl) ;;
   probe) command=(/usr/bin/python3 -I -c '
-import os, pathlib, socket, json
+import os, pathlib, socket, json, secrets
 hidden=["/home/hunter", "/run/user", "/app/astrid.env", "/app/treb.sqlite", "/app/script", "/publisher", "/state/gist.token"]
 assert all(not pathlib.Path(p).exists() for p in hidden), "host files visible"
 assert not pathlib.Path("/proc/1/root/home/hunter").exists()
@@ -36,7 +36,8 @@ except OSError: pass
 else: raise AssertionError("code is writable")
 assert pathlib.Path("/state/burt.sqlite").exists()
 s=socket.socket(socket.AF_UNIX); s.settimeout(35); s.connect("/broker/broker.sock")
-scope="e"*64
+# A fresh task scope each run: the broker expires a scope 30 minutes after first use.
+scope=secrets.token_hex(32)
 channel="#ai"
 network="irc.perl.org"
 request=dict(action="run",scope=scope,requester="probe",channel=channel,network=network,title="namespace IPC probe",files={"main.py":"print(42)\n"},argv=["/usr/bin/python3","-I","/work/main.py"])
