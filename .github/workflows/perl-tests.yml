@@ -12,13 +12,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Perl
+      # Installs cpanfile dependencies into ./local with cpm and caches them,
+      # keyed on the cpanfile hash.
+      - name: Set up Perl and dependencies
         uses: shogo82148/actions-setup-perl@v1
         with:
           perl-version: '5.38'
-
-      - name: Install dependencies
-        run: cpanm --quiet --notest --installdeps .
+          install-modules-with: cpm
 
       - name: Run unit tests (fast loop)
         run: |
@@ -28,13 +28,25 @@ jobs:
             prove -lr $tests
           fi
 
+      - name: Check isolated coding broker contracts
+        run: python3 -m unittest discover -s script/workbench -p 'test_*.py' -v
+
+  irc-harness:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Perl and dependencies
+        uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.38'
+          install-modules-with: cpm
+
       - name: Run deterministic IRC harness wrapper test
         env:
           RUN_IRC_HARNESS_DETERMINISTIC: '1'
         run: prove -lv t/irc_harness_deterministic.t
-
-      - name: Check isolated coding broker contracts
-        run: python3 -m unittest discover -s script/workbench -p 'test_*.py' -v
 
       - name: Upload IRC harness artifacts on failure
         if: failure()
