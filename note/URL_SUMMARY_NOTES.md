@@ -45,3 +45,8 @@ change that value is the 12,000-character tool evidence block, so burt flooded
 Fix: removed the `sum`/`:sum`/`sum:`/`summarize <url>` shortcuts from both the
 strict and relaxed styles. Addressed requests fall through to the
 conversational raid, which calls the MCP tool and writes the answer.
+
+Follow-up (same day): addressed stop requests from humans now cancel the
+channel's queued output (`Dispatch::clear_send_queue`). Gotcha found while
+testing against real POE: `POE::Kernel->delay_add` returns 0 on success, not an
+alarm ID, so `send_to_channel` now schedules with `delay_set`, which does.

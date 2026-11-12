@@ -21,6 +21,9 @@ use Bot::Runtime::Dispatch ();
       _last_activity                => 0,
       logs                          => [],
       buffered                      => [],
+      queued                        => $args{queued} || {},
+      cleared                       => [],
+      sent                          => [],
     }, $class;
   }
 
@@ -79,6 +82,23 @@ use Bot::Runtime::Dispatch ();
       self => $self,
       msg  => $msg,
     );
+  }
+
+  sub _is_stop_request {
+    my ($self, $msg) = @_;
+    return Bot::Runtime::Dispatch::is_stop_request(self => $self, msg => $msg);
+  }
+
+  sub _clear_send_queue {
+    my ($self, $channel) = @_;
+    push @{$self->{cleared}}, $channel;
+    return $self->{queued}{$channel} // 0;
+  }
+
+  sub _send_to_channel {
+    my ($self, $channel, $text) = @_;
+    push @{$self->{sent}}, [$channel, $text];
+    return;
   }
 
   sub _buffer_message {
@@ -275,6 +295,57 @@ use Bot::Runtime::Dispatch ();
 
   is(scalar @{$bot->{buffered}}, 1, 'addressed_to_self human path buffers short-name addressed Astrid message');
   is($bot->{buffered}[0]{extra}{source_kind}, 'conversation', 'short-name addressed human message uses human lane');
+}
+
+# Stop requests cancel queued output (burt_bot, #ai, 2026-11-11).
+{
+  my $bot = Local::PublicBot->new(nickname => 'burt_bot', queued => { '#ai' => 37 });
+  my $utility = 0;
+  no warnings 'redefine';
+  local *Bot::Runtime::UtilityCommands::handle_public_utility_command = sub { $utility++; 0 };
+  my $handled = handle_standard_irc_public_event(
+    self => $bot, nickstr => 'mateu!u@h', channels => ['#ai'], msg => "burt_bot: that's enough",
+  );
+  is($handled, 1, 'stop request with queued output is handled');
+  is_deeply($bot->{cleared}, ['#ai'], 'stop request clears that channel queue');
+  is_deeply($bot->{sent}, [['#ai', 'mateu: stopped. Dropped 37 queued lines.']], 'one acknowledgement');
+  is(scalar @{$bot->{buffered}}, 0, 'stop request is not sent to the model');
+  is($utility, 0, 'stop request short-circuits utility commands');
+}
+
+{
+  my $bot = Local::PublicBot->new(nickname => 'burt_bot', queued => {});
+  no warnings 'redefine';
+  local *Bot::Runtime::UtilityCommands::handle_public_utility_command = sub { 0 };
+  handle_standard_irc_public_event(
+    self => $bot, nickstr => 'mateu!u@h', channels => ['#ai'], msg => 'burt_bot: stop',
+  );
+  is_deeply($bot->{cleared}, ['#ai'], 'stop request with nothing queued still checks the queue');
+  is_deeply($bot->{sent}, [], 'nothing queued: no acknowledgement');
+  is(scalar @{$bot->{buffered}}, 1, 'nothing queued: message continues to the model');
+}
+
+{
+  my $bot = Local::PublicBot->new(nickname => 'burt_bot', filtered => { treb_bot => 1 }, queued => { '#ai' => 5 });
+  no warnings 'redefine';
+  local *Bot::Runtime::UtilityCommands::handle_public_utility_command = sub { 0 };
+  handle_standard_irc_public_event(
+    self => $bot, nickstr => 'treb_bot!u@h', channels => ['#ai'], msg => 'burt_bot: stop',
+  );
+  is_deeply($bot->{cleared}, [], 'another bot cannot stop the queue');
+}
+
+{
+  my $bot = Local::PublicBot->new(nickname => 'burt_bot', queued => { '#ai' => 5 });
+  no warnings 'redefine';
+  local *Bot::Runtime::UtilityCommands::handle_public_utility_command = sub { 0 };
+  handle_standard_irc_public_event(
+    self => $bot, nickstr => 'mateu!u@h', channels => ['#ai'], msg => 'treb_bot: stop',
+  );
+  handle_standard_irc_public_event(
+    self => $bot, nickstr => 'mateu!u@h', channels => ['#ai'], msg => 'stop',
+  );
+  is_deeply($bot->{cleared}, [], 'stop addressed to someone else, or unaddressed, is ignored');
 }
 
 done_testing;

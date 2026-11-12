@@ -160,6 +160,14 @@ sub install_shared_delegates {
         allow_bare => $self->_handles_bare_utility_commands,
       );
     },
+    _clear_send_queue => sub {
+      my ($self, $channel) = @_;
+      return Bot::Runtime::Dispatch::clear_send_queue(channel => $channel);
+    },
+    _is_stop_request => sub {
+      my ($self, $msg) = @_;
+      return Bot::Runtime::Dispatch::is_stop_request(self => $self, msg => $msg);
+    },
     _send_to_channel => sub {
       my ($self, $channel, $text) = @_;
       return Bot::Runtime::Dispatch::send_to_channel(

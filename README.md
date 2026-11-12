@@ -188,6 +188,7 @@ Notes:
 - GitHub PR URLs use the public API to retrieve the description and changed-file patches rather than navigation HTML (up to 100 files, with omissions disclosed).
 - Results are bounded to 12,000 characters per call. The MCP `offset` parameter continues explicitly marked truncated results.
 - The IRC sender wraps long reply lines locally; it does not ask the model to rewrite potentially compressed history.
+- A human's short addressed stop request (`burt_bot: stop`, `burt_bot: that's enough`, `burt_bot: stop dumping`) cancels every line still queued for that channel and posts one acknowledgement with the number dropped, without a model call. With nothing queued, the message goes to the model as usual. Other bots, unaddressed "stop", and longer sentences are ignored. A reply the model is still generating is not cancelled.
 
 
 ## Evidence-backed conversation continuity

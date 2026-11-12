@@ -78,7 +78,7 @@ ok(!utility_command_matches_me(self => $bot, allow_bare => 0), 'utility command 
 my @scheduled;
 {
   no warnings 'redefine';
-  local *POE::Kernel::delay_add = sub {
+  local *POE::Kernel::delay_set = sub {
     my ($class, @args) = @_;
     push @scheduled, \@args;
     return scalar @scheduled;
@@ -103,7 +103,7 @@ my @scheduled;
 @scheduled = ();
 {
   no warnings 'redefine';
-  local *POE::Kernel::delay_add = sub {
+  local *POE::Kernel::delay_set = sub {
     my ($class, @args) = @_;
     push @scheduled, \@args;
     return scalar @scheduled;
@@ -134,7 +134,7 @@ for my $bad_max_line (0, -1, 'abc') {
 
 {
   no warnings 'redefine';
-  local *POE::Kernel::delay_add = sub { push @scheduled, [ @_[1..$#_] ]; 1 };
+  local *POE::Kernel::delay_set = sub { push @scheduled, [ @_[1..$#_] ]; 1 };
   for my $case (
     ['emoji', '🙂' x 300, '#ai', 400],
     ['accents/CJK', 'é漢字' x 180, '#ai', 400],
@@ -166,6 +166,59 @@ for my $bad_max_line (0, -1, 'abc') {
   is($scheduled[0][3], 'helloworld', 'protocol control bytes removed');
   eval { send_to_channel(channel => '#ai', text => '🙂', max_line => 1) };
   like($@, qr/too small/, 'impossible codepoint budget fails without looping');
+}
+
+# Stop requests (burt_bot, #ai, 2026-11-11).
+{
+  my $burt = Local::DispatchBot->new(nickname => 'burt_bot');
+  for my $msg (
+    "burt_bot: that's enough", "burt_bot: that’s enough", 'burt_bot: stop', 'burt_bot: stop dumping',
+    'burt_bot: you can stop summarizing', 'burt_bot: STOP!', 'burt: stop', 'burt_bot, enough.',
+    'burt_bot: ok, stop', 'burt_bot: please stop now', 'burt_bot: shut up', 'burt_bot: be quiet',
+    'hey burt_bot, stop', 'burt_bot stop',
+  ) {
+    ok(Bot::Runtime::Dispatch::is_stop_request(self => $burt, msg => $msg), "stop request: $msg");
+  }
+  for my $msg (
+    'stop', "that's enough", 'treb_bot: stop', 'burt_bot: stop the presses, LFM3 is out',
+    'burt_bot: enough about cats, what is for dinner?', 'burt_bot: how do I stop a POE alarm?',
+    'burt_bot: stopwatch', 'burt_bot:',
+  ) {
+    ok(!Bot::Runtime::Dispatch::is_stop_request(self => $burt, msg => $msg), "not a stop request: $msg");
+  }
+}
+
+# Real POE: queued lines are cancelled, other channels and later sends survive.
+{
+  require POE;
+  POE->import;
+  my @delivered;
+  my %result;
+  POE::Session->create(inline_states => {
+    _start => sub {
+      Bot::Runtime::Dispatch::send_to_channel(channel => '#stoptest', text => join("\n", map { "dump line $_" } 1 .. 6), max_line => 400);
+      Bot::Runtime::Dispatch::send_to_channel(channel => '#stopother', text => 'unrelated', max_line => 400);
+      $result{pending_before} = Bot::Runtime::Dispatch::pending_send_count(channel => '#STOPTEST');
+      $_[POE::Session::KERNEL()]->delay(stop_now => 2);
+    },
+    stop_now => sub {
+      $result{removed} = Bot::Runtime::Dispatch::clear_send_queue(channel => '#stoptest');
+      $result{pending_after} = Bot::Runtime::Dispatch::pending_send_count(channel => '#stoptest');
+      $result{clear_again} = Bot::Runtime::Dispatch::clear_send_queue(channel => '#stoptest');
+      Bot::Runtime::Dispatch::send_to_channel(channel => '#stoptest', text => 'stopped.', max_line => 400);
+    },
+    _send_line => sub { push @delivered, [ @_[POE::Session::ARG0(), POE::Session::ARG1()] ] },
+  });
+  POE::Kernel->run;
+  is($result{pending_before}, 6, 'six #stoptest lines pending (channel key is case-insensitive)');
+  is($result{removed}, 5, 'clear removes the five lines not yet delivered');
+  is($result{pending_after}, 0, 'nothing pending after clear');
+  is($result{clear_again}, 0, 'second clear is a no-op');
+  is_deeply(
+    \@delivered,
+    [['#stoptest', 'dump line 1'], ['#stopother', 'unrelated'], ['#stoptest', 'stopped.']],
+    'only the already-sent line, the other channel and the later acknowledgement are delivered',
+  );
 }
 
 done_testing;

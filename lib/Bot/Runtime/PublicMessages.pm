@@ -18,6 +18,21 @@ sub _resolve_direct_address {
   die "_resolve_direct_address requires mode to be 'mention' or 'addressed_to_self' (got '$mode')";
 }
 
+# A human's short addressed stop request ("burt_bot: that's enough") cancels
+# every line still queued for this channel and acknowledges once. When nothing
+# is queued the message continues to the normal conversational path.
+sub _handle_stop_request {
+  my ($self, $nick, $channel, $msg) = @_;
+  return 0 unless $self->_is_human_nick($nick);
+  return 0 unless $self->_is_stop_request($msg);
+  my $dropped = $self->_clear_send_queue($channel);
+  return 0 unless $dropped;
+  $self->info("Stop request from $nick: dropped $dropped queued line(s) for $channel");
+  $self->_send_to_channel($channel,
+    "$nick: stopped. Dropped $dropped queued line" . ($dropped == 1 ? '' : 's') . '.');
+  return 1;
+}
+
 sub handle_standard_irc_public_event {
   my (%args) = @_;
 
@@ -58,6 +73,8 @@ sub handle_standard_irc_public_event {
     $self->_bert_reply_turn_count(0);
     $self->info("Reset bert conversational turn count by human nick=$nick");
   }
+
+  return 1 if _handle_stop_request($self, $nick, $channel, $msg);
 
   if (Bot::Runtime::UtilityCommands::handle_public_utility_command(
     self       => $self,
@@ -146,6 +163,8 @@ sub handle_ambient_irc_public_event {
     $self->_bert_reply_lock(0);
     $self->info("Reset burt conversational lock by human nick=$nick");
   }
+
+  return 1 if _handle_stop_request($self, $nick, $channel, $msg);
 
   if (Bot::Runtime::UtilityCommands::handle_public_utility_command(
     self       => $self,

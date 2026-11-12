@@ -20,6 +20,8 @@ use Bot::Runtime::PublicMessages qw(handle_standard_irc_public_event handle_ambi
   sub get_channels { ['#ai','#other'] }
   sub _default_channel { '#ai' }
   sub _is_human_nick { $_[1] !~ /_bot$/ }
+  sub _is_stop_request { 0 }
+  sub _clear_send_queue { 0 }
   sub _is_filtered_bot_nick { $_[1] =~ /_bot$/ }
   sub _bert_reply_lock { 0 }
   sub _bert_reply_turn_count { 0 }
