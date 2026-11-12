@@ -96,89 +96,31 @@ use Bot::Runtime::UtilityCommands qw(handle_public_utility_command);
   }
 }
 
-{
-  my $bot = Local::UtilityBot->new(nickname => 'Treb', allow_bare => 0);
-  ok(
-    handle_public_utility_command(
-      self       => $bot,
-      channel    => '#ai',
-      msg        => 'treb: sum https://example.test',
-      style      => 'strict',
-      notes_mode => 'direct_only',
-    ),
-    'strict handler accepts targeted sum command'
-  );
-  is_deeply($bot->{summarize_calls}, ['https://example.test'], 'strict targeted sum passes URL');
-}
-
-{
-  my $bot = Local::UtilityBot->new(nickname => 'Treb', allow_bare => 1);
-  ok(
-    handle_public_utility_command(
-      self       => $bot,
-      channel    => '#ai',
-      msg        => 'sum: https://example.test',
-      style      => 'strict',
-      notes_mode => 'direct_only',
-    ),
-    'strict handler allows bare sum when bot permits bare utility commands'
-  );
-}
-
-{
-  my $bot = Local::UtilityBot->new(nickname => 'Treb', allow_bare => 0);
+# URL summary requests must reach the model, never dump raw summarize_url
+# evidence into the channel (burt_bot, #ai, 2026-11-11).
+for my $case (
+  ['Treb', 0, 'strict',  'treb: sum https://example.test'],
+  ['Treb', 1, 'strict',  'sum: https://example.test'],
+  ['Treb', 0, 'strict',  'treb: can you summarize https://example.test?'],
+  ['Burt', 1, 'relaxed', ':sum https://example.test'],
+  ['Burt', 1, 'relaxed', 'sum: https://example.test'],
+  ['Burt', 1, 'relaxed', 'burt: summarize https://example.test'],
+  ['Burt', 1, 'relaxed', 'summarise this url https://example.test'],
+) {
+  my ($nick, $bare, $style, $msg) = @$case;
+  my $bot = Local::UtilityBot->new(nickname => $nick, allow_bare => $bare);
   ok(
     !handle_public_utility_command(
       self       => $bot,
       channel    => '#ai',
-      msg        => 'sum: https://example.test',
-      style      => 'strict',
+      msg        => $msg,
+      style      => $style,
       notes_mode => 'direct_only',
     ),
-    'strict handler rejects bare sum when bot disallows bare utility commands'
+    "$style: '$msg' falls through to the conversational path"
   );
-}
-
-{
-  my $bot = Local::UtilityBot->new(nickname => 'Burt', allow_bare => 1);
-  ok(
-    handle_public_utility_command(
-      self       => $bot,
-      channel    => '#ai',
-      msg        => ':sum https://example.test',
-      style      => 'relaxed',
-      notes_mode => 'direct_only',
-    ),
-    'relaxed handler accepts :sum shorthand'
-  );
-}
-
-{
-  my $bot = Local::UtilityBot->new(nickname => 'Burt', allow_bare => 1);
-  ok(
-    !handle_public_utility_command(
-      self       => $bot,
-      channel    => '#ai',
-      msg        => 'astrid: sum https://example.test',
-      style      => 'relaxed',
-      notes_mode => 'direct_only',
-    ),
-    'targeted command must match bot nickname'
-  );
-}
-
-{
-  my $bot = Local::UtilityBot->new(nickname => 'Treb', allow_bare => 1);
-  ok(
-    handle_public_utility_command(
-      self       => $bot,
-      channel    => '#ai',
-      msg        => 'treb: can you summarize https://example.test?',
-      style      => 'strict',
-      notes_mode => 'direct_only',
-    ),
-    'strict handler accepts natural-language summarize url form'
-  );
+  is_deeply($bot->{summarize_calls}, [], "$style: '$msg' does not fetch in the utility path");
+  is_deeply($bot->{sent}, [], "$style: '$msg' sends nothing to the channel");
 }
 
 {
