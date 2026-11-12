@@ -5,10 +5,14 @@ use warnings;
 
 use Exporter 'import';
 use Encode qw(encode);
+use Time::HiRes ();
 our @EXPORT_OK = qw(
   parse_public_addressee
   is_public_message_addressed_to_self
   send_to_channel
+  clear_send_queue
+  pending_send_count
+  is_stop_request
   is_filtered_bot_nick
   default_channel
   utility_command_matches_me
@@ -61,6 +65,69 @@ sub is_public_message_addressed_to_self {
   return $aliases{lc $target} ? 1 : 0;
 }
 
+# Lines not yet delivered, per IRC target: alarm ID plus the time it fires.
+# One bot runs per process, so a module registry is the bot's registry.
+# Entries past their fire time are pruned lazily; an alarm that already fired
+# simply fails to remove.
+my %PENDING_SENDS;
+
+sub _send_queue_key { lc($_[0] // '') }
+
+sub _prune_send_queue {
+  my ($key) = @_;
+  my $list = $PENDING_SENDS{$key} or return;
+  my $now = Time::HiRes::time();
+  @$list = grep { $_->[1] > $now } @$list;
+  delete $PENDING_SENDS{$key} unless @$list;
+}
+
+sub pending_send_count {
+  my (%args) = @_;
+  my $key = _send_queue_key($args{channel});
+  _prune_send_queue($key);
+  return scalar @{ $PENDING_SENDS{$key} || [] };
+}
+
+# Cancel every line still scheduled for one target. Returns how many alarms
+# were actually removed. Must run inside the bot's POE session, the session
+# that scheduled them; POE only removes the current session's alarms.
+sub clear_send_queue {
+  my (%args) = @_;
+  my $key = _send_queue_key($args{channel});
+  my $list = delete $PENDING_SENDS{$key} or return 0;
+  my $removed = 0;
+  for my $entry (@$list) {
+    my @gone = POE::Kernel->alarm_remove($entry->[0]);
+    $removed++ if @gone;
+  }
+  return $removed;
+}
+
+# A short, addressed request to stop talking: "burt_bot: stop",
+# "burt_bot: that's enough", "burt_bot: stop dumping". Anything longer is
+# ordinary conversation and goes to the model.
+my $STOP_BODY_RE = qr{
+  \A
+  (?: (?:ok(?:ay)?|please|pls|hey|whoa|woah) [,!.]* \s+ )*
+  (?: (?:you \s+ can|can \s+ you|could \s+ you|just) \s+ )?
+  (?: stop | halt | enough | that ['\x{2019}]? s \s+ enough | shut \s+ up | hush
+    | (?:be \s+)? quiet | stfu | cancel )
+  (?: \s+ (?:it|that|now|please|already|talking|dumping|spamming|flooding
+            |pasting|posting|summari[sz]ing|transcribing) )*
+  [\s.!,]*
+  \z
+}xi;
+
+sub is_stop_request {
+  my (%args) = @_;
+  my $self = $args{self} or die 'is_stop_request requires self';
+  my ($target, $body) = parse_public_addressee(self => $self, msg => $args{msg});
+  return 0 unless defined $target && defined $body;
+  my %aliases = _nickname_aliases($self);
+  return 0 unless $aliases{lc $target};
+  return $body =~ $STOP_BODY_RE ? 1 : 0;
+}
+
 sub send_to_channel {
   my (%args) = @_;
   my $channel = $args{channel} or die 'send_to_channel requires channel';
@@ -103,12 +170,17 @@ sub send_to_channel {
   }
 
   my $cumulative = 0;
+  my $key = _send_queue_key($channel);
+  _prune_send_queue($key);
+  my $start = Time::HiRes::time();
   for my $i (0 .. $#chunks) {
     my $delay = length($chunks[$i]) / 30;
     $delay = 1.5 if $delay < 1.5;
     $delay += 5 if $i > 0 && $chunks[$i - 1] =~ /\.{3}\s*\*?\s*$/;
     $cumulative += $delay;
-    POE::Kernel->delay_add($event_name => $cumulative, $channel, $chunks[$i]);
+    # delay_set, not delay_add: only delay_set returns an alarm ID to cancel.
+    my $id = POE::Kernel->delay_set($event_name => $cumulative, $channel, $chunks[$i]);
+    push @{ $PENDING_SENDS{$key} }, [$id, $start + $cumulative] if defined $id;
   }
 
   return $return_cumulative ? $cumulative : undef;
