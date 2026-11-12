@@ -32,3 +32,16 @@ Future improvement ideas:
 - Downgrade curl 63 to soft-warning semantics when partial content is already usable.
 - Optionally raise cap modestly only if multiple real pages need it.
 - Prefer smarter extraction over blunt cap increases if this becomes common.
+
+## 2026-11-11 — regex shortcut dumped raw page text into #ai
+
+`burt_bot: summarize https://huggingface.co/LiquidAI/LFM3-Omni-2B` matched the
+`summarize <url>` regex in `Bot::Runtime::UtilityCommands`, which sent the
+`summarize_url` return value directly to the channel. Since the 2026-10-03
+change that value is the 12,000-character tool evidence block, so burt flooded
+#ai line by line (no raid, no LLM: the log shows no "Processing buffer").
+"Stop" could not help because the lines were already queued in the sender.
+
+Fix: removed the `sum`/`:sum`/`sum:`/`summarize <url>` shortcuts from both the
+strict and relaxed styles. Addressed requests fall through to the
+conversational raid, which calls the MCP tool and writes the answer.

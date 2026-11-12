@@ -174,15 +174,16 @@ Notes:
 
 ## URL summary
 
-Treb supports explicit URL summarization in channel via:
-
-- `:sum <url>`
-- `sum: <url>`
+Address the bot and ask for a summary, for example `treb: summarize <url>` or
+`burt_bot: what does this page say? <url>`. The model calls the `summarize_url`
+MCP tool and writes a short answer. There is no regex shortcut: the tool returns
+raw page text as evidence for the model, and an earlier `sum:`/`summarize <url>`
+shortcut sent that evidence straight to the channel.
 
 Notes:
 
 - Only `http://` and `https://` URLs are accepted.
-- URL summary is command-only; Treb will not summarize pasted links automatically.
+- Treb will not summarize pasted links automatically. Bare `:sum <url>` / `sum: <url>` lines are no longer commands; address the bot instead.
 - The URL tool returns readable page text to the active model without a nested LLM call. Markdown, source code, and patches retain their formatting.
 - GitHub PR URLs use the public API to retrieve the description and changed-file patches rather than navigation HTML (up to 100 files, with omissions disclosed).
 - Results are bounded to 12,000 characters per call. The MCP `offset` parameter continues explicitly marked truncated results.
